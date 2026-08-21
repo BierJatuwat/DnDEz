@@ -26,6 +26,17 @@ export DOTNET_ROOT="$HOME/.dotnet"                 # macOS: SDK 8 อยู่�
 dotnet ef database update --project src/DnDEz.Infrastructure
 ```
 
+### หมายเหตุสภาพแวดล้อม (macOS เครื่องนี้)
+
+- **ต้องตั้ง `DOTNET_ROOT="$HOME/.dotnet"` เสมอ** ไม่งั้น `dotnet-ef` จะไปเจอ dotnet ของระบบที่
+  `/usr/local/share/dotnet` ซึ่งมีแค่ runtime 6/7 แล้วฟ้อง *"You must install or update .NET"*
+- `dotnet-ef` 8.0.10 ติดตั้งเป็น global tool แล้ว (`~/.dotnet/tools`)
+- **ไม่มี `psql` ในเครื่อง** — ใช้ผ่าน container แทน:
+  `docker compose exec postgres psql -U dndez -d dndez`
+- ทดสอบ RLS ต้องต่อด้วย role `dndez_app` ผ่าน TCP (ไม่ใช่ unix socket):
+  `docker compose exec -e PGPASSWORD=dndez_app postgres psql -U dndez_app -d dndez -h 127.0.0.1`
+- Docker Desktop ต้องเปิดอยู่ก่อน (`open -a Docker`)
+
 โครงสร้างโค้ด:
 
 | โฟลเดอร์ | เนื้อหา |
