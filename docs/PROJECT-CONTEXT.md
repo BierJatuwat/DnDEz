@@ -142,6 +142,43 @@
 
 ## 4. สิ่งที่ยังไม่ตัดสินใจ / ยังไม่ออกแบบ
 
+### 🔜 ลำดับงานถัดไป — เสนอให้ทำ rules engine ก่อน API layer (เสนอ 2026-08-21 · รอยืนยัน)
+
+ทางเลือกที่ค้างไว้: **(ก)** rules engine เป็น class library แยก + xUnit · **(ข)** ASP.NET Core API + SignalR hub
+→ **เสนอ (ก) ก่อน** ด้วยเหตุผล:
+
+1. **ทิศทางการพึ่งพาเป็นทางเดียว** — API / SignalR / orchestrator พึ่ง rules engine ทั้งหมด
+   แต่ rules engine ไม่พึ่งใครเลย ทำก่อนไม่มีอะไรบล็อก ส่วนทำ API ก่อนจะได้แค่ท่อ CRUD เปล่า
+   แล้วต้องรื้อ contract รอบสองตอน engine มา
+2. **API contract ตกผลึกเองจาก result type ของ engine** — `RollResult` / `AttackResult` /
+   `DamageResult` / `TurnBudget` เป็น payload ของ REST response, SignalR event และ tool-call schema
+   ของ AI พร้อมกัน มี engine ก่อน = เขียน DTO ได้โดยไม่ต้องเดา
+3. **ทดสอบจริงได้คุ้มที่สุด** — pure library รันเทสต์ deterministic ได้โดยไม่ต้อง spin Docker/websocket
+   ถ้าทำ API ก่อน เทสต์ที่เขียนได้จะมีแค่ "endpoint คืน 200" ซึ่งไม่ยืนยันอะไร
+4. **ความเสี่ยงกระจุกที่ engine ไม่ใช่ API** — advantage/disadvantage ซ้อน, resistance + vulnerability
+   พร้อมกัน, temp HP, death save edge case (nat20 ฟื้น 1 HP / nat1 นับสอง / โดนตีตอนสลบ crit = 2),
+   hit dice ตอน rest โดน encounter แทรก — จุดที่บั๊กเงียบและ "build ผ่าน" บอกอะไรไม่ได้
+   ส่วน ASP.NET Core + SignalR เป็นงานมีแบบแผนชัด ความไม่แน่นอนต่ำ เลื่อนไปทีหลังไม่เพิ่มความเสี่ยง
+5. **RNG + seed ต้องอยู่ใน engine ตั้งแต่บรรทัดแรก** — `dice_rolls.seed` มีคอลัมน์รออยู่แล้ว
+   ถ้า retrofit `IDiceRoller` ที่ replay ได้ทีหลัง ต้องแก้ทุกจุดที่เรียกใช้
+
+**ข้อจำกัดที่ต้องล็อกตั้งแต่ต้น** (ไม่งั้นเสียประโยชน์ทั้ง 5 ข้อข้างบน)
+- `DnDEz.Rules` **ห้าม reference EF Core / Infrastructure / orchestrator** — รับ input เป็น snapshot record
+  คืน result record **ไม่เขียน DB เอง** การ persist เป็นหน้าที่ของชั้น application
+- ฉีด `IDiceRoller` / `IClock` เข้าไป ให้ engine เป็น deterministic ทั้งก้อน
+- engine ไม่รู้จัก concept ผู้ใช้/สิทธิ์เลย — authorization อยู่ชั้นบนเท่านั้น
+
+**Slice ที่เสนอ** (ไม่ทำ SRD ทั้งเล่มรวดเดียว)
+S1 dice notation + advantage + seeded replay + ทางรับเลขดิบจาก DM ·
+S2 check/save/attack vs AC · S3 damage & HP (resist/vuln/immune ซ้อน, temp HP, 0 HP) ·
+S4 death save state machine · S5 action economy · S6 rest resolution
+→ เลื่อน spellcasting เต็มรูปกับ fog of war ไว้ (fog ต้องรอ grid/geometry layer ก่อน)
+
+**⚠️ จุดที่ต้องระวังตอนถึงคิว API** — งานที่ทดสอบได้เฉพาะชั้นนั้นคือ integration test ยืนยันว่า
+EF Core ต่อด้วย role `dndez_app` + `SET LOCAL` แล้ว RLS ยังกันข้ามแคมเปญได้จริง
+เพราะ **`SET LOCAL` ผูกกับ transaction** ถ้าเผลอเรียกนอก transaction บน connection pool
+ค่าจะหลุดหรือค้างข้าม request — ช่องโหว่แบบเดียวกับที่เจอรอบก่อน แค่ย้ายมาอยู่ชั้นแอป
+
 **ฝั่ง Player — ออกแบบรอบแรกเสร็จแล้ว** (2026-08-21)
 คำถามเปิดเดิม "แท็บเล็ตผู้เล่นดู sheet อย่างเดียวหรือประกาศ action ได้ด้วย" → **ตอบแล้ว: ประกาศ action ได้**
 เหลือ 2 จุดที่รอ feedback จากการใช้จริง
