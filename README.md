@@ -9,11 +9,12 @@
 |---|---|
 | [`docs/PROJECT-CONTEXT.md`](./docs/PROJECT-CONTEXT.md) | **เริ่มที่นี่** — primer สำหรับเปิดแชทใหม่ / เริ่มงานใหม่ สรุปสิ่งที่ล็อกแล้วและสิ่งที่ค้าง |
 | [`docs/dm-side-design.md`](./docs/dm-side-design.md) | รายละเอียดเต็มฝั่ง DM — data model, DM console, source import, BYOK |
+| [`docs/player-side-design.md`](./docs/player-side-design.md) | รายละเอียดเต็มฝั่งผู้เล่น — action input, fog of war, turn UI, คลัง preset, join flow |
 
 ## สถานะ
 
 - ✅ ฝั่ง DM — ออกแบบเสร็จ
-- ⬜ ฝั่ง Player — ยังไม่เริ่ม (ขั้นถัดไป)
+- ✅ ฝั่ง Player — ออกแบบรอบแรกเสร็จ
 - ⬜ โค้ด — ยังไม่เริ่ม
 
 ## Stack
