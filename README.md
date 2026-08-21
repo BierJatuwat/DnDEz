@@ -1,10 +1,10 @@
 # DnDEz
 
-> รายละเอียด spec ของโปรเจกต์จะตามมาทีหลัง (เอกสารจะถูกวางไว้ใน `docs/`)
+แพลตฟอร์มเล่น D&D ที่มี AI เป็นผู้ช่วยของ DM — ปรับตัวตามอุปกรณ์และสถานการณ์การเล่นจริง
+(online / in-person / companion / quick play)
 
-## สถานะ
+## เอกสารออกแบบ
 
-- [x] Init git repo + remote (`origin` → https://github.com/BierJatuwat/DnDEz.git)
-- [ ] รอเอกสาร spec จากเจ้าของโปรเจกต์
-- [ ] ตัดสินใจ tech stack
-- [ ] Scaffold โครงสร้างโปรเจกต์
+- [`docs/dm-side-design.md`](./docs/dm-side-design.md) — การออกแบบฝั่ง DM ฉบับล่าสุด
+  (สถาปัตยกรรม, data model, DM console, source import, BYOK ฯลฯ)
+- ฝั่ง Player — ยังไม่ได้ออกแบบ (ขั้นถัดไป)
