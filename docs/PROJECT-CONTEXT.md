@@ -4,7 +4,8 @@
 > อ่านไฟล์นี้ก่อน แล้วค่อยเปิด [`dm-side-design.md`](./dm-side-design.md) /
 > [`player-side-design.md`](./player-side-design.md) ถ้าต้องการรายละเอียดเต็ม
 >
-> **สถานะ**: ฝั่ง DM ออกแบบเสร็จแล้ว · ฝั่ง Player ออกแบบรอบแรกเสร็จแล้ว (2026-08-21) · ยังไม่เขียนโค้ด
+> **สถานะ**: ฝั่ง DM ออกแบบเสร็จแล้ว · ฝั่ง Player ออกแบบรอบแรกเสร็จแล้ว (2026-08-21)
+> · **DB schema + RLS ลงโค้ดแล้ว** (30 ตาราง — ดู [`db-schema.md`](./db-schema.md)) · ยังไม่มี API/frontend
 >
 > **ก่อนเริ่มเขียนโค้ด**: repo นี้มีระบบ [Tier Agent System](../CLAUDE.md) ติดตั้งไว้แล้ว (routing/review/TDD
 > convention สำหรับ Claude Code) — ปิดโดยดีฟอลต์ เปิดด้วยการขึ้นต้น prompt ด้วย `<tier>` เท่านั้น
@@ -133,6 +134,9 @@
 - **Reaction timeout เป็น timer ฝั่ง server** ไม่ใช่ `setTimeout` ฝั่ง client
 - **RNG ทอยเต๋าอยู่ฝั่ง server + เก็บ seed ลง log** เพื่อ replay ตรวจสอบย้อนหลังเวลามีข้อพิพาท
 - **Postgres Row-Level Security** บังคับ campaign isolation ที่ชั้น DB อีกชั้น ไม่พึ่ง `WHERE` ในโค้ดอย่างเดียว
+  - ⚠️ **policy ต้องเช็คว่า user เป็นสมาชิกแคมเปญจริง ไม่ใช่แค่ `campaign_id` ตรงกับค่าที่แอปส่งมา** —
+    เจอตอนทดสอบจริงว่าถ้าเช็คแค่ค่าที่ตั้ง DM ของแคมเปญอื่นตั้งค่าเองแล้วอ่านข้ามได้ทันที (ดู `db-schema.md`)
+- **แอปต้องต่อ DB ด้วย role ที่ไม่ใช่ owner** (`dndez_app`) — owner bypass RLS เสมอ
 
 ---
 
@@ -143,6 +147,10 @@
 เหลือ 2 จุดที่รอ feedback จากการใช้จริง
 - ภาระ DM ที่ต้องกรอกผลเต๋าให้ผู้เล่นทุกคนในโหมด in-person (`player-side-design.md` §5)
 - การส่ง panel แนะนำ action ในโหมด online ที่ DM ไม่ได้พูดสด (`player-side-design.md` §7)
+
+**⚠️ Embedding provider — ต้องตัดสินใจ** (เจอ 2026-08-21 ตอนลง schema)
+`RawChunk` ต้องมี vector index สำหรับ RAG แต่ **Anthropic ไม่มี embeddings API** ต้องเลือก provider เจ้าอื่น
+(ปัญหาเดียวกับ image generation ด้านล่าง) — ตอนนี้ตั้งมิติไว้ 1536 ชั่วคราว ต้องแก้เมื่อเลือกจริง
 
 **⚠️ Image generation — ต้องตัดสินใจ** (เจอ 2026-08-21)
 `dm-side-design.md` §2.1 มี tool `generate_scene_image` และ §4.2 บอกว่ากด generate แผนที่ด้วย AI ได้

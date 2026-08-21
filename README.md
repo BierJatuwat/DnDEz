@@ -10,12 +10,31 @@
 | [`docs/PROJECT-CONTEXT.md`](./docs/PROJECT-CONTEXT.md) | **เริ่มที่นี่** — primer สำหรับเปิดแชทใหม่ / เริ่มงานใหม่ สรุปสิ่งที่ล็อกแล้วและสิ่งที่ค้าง |
 | [`docs/dm-side-design.md`](./docs/dm-side-design.md) | รายละเอียดเต็มฝั่ง DM — data model, DM console, source import, BYOK |
 | [`docs/player-side-design.md`](./docs/player-side-design.md) | รายละเอียดเต็มฝั่งผู้เล่น — action input, fog of war, turn UI, คลัง preset, join flow |
+| [`docs/db-schema.md`](./docs/db-schema.md) | โครงสร้าง DB — ตาราง, constraint ที่บังคับกฎ, RLS และวิธีต่อ DB |
 
 ## สถานะ
 
 - ✅ ฝั่ง DM — ออกแบบเสร็จ
 - ✅ ฝั่ง Player — ออกแบบรอบแรกเสร็จ
-- ⬜ โค้ด — ยังไม่เริ่ม
+- 🚧 โค้ด — DB schema + RLS เสร็จแล้ว (30 ตาราง) · ยังไม่มี API/frontend
+
+## เริ่มต้นใช้งาน (local dev)
+
+```bash
+docker compose up -d postgres redis minio
+export DOTNET_ROOT="$HOME/.dotnet"                 # macOS: SDK 8 อยู่ที่ ~/.dotnet
+dotnet ef database update --project src/DnDEz.Infrastructure
+```
+
+โครงสร้างโค้ด:
+
+| โฟลเดอร์ | เนื้อหา |
+|---|---|
+| `src/DnDEz.Domain` | entity + enum (ไม่มี dependency กับ EF/infra) |
+| `src/DnDEz.Infrastructure` | DbContext, EF configuration, migrations |
+
+**สำคัญ**: แอปต้องต่อ DB ด้วย role `dndez_app` (ไม่ใช่ owner) และตั้ง `app.user_id` / `app.campaign_id`
+ทุก request ไม่งั้น RLS จะมองไม่เห็นข้อมูลใด ๆ เลย (fail closed) — ดู `docs/db-schema.md`
 
 ## Stack
 

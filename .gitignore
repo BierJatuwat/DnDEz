@@ -23,6 +23,12 @@ venv/
 # Go
 bin/
 
+# .NET
+[Bb]in/
+[Oo]bj/
+*.user
+.vs/
+
 # IDE
 .vscode/
 .idea/
