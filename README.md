@@ -24,3 +24,12 @@ Next.js + react-konva (PWA) · Claude API · Docker + Jenkins
 
 รายละเอียดเต็ม (แบ่งโมเดลตามงาน, ข้อบังคับทางสถาปัตยกรรม) อยู่ใน
 [`docs/PROJECT-CONTEXT.md`](./docs/PROJECT-CONTEXT.md) §3
+
+## Dev workflow — Tier Agent System
+
+Repo นี้ติดตั้ง [Tier Agent System](./CLAUDE.md) ไว้แล้ว — แบ่งงานเป็น tier ตามความยาก
+(haiku < sonnet < opus < fable) พร้อม code review / security review / TDD flow ที่กำหนดไว้
+
+- **ปิดโดยดีฟอลต์** — พิมพ์คำสั่งปกติ = ทำงานตรงไปตรงมา ไม่มี routing
+- **เปิด**: ขึ้นต้น prompt ด้วย `<tier>`
+- ดูวิธีใช้เต็มด้วย `/tier-help` หรืออ่าน [`CLAUDE.md`](./CLAUDE.md)
