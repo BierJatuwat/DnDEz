@@ -19,4 +19,8 @@
 
 ## Stack
 
-.NET (ASP.NET Core) + SignalR · PostgreSQL + Redis · Next.js · Claude API · Docker + Jenkins
+.NET (ASP.NET Core) + SignalR · PostgreSQL (JSONB + pgvector) + Redis · Hangfire ·
+Next.js + react-konva (PWA) · Claude API · Docker + Jenkins
+
+รายละเอียดเต็ม (แบ่งโมเดลตามงาน, ข้อบังคับทางสถาปัตยกรรม) อยู่ใน
+[`docs/PROJECT-CONTEXT.md`](./docs/PROJECT-CONTEXT.md) §3

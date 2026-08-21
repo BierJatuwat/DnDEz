@@ -202,11 +202,18 @@ Scan (PDF/รูป) → vision extraction (ต่อหน้า, JSON out) →
 
 ## 9. Stack ที่แนะนำ
 
+> **ฉบับเต็มและเป็นทางการอยู่ที่ [`PROJECT-CONTEXT.md`](./PROJECT-CONTEXT.md) §3** (ทบทวน 2026-08-21)
+> — รวมการแบ่งโมเดลตามงาน, ฟีเจอร์ Claude API ที่ต้องใช้ และข้อบังคับทางสถาปัตยกรรม
+> ส่วนด้านล่างคือแกนหลักโดยย่อ
+
 - Backend: .NET (ASP.NET Core) + SignalR (realtime hub เดียวกันรองรับทั้ง online/async)
 - DB: PostgreSQL (JSONB สำหรับ character sheet/world state ที่ schema เปลี่ยนบ่อย) + Redis (presence/pub-sub)
 - Frontend: Next.js + Canvas/SVG สำหรับ grid map
 - LLM: Claude API พร้อม tool-use, orchestrator เป็น service แยกใน .NET
 - Deploy: Docker + Jenkins ตามที่ใช้อยู่แล้ว
+
+> ⚠️ **`generate_scene_image` ใน §2.1 กับการ generate แผนที่ใน §4.2 ยังไม่มีทางทำจริง** —
+> Claude API สร้างรูปภาพไม่ได้ ต้องใช้ provider เจ้าอื่น ดู `PROJECT-CONTEXT.md` §4
 
 ---
 

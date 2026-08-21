@@ -91,13 +91,44 @@
 
 ## 3. Stack
 
+> ทบทวนและขยายรายละเอียด 2026-08-21 — แกนหลักไม่เปลี่ยน เพิ่มส่วนที่ยังไม่เคยระบุ
+
 | ส่วน | เลือกใช้ |
 |---|---|
-| Backend | .NET (ASP.NET Core) + SignalR |
-| DB | PostgreSQL (JSONB) + Redis |
-| Frontend | Next.js + Canvas/SVG (grid map) |
-| LLM | Claude API (แนะนำ Sonnet) + prompt caching |
+| Backend | .NET (ASP.NET Core) + **SignalR** (realtime hub เดียวรองรับทุกโหมด) |
+| ORM / migration | **EF Core + Npgsql** (map JSONB ตรง ๆ) |
+| DB | **PostgreSQL** (JSONB) + **pgvector** (RawChunk — ไม่เพิ่ม vector DB แยก) + **Redis** (presence, turn state, timer) |
+| Background job | **Hangfire** (เก็บ state ใน Postgres ไม่เพิ่ม infra) — claim link 7 วัน, hard delete orphan, harvest, source import |
+| File storage | **S3-compatible** (MinIO ถ้า self-host / R2 ถ้า cloud) + signed URL อายุสั้น |
+| Frontend | **Next.js** + **react-konva** (grid map: token ลากได้, fog layer, hit detection) |
+| Frontend state | `@microsoft/signalr` + TanStack Query (server state) + Zustand (UI state) |
+| อุปกรณ์ผู้เล่น | **PWA** (แท็บเล็ต/มือถือ) — ไม่ทำ native app |
+| Rules engine | **class library แยกโปรเจกต์** ห้าม reference orchestrator + xUnit ครอบหนัก |
+| LLM | **Claude API** (official C# SDK รองรับ tool use) — ดูตารางแบ่งโมเดลด้านล่าง |
 | Deploy | Docker + Jenkins |
+
+### แบ่งโมเดลตามงาน (สำคัญเพราะ BYOK — ผู้ใช้จ่ายเอง)
+
+| งาน | โมเดล |
+|---|---|
+| narration, NPC, tool call ทั่วไป | **Claude Sonnet 5** (จุดคุ้มสุด) |
+| งานหนักครั้งเดียว เช่น `generate_campaign_skeleton` | **Claude Opus 5** |
+| งานถูก เช่นสรุป log, จัดหมวด | **Claude Haiku 4.5** |
+
+**ฟีเจอร์ Claude API ที่ต้องใช้ให้เต็มที่**
+- **Structured outputs + strict tools** — บังคับ schema ตอน extraction จากหนังสือ ลดโอกาส AC/HP เพี้ยน
+- **Batch API (ลด 50%)** — สแกนหนังสือทั้งเล่มไม่ต้อง real-time ยิงเป็น batch ประหยัดเงินผู้ใช้ครึ่งหนึ่ง
+- **Files API** — อัปโหลด PDF ตรง ๆ ใช้ซ้ำได้หลาย request
+- **Prompt caching** — แต่ต้องวางของที่เปลี่ยนทุกเทิร์นไว้**ท้าย** breakpoint ไม่งั้น cache แตกเงียบ ๆ
+- **Token counting** — โชว์ผู้ใช้ว่าเซสชันนี้ใช้เงินไปเท่าไหร่
+
+### ข้อบังคับทางสถาปัตยกรรม (ห้ามพลาด)
+
+- **Fog of war คำนวณฝั่ง server และส่งเฉพาะส่วนที่มองเห็นจริง** — ห้ามส่งแผนที่เต็มแล้วบังด้วย CSS
+  เพราะผู้เล่นเปิด devtools อ่าน websocket เห็นหมด = โกงได้ทันที
+- **Reaction timeout เป็น timer ฝั่ง server** ไม่ใช่ `setTimeout` ฝั่ง client
+- **RNG ทอยเต๋าอยู่ฝั่ง server + เก็บ seed ลง log** เพื่อ replay ตรวจสอบย้อนหลังเวลามีข้อพิพาท
+- **Postgres Row-Level Security** บังคับ campaign isolation ที่ชั้น DB อีกชั้น ไม่พึ่ง `WHERE` ในโค้ดอย่างเดียว
 
 ---
 
@@ -108,6 +139,12 @@
 เหลือ 2 จุดที่รอ feedback จากการใช้จริง
 - ภาระ DM ที่ต้องกรอกผลเต๋าให้ผู้เล่นทุกคนในโหมด in-person (`player-side-design.md` §5)
 - การส่ง panel แนะนำ action ในโหมด online ที่ DM ไม่ได้พูดสด (`player-side-design.md` §7)
+
+**⚠️ Image generation — ต้องตัดสินใจ** (เจอ 2026-08-21)
+`dm-side-design.md` §2.1 มี tool `generate_scene_image` และ §4.2 บอกว่ากด generate แผนที่ด้วย AI ได้
+แต่ **Claude API สร้างรูปภาพไม่ได้** ต้องใช้ image provider เจ้าอื่น ซึ่งทำให้ BYOK ซับซ้อนขึ้นทันที
+(ผู้ใช้ต้องมี key ที่สองไหม? ใครจ่าย?)
+→ **แนะนำ: phase แรกตัดออก** ใช้แผนที่ที่ DM อัปโหลด + คลัง asset สำเร็จรูปไปก่อน
 
 **ยังไม่ออกแบบ**: หน้าจอ onboarding/ตั้งค่าแรกเข้า · flow การจ่ายเงิน/แพ็กเกจ storage ·
 รายละเอียด UI ของ table view
