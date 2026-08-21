@@ -16,7 +16,7 @@
 
 - ✅ ฝั่ง DM — ออกแบบเสร็จ
 - ✅ ฝั่ง Player — ออกแบบรอบแรกเสร็จ
-- 🚧 โค้ด — DB schema + RLS เสร็จแล้ว (30 ตาราง) · ยังไม่มี API/frontend
+- 🚧 โค้ด — DB schema + RLS เสร็จแล้ว (30 ตาราง) · rules engine Phase 1 (dice) เสร็จแล้ว · ยังไม่มี API/frontend
 
 ## เริ่มต้นใช้งาน (local dev)
 
@@ -43,6 +43,14 @@ dotnet ef database update --project src/DnDEz.Infrastructure
 |---|---|
 | `src/DnDEz.Domain` | entity + enum (ไม่มี dependency กับ EF/infra) |
 | `src/DnDEz.Infrastructure` | DbContext, EF configuration, migrations |
+| `src/DnDEz.Rules` | rules engine — zero-dependency (BCL ล้วน) ห้าม reference EF/infra/orchestrator |
+| `tests/DnDEz.Rules.Tests` | xUnit ของ rules engine |
+
+รันเทสต์ของ rules engine:
+
+```bash
+DOTNET_ROOT="$HOME/.dotnet" dotnet test tests/DnDEz.Rules.Tests/DnDEz.Rules.Tests.csproj
+```
 
 **สำคัญ**: แอปต้องต่อ DB ด้วย role `dndez_app` (ไม่ใช่ owner) และตั้ง `app.user_id` / `app.campaign_id`
 ทุก request ไม่งั้น RLS จะมองไม่เห็นข้อมูลใด ๆ เลย (fail closed) — ดู `docs/db-schema.md`

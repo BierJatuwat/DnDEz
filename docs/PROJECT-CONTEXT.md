@@ -38,6 +38,11 @@
 - **แยก AI orchestrator ออกจาก rules engine เด็ดขาด** — AI ตัดสินใจว่าจะเรียก tool ไหน
   (tool calling) แต่ **rules engine ที่เป็นโค้ดปกติ** เป็นคนคำนวณและเขียน state จริง
   → ตัวเลขถูก 100%, กัน prompt injection, ลด context
+- **ลำดับการ build: rules engine ก่อน API layer** (ยืนยัน 2026-08-21 · Phase 1 ลงโค้ดแล้ว)
+  `DnDEz.Rules` เป็น class library **zero-dependency (BCL ล้วน ไม่มี PackageReference เลย)**
+  ห้าม reference EF Core / Infrastructure / orchestrator · **ไม่เขียน DB เอง** คืน record ล้วน
+  การ persist เป็นหน้าที่ชั้น application · ฉีด `IDiceRoller` เข้าไปให้ deterministic ทั้งก้อน ·
+  **engine ไม่รู้จัก concept ผู้ใช้/สิทธิ์เลย** (กฎ "ผู้เล่นกรอกผลเต๋าเองไม่ได้" บังคับที่ชั้น authorization ไม่ใช่ที่ engine)
 - **Approval gate** — tool call ใน subsystem ที่ตั้งเป็น "suggest" จะกลายเป็น pending proposal
   ส่งเข้า DM เท่านั้น ผู้เล่นไม่เห็นจนกว่า DM จะ approve
 - **AI autonomy เป็น dial ต่อ subsystem** (narration / NPC dialogue / rules-combat / map-scene)
@@ -133,6 +138,13 @@
   เพราะผู้เล่นเปิด devtools อ่าน websocket เห็นหมด = โกงได้ทันที
 - **Reaction timeout เป็น timer ฝั่ง server** ไม่ใช่ `setTimeout` ฝั่ง client
 - **RNG ทอยเต๋าอยู่ฝั่ง server + เก็บ seed ลง log** เพื่อ replay ตรวจสอบย้อนหลังเวลามีข้อพิพาท
+  - ⚠️ **ต้อง generate seed ใหม่จาก CSPRNG ทุกครั้งที่ทอย** (`SeededDiceRoller.CreateWithSecureRandomSeed()`)
+    **ห้ามใช้ roller ตัวเดียวยาวข้ามหลายการทอย** — PRNG ที่ใช้ (SplitMix64) ไม่ใช่ CSPRNG และ
+    output function **ย้อนกลับหา state ได้** (ทดสอบยืนยันด้วยการเขียน inverse จริงแล้ว 2026-08-21)
+    ผู้เล่นเห็นผลทอย d20 ได้ ~4.32 บิต/ครั้ง ครบ 64 บิตในราว 15 ครั้ง = พอทางทฤษฎีที่จะ pin state
+    แล้วทำนายทอยถัดไป · การ re-seed ต่อการทอยทำให้ผลเก่าไม่บอกอะไรเกี่ยวกับผลถัดไป
+    (schema เก็บ seed ต่อแถวใน `dice_rolls` รองรับรูปแบบนี้อยู่แล้ว)
+  - **ห้ามแสดง seed ให้ผู้เล่นเห็น** — seed มีไว้ให้ DM/audit เท่านั้น
 - **Postgres Row-Level Security** บังคับ campaign isolation ที่ชั้น DB อีกชั้น ไม่พึ่ง `WHERE` ในโค้ดอย่างเดียว
   - ⚠️ **policy ต้องเช็คว่า user เป็นสมาชิกแคมเปญจริง ไม่ใช่แค่ `campaign_id` ตรงกับค่าที่แอปส่งมา** —
     เจอตอนทดสอบจริงว่าถ้าเช็คแค่ค่าที่ตั้ง DM ของแคมเปญอื่นตั้งค่าเองแล้วอ่านข้ามได้ทันที (ดู `db-schema.md`)
@@ -142,10 +154,10 @@
 
 ## 4. สิ่งที่ยังไม่ตัดสินใจ / ยังไม่ออกแบบ
 
-### 🔜 ลำดับงานถัดไป — เสนอให้ทำ rules engine ก่อน API layer (เสนอ 2026-08-21 · รอยืนยัน)
+### 🔜 ลำดับงานถัดไป — เลือก rules engine ก่อน API layer (ยืนยันแล้ว 2026-08-21)
 
 ทางเลือกที่ค้างไว้: **(ก)** rules engine เป็น class library แยก + xUnit · **(ข)** ASP.NET Core API + SignalR hub
-→ **เสนอ (ก) ก่อน** ด้วยเหตุผล:
+→ **เลือก (ก)** ด้วยเหตุผล:
 
 1. **ทิศทางการพึ่งพาเป็นทางเดียว** — API / SignalR / orchestrator พึ่ง rules engine ทั้งหมด
    แต่ rules engine ไม่พึ่งใครเลย ทำก่อนไม่มีอะไรบล็อก ส่วนทำ API ก่อนจะได้แค่ท่อ CRUD เปล่า
@@ -178,6 +190,30 @@ S4 death save state machine · S5 action economy · S6 rest resolution
 EF Core ต่อด้วย role `dndez_app` + `SET LOCAL` แล้ว RLS ยังกันข้ามแคมเปญได้จริง
 เพราะ **`SET LOCAL` ผูกกับ transaction** ถ้าเผลอเรียกนอก transaction บน connection pool
 ค่าจะหลุดหรือค้างข้าม request — ช่องโหว่แบบเดียวกับที่เจอรอบก่อน แค่ย้ายมาอยู่ชั้นแอป
+
+#### สถานะการลงโค้ด rules engine (แบ่ง 3 phase หยุดถามหลังจบทุก phase)
+
+| Phase | ขอบเขต | สถานะ |
+|---|---|---|
+| **1** | โครงโปรเจกต์ + dice notation parser + advantage/disadvantage + seeded replay + ทาง DmEntered | ✅ **เสร็จ 2026-08-21** — 106 เทสต์ผ่านจริง (`dotnet test` 106/106) |
+| **2** | check/save vs DC · attack vs AC · crit · damage + resist/vuln/immune · temp HP · 0 HP | ⏳ ยังไม่เริ่ม |
+| **3** | death save state machine · action economy (action/bonus/reaction/movement) | ⏳ ยังไม่เริ่ม |
+
+โครงสร้างที่ได้จาก Phase 1:
+- `src/DnDEz.Rules/` — `DiceNotation.cs` (record/enum), `IDiceRoller.cs`, `SeededDiceRoller.cs`
+  (SplitMix64 + CSPRNG seed factory), `DiceExpressionParser.cs`, `DiceEngine.cs`, `AdvantageResolver.cs`
+- `tests/DnDEz.Rules.Tests/` — xUnit
+
+Guard rail ของ parser ที่ล็อกไว้ (เทสต์อ้างอิงค่าพวกนี้ ห้ามแก้เงียบ ๆ):
+`MaxDiceCountPerGroup=100` · `MaxGroupsPerExpression=20` · `MaxSides=1000` · `MinSides=2` · `MaxExpressionLength=200`
+
+บทเรียนจาก security review Phase 1: **.NET regex `\d` เป็น Unicode-aware** จับเลขไทย/อารบิก-อินดิก/fullwidth ด้วย
+แต่ `long.TryParse` ไม่รับ → input พวกนี้เคยหลุดผ่าน regex ไปตายที่ชั้นลึกกว่าด้วยข้อความผิดความจริง
+(ยัง fail closed ไม่ใช่ช่องโหว่ แต่ทำให้ debug ยาก) — **ใน parser ที่รับ input ภายนอก ให้ใช้ `[0-9]` เจาะจงเสมอ**
+
+**⚠️ ยังไม่ได้แก้ (ยกไปชั้น API/frontend)** — ข้อความ `DiceExpressionException` สะท้อน input ดิบกลับมาด้วย
+(เช่น `Expression syntax ไม่ถูกต้อง: '<script>...'`) ตัว engine ไม่ผิดเพราะเป็น library แต่**ชั้นที่เอาไปแสดงผล
+ต้อง escape ก่อนเสมอ** ไม่งั้นกลายเป็น reflected XSS
 
 **ฝั่ง Player — ออกแบบรอบแรกเสร็จแล้ว** (2026-08-21)
 คำถามเปิดเดิม "แท็บเล็ตผู้เล่นดู sheet อย่างเดียวหรือประกาศ action ได้ด้วย" → **ตอบแล้ว: ประกาศ action ได้**
