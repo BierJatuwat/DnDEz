@@ -273,9 +273,49 @@ Guard rail ของ parser ที่ล็อกไว้ (เทสต์อ�
 **🎉 rules engine ครบ 3 phase แล้ว (2026-08-22)** — `src/DnDEz.Rules` + `tests/DnDEz.Rules.Tests`
 221 เทสต์ผ่านจริง ครอบ dice notation, advantage/disadvantage, seeded replay, check/save, attack/AC,
 crit, damage+resistance, HP/temp HP, death save, action economy — **ยังไม่มี**: spellcasting เต็มรูป,
-fog of war (รอ grid/geometry layer), condition effects (poisoned/prone ฯลฯ ที่กระทบ check/attack) —
-ขั้นถัดไปตาม PROJECT-CONTEXT ที่เสนอไว้เดิมคือ ASP.NET Core API layer + SignalR hub (ดูข้อเสนอด้านบนใน
-หัวข้อนี้) เพื่อให้ rules engine ที่มีอยู่ใช้งานได้จริงผ่านเกม ไม่ใช่แค่เทสต์
+fog of war (รอ grid/geometry layer), condition effects (poisoned/prone ฯลฯ ที่กระทบ check/attack)
+
+### 🔜 ขั้นถัดไป — Dev plan แบบ sprint (เสนอ 2026-08-22 · รอยืนยัน โดยเฉพาะกลไก auth)
+
+ตอนนี้มี DB+RLS กับ rules engine เสร็จแล้วแต่**ยังไม่มีอะไรเรียกใช้จริง** ลำดับที่เสนอเน้นทำให้ครบ
+loop เล็ก ๆ end-to-end ก่อน (ทดสอบ/เดโมได้จริงทุก sprint) แทนที่จะสร้างทุกชั้นค้างไว้พร้อมกันแล้วมาต่อ
+ตอนท้ายซึ่งเสี่ยงเจอปัญหา integration สะสม
+
+**Sprint A — API foundation** (บล็อกทุกอย่างที่เหลือ ต้องทำก่อน)
+- ⚠️ **ต้องตัดสินใจ auth mechanism ก่อนเริ่ม** — ยังไม่มีในเอกสารไหนเลย เป็นการตัดสินใจที่ล็อกยาก
+  ข้อเสนอ: **ASP.NET Core Identity** (email+password) สำหรับบัญชีเต็มของ DM/player ·
+  quick-play ใช้กลไก **claim token ที่มีอยู่ใน schema แล้ว** (`Character.ClaimToken`/`ClaimExpiresAt`)
+  แทนการทำระบบ auth คู่ขนาน — ไม่ต้องสร้างอะไรใหม่ แค่ไม่ผูก `OwnerUserId`
+1. Scaffold `DnDEz.Api` (ASP.NET Core) + ต่อ EF Core ด้วย role `dndez_app`
+2. Middleware `SET LOCAL app.user_id/campaign_id` ต่อ request ภายใน transaction เดียวกันเป๊ะ
+   (จุดเสี่ยงที่เตือนไว้หลายรอบแล้วเรื่อง connection pooling + RLS)
+3. **ทดสอบ RLS ผ่าน HTTP จริง** (ยิง request ข้ามแคมเปญจริงผ่าน API ไม่ใช่แค่ query DB ตรง ๆ) —
+   ใช้บทเรียนเดียวกับตอนทดสอบ RLS รอบแรกที่เจอช่องโหว่จากการทดสอบจริง ไม่ใช่อ่านโค้ด
+4. CRUD บาง ๆ ของ campaign/session/character (แค่พอมีข้อมูลให้ใช้ต่อ)
+
+**Sprint B — ต่อ rules engine เข้า API จริง** (proof แรกว่าสถาปัตยกรรมทำงาน)
+5. application service: รับ request "ทอยเต๋า"/"attack" → เรียก `DnDEz.Rules` → persist ผ่าน
+   EF Core (`dice_rolls` พร้อม seed) → คืนผล
+6. Integration test จริงกับ Postgres จริง (ไม่ใช่ mock) — จุดแรกที่พิสูจน์หลักการ "AI ตัดสินใจ
+   เรียก tool, rules engine คำนวณ, DB persist" ที่ล็อกไว้ตั้งแต่ต้นทำงานได้จริงในโค้ด ไม่ใช่แค่เอกสาร
+
+**Sprint C — Realtime ขั้นต่ำสุด**
+7. SignalR hub เดียว broadcast แค่ dice-roll/HP-update จาก Sprint B ก่อน (ไม่ต้องครบทุก feature)
+8. **ต่อ Redis backplane ตั้งแต่ตอนนี้แม้รัน instance เดียว** — ถูกตอนนี้ แพงถ้าย้อนแก้ทีหลัง
+
+**Sprint D — BYOK + orchestrator ขั้นต่ำ**
+9. เข้ารหัสเก็บ API key (Data Protection API)
+10. Tool-calling loop แรก: narration + tool เดียว (`roll_dice`) ผ่าน approval gate — พิสูจน์
+    dial/gate ทำงานจริง
+
+**Sprint E — Frontend MVP**
+11. Next.js scaffold + PWA config
+12. หน้าบาง ๆ ที่คุยกับ API/SignalR จริงจาก Sprint A-D (DM console + player action input แบบง่ายสุด)
+
+**ทำคู่ขนานได้ตลอด ไม่บล็อกอะไร**: ตั้ง GitHub Actions CI ตั้งแต่ Sprint A เริ่ม (ต้นทุนแทบศูนย์)
+
+**เลื่อนไปหลัง pilot ได้** (ไม่บล็อก MVP): source import pipeline (ต้องตัดสินใจ embedding provider
+ก่อนด้วย — ดูหัวข้อด้านล่าง), VPS staging + Jenkins CD (ทำตอนมีอะไรให้ deploy จริงแล้ว)
 
 **ฝั่ง Player — ออกแบบรอบแรกเสร็จแล้ว** (2026-08-21)
 คำถามเปิดเดิม "แท็บเล็ตผู้เล่นดู sheet อย่างเดียวหรือประกาศ action ได้ด้วย" → **ตอบแล้ว: ประกาศ action ได้**
