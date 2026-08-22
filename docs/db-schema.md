@@ -51,6 +51,43 @@ SET LOCAL app.campaign_id = '<campaign guid>';
 **หลักที่ได้จากเรื่องนี้**: RLS ที่เชื่อค่าจาก session setting เพียงอย่างเดียว = กันแค่บั๊ก "ลืมใส่ WHERE"
 ไม่ได้กัน trust boundary จริง ต้องตรวจสิทธิ์กับข้อมูลใน DB เสมอ
 
+### ⚠️🔴 บทเรียนที่ 2 (พบ 2026-08-22 ตอนทำ Sprint A Part 1) — ตาราง `campaigns` เองหลุดจาก RLS มาตั้งแต่ต้น
+
+Policy รอบแรกสร้างด้วย loop ที่กวาดหาเฉพาะ**ตารางที่มีคอลัมน์ `campaign_id`** แล้ว apply policy ให้อัตโนมัติ
+(ดูโค้ดใน `20260821094727_RowLevelSecurity.cs`) — แต่ตาราง **`campaigns` เองใช้ `id` เป็น PK ไม่มีคอลัมน์
+`campaign_id`** จึงหลุดออกจาก loop ไปโดยไม่มีใครตั้งใจ role `dndez_app` ที่ได้ `GRANT ALL TABLES` ไปแล้ว
+จึง**อ่าน/เขียนทุกแคมเปญของทุกคนได้หมดโดยไม่มีการเช็คสิทธิ์ใด ๆ เลย (fail-open)** มาตั้งแต่ commit `820cfeb`
+(schema เดิม) — ไม่มีใครเจอเพราะยังไม่มีอะไรเคย query ตาราง `campaigns` ผ่าน role `dndez_app` จริงจนกระทั่ง
+Sprint A Part 1 สร้าง diagnostic endpoint ตัวแรกที่ทำแบบนั้น เทสต์ที่ตั้งใจพิสูจน์ fail-closed
+(seed ข้อมูลจริงแล้วยืนยันว่า `dndez_app` มองไม่เห็น) **fail ตั้งแต่รอบแรกที่รัน** เพราะเจอ 1 แถวแทนที่จะเป็น 0
+
+แก้ด้วย `20260822230845_AddCampaignsRowLevelSecurity.cs` — เพิ่ม policy แยกให้ `campaigns` โดยเฉพาะ
+(เทียบ `id = app_current_campaign() AND app_is_member()` แทน `campaign_id`) ยืนยันแล้วว่า apply บน
+Postgres จริง (`relrowsecurity=t`, `relforcerowsecurity=t`, policy `campaign_isolation` มีอยู่จริง)
+
+**หลักที่ได้จากเรื่องนี้**: policy ที่สร้างด้วย loop อัตโนมัติจากชื่อคอลัมน์ (`WHERE column_name = 'campaign_id'`)
+**พลาดตารางแม่ของ hierarchy ได้เสมอ** เพราะตารางแม่ไม่มีคอลัมน์ชื่อเดียวกับ FK ที่ลูกใช้อ้างถึงมัน —
+ต้องตรวจสอบรายชื่อตารางที่ policy ครอบคลุมกับรายชื่อตารางทั้งหมดใน schema แบบ set-difference จริง ๆ
+(ไม่ใช่แค่เชื่อว่า loop ครอบหมดเพราะ "ดูน่าจะครอบ") — อีกครั้งที่ยืนยันบทเรียนเดิม: ต้องทดสอบจริงถึงจะเจอ
+อ่านโค้ด/migration เฉย ๆ ไม่มีทางจับได้
+
+### ⚠️🟡 ช่องโหว่ที่พบต่อเนื่อง (ยังไม่แก้ — บล็อก Sprint A Part 3) — สร้างแคมเปญใหม่ไม่ได้ผ่าน `dndez_app`
+
+การแก้บทเรียนที่ 2 ข้างบนทำให้เห็นปัญหาที่ซ่อนอยู่ก่อนหน้านี้แล้ว (มีมาตั้งแต่ schema เดิม ไม่ใช่ผลจาก
+migration ใหม่): **`campaign_members` ก็มีคอลัมน์ `campaign_id` จึงติด policy เดียวกันด้วย**
+(`WITH CHECK (campaign_id = app_current_campaign() AND app_is_member())`) — การ insert แถวแรกใน
+`campaign_members` (ตอนสร้างแคมเปญใหม่ ทำให้ผู้สร้างเป็น DM คนแรก) ต้องผ่าน `app_is_member()` ก่อน
+แต่ `app_is_member()` เช็คว่ามีแถวใน `campaign_members` อยู่แล้วหรือไม่ — ซึ่งยังไม่มี เพราะแถวนั้นคือแถว
+ที่กำลังจะ insert พอดี **= วนตายตัว (circular bootstrap) สร้างแคมเปญใหม่ผ่าน `dndez_app` ไม่ได้เลย**
+เช่นเดียวกับ INSERT แถวแรกของ `campaigns` เองหลังแก้บทเรียนที่ 2 (ต้องมี `app_is_member()` เป็นจริงก่อน
+ทั้งที่กำลังสร้างแคมเปญนั้นอยู่)
+
+**ต้องแก้ก่อนเริ่ม Sprint A Part 3 (CRUD)** — แนวทางที่แนะนำ: เขียน Postgres function แบบ
+`SECURITY DEFINER` (รูปแบบเดียวกับ `app_is_member()`/`app_current_campaign()` ที่มีอยู่แล้ว) สำหรับ
+"สร้างแคมเปญ" โดยเฉพาะ ให้ insert ทั้ง `campaigns` + `campaign_members` (แถว DM คนแรก) แบบ atomic
+ภายใน function เดียวที่ bypass RLS ของตัวเองได้ชั่วคราว แทนที่จะให้แอป insert ตรงผ่าน `dndez_app`
+ทั้งสองตารางแยกกัน — เก็บหลักการเดิมไว้ (แอปต่อด้วย `dndez_app` เสมอ ไม่สลับไป owner)
+
 ### ระดับการเข้าถึง
 
 | กลุ่มตาราง | policy |

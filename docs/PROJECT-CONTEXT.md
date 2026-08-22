@@ -281,17 +281,31 @@ fog of war (รอ grid/geometry layer), condition effects (poisoned/prone ฯ�
 loop เล็ก ๆ end-to-end ก่อน (ทดสอบ/เดโมได้จริงทุก sprint) แทนที่จะสร้างทุกชั้นค้างไว้พร้อมกันแล้วมาต่อ
 ตอนท้ายซึ่งเสี่ยงเจอปัญหา integration สะสม
 
-**Sprint A — API foundation** (บล็อกทุกอย่างที่เหลือ ต้องทำก่อน)
-- ⚠️ **ต้องตัดสินใจ auth mechanism ก่อนเริ่ม** — ยังไม่มีในเอกสารไหนเลย เป็นการตัดสินใจที่ล็อกยาก
-  ข้อเสนอ: **ASP.NET Core Identity** (email+password) สำหรับบัญชีเต็มของ DM/player ·
-  quick-play ใช้กลไก **claim token ที่มีอยู่ใน schema แล้ว** (`Character.ClaimToken`/`ClaimExpiresAt`)
-  แทนการทำระบบ auth คู่ขนาน — ไม่ต้องสร้างอะไรใหม่ แค่ไม่ผูก `OwnerUserId`
-1. Scaffold `DnDEz.Api` (ASP.NET Core) + ต่อ EF Core ด้วย role `dndez_app`
-2. Middleware `SET LOCAL app.user_id/campaign_id` ต่อ request ภายใน transaction เดียวกันเป๊ะ
-   (จุดเสี่ยงที่เตือนไว้หลายรอบแล้วเรื่อง connection pooling + RLS)
-3. **ทดสอบ RLS ผ่าน HTTP จริง** (ยิง request ข้ามแคมเปญจริงผ่าน API ไม่ใช่แค่ query DB ตรง ๆ) —
-   ใช้บทเรียนเดียวกับตอนทดสอบ RLS รอบแรกที่เจอช่องโหว่จากการทดสอบจริง ไม่ใช่อ่านโค้ด
-4. CRUD บาง ๆ ของ campaign/session/character (แค่พอมีข้อมูลให้ใช้ต่อ)
+**Sprint A — API foundation** (บล็อกทุกอย่างที่เหลือ ต้องทำก่อน) — **แบ่ง 3 part** (2026-08-22)
+เพื่อไม่ต้องรอการตัดสินใจ auth mechanism ที่ยังไม่ยืนยันก่อนเริ่มลงมือ (auth ใช้จริงถึง Part 2)
+
+- **Part 1** ✅ **เสร็จ 2026-08-22** — scaffold `DnDEz.Api` + ต่อ EF Core (ของเดิม ไม่สร้างใหม่) ด้วย
+  role `dndez_app` (ไม่ใช่ owner) + endpoint พิสูจน์ fail-closed RLS ผ่าน HTTP จริง — ผ่าน code review +
+  security review ทั้งคู่ — 3 เทสต์ integration ใหม่ผ่านจริงกับ Postgres จริง (รวม 224 เทสต์ทั้ง repo)
+  **ไม่มี auth ใน part นี้ตามแผน**
+  - 🔴 **พบช่องโหว่จริงระหว่างทำ** (ไม่ใช่ของ Part 1 สร้างขึ้น มีมาตั้งแต่ schema เดิม) — ตาราง
+    `campaigns` เองไม่เคยมี RLS มาก่อนเลย เพราะ policy เดิมสร้างจาก loop ที่กวาดหาแต่ตารางที่มีคอลัมน์
+    `campaign_id` แต่ `campaigns` ใช้ `id` เป็น PK จึงหลุด loop ไป → role `dndez_app` อ่าน/เขียนทุก
+    แคมเปญของทุกคนได้หมดแบบ fail-open **แก้แล้ว** ด้วย migration ใหม่ `AddCampaignsRowLevelSecurity`
+    ยืนยัน apply บน Postgres จริงแล้ว — รายละเอียดเต็มดู `db-schema.md` "บทเรียนที่ 2"
+  - 🟡 **พบช่องโหว่ต่อเนื่องที่ยังไม่แก้ — บล็อก Part 3** — สร้างแคมเปญใหม่ผ่าน `dndez_app` ไม่ได้เลย
+    (circular bootstrap: insert แถวแรกใน `campaign_members`/`campaigns` ต้องมี `app_is_member()`
+    เป็นจริงก่อน ทั้งที่กำลังสร้างแคมเปญนั้นอยู่พอดี) — แนะนำแก้ด้วย Postgres function
+    `SECURITY DEFINER` เฉพาะสำหรับสร้างแคมเปญ รายละเอียดดู `db-schema.md`
+- **Part 2** ⏳ — ⚠️ **ต้องตัดสินใจ auth mechanism ตรงนี้** ข้อเสนอ: **ASP.NET Core Identity**
+  (email+password) สำหรับบัญชีเต็มของ DM/player · quick-play ใช้กลไก **claim token ที่มีอยู่ใน
+  schema แล้ว** (`Character.ClaimToken`/`ClaimExpiresAt`) แทนการทำระบบ auth คู่ขนาน — ไม่ต้องสร้าง
+  อะไรใหม่ แค่ไม่ผูก `OwnerUserId` · middleware `SET LOCAL app.user_id/campaign_id` ต่อ request
+  ภายใน transaction เดียวกันเป๊ะ (จุดเสี่ยงที่เตือนไว้หลายรอบเรื่อง connection pooling + RLS) ·
+  **ทดสอบ RLS ข้ามแคมเปญผ่าน HTTP จริง** (บทเรียนเดียวกับตอนทดสอบ RLS รอบแรกที่เจอช่องโหว่จากการ
+  ทดสอบจริง ไม่ใช่อ่านโค้ด)
+- **Part 3** ⏳ — CRUD บาง ๆ ของ campaign/session/character (แค่พอมีข้อมูลให้ใช้ต่อ) —
+  ⚠️ **ต้องแก้ bootstrap gap ข้างบนก่อน** ไม่งั้นสร้างแคมเปญใหม่ไม่ได้เลย
 
 **Sprint B — ต่อ rules engine เข้า API จริง** (proof แรกว่าสถาปัตยกรรมทำงาน)
 5. application service: รับ request "ทอยเต๋า"/"attack" → เรียก `DnDEz.Rules` → persist ผ่าน
