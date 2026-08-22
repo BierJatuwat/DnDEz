@@ -196,13 +196,44 @@ EF Core ต่อด้วย role `dndez_app` + `SET LOCAL` แล้ว RLS �
 | Phase | ขอบเขต | สถานะ |
 |---|---|---|
 | **1** | โครงโปรเจกต์ + dice notation parser + advantage/disadvantage + seeded replay + ทาง DmEntered | ✅ **เสร็จ 2026-08-21** — 106 เทสต์ผ่านจริง (`dotnet test` 106/106) |
-| **2** | check/save vs DC · attack vs AC · crit · damage + resist/vuln/immune · temp HP · 0 HP | ⏳ ยังไม่เริ่ม |
+| **2** | check/save vs DC · attack vs AC · crit · damage + resist/vuln/immune · temp HP · 0 HP | ✅ **เสร็จ 2026-08-22** — 170 เทสต์ผ่านจริง (`dotnet test` 170/170) |
 | **3** | death save state machine · action economy (action/bonus/reaction/movement) | ⏳ ยังไม่เริ่ม |
 
 โครงสร้างที่ได้จาก Phase 1:
 - `src/DnDEz.Rules/` — `DiceNotation.cs` (record/enum), `IDiceRoller.cs`, `SeededDiceRoller.cs`
   (SplitMix64 + CSPRNG seed factory), `DiceExpressionParser.cs`, `DiceEngine.cs`, `AdvantageResolver.cs`
 - `tests/DnDEz.Rules.Tests/` — xUnit
+
+โครงสร้างที่เพิ่มจาก Phase 2 (ต่อยอด `DiceEngine`/`DiceExpressionParser` เดิม ไม่เขียน d20-roller ใหม่):
+- `src/DnDEz.Rules/CheckResolver.cs` — ability check/saving throw vs DC (`Total>=Dc` เท่านั้น
+  **ไม่มี** auto-success/fail จาก nat20/nat1 — ต่างจาก attack roll โดยเจตนา)
+- `src/DnDEz.Rules/AttackResolver.cs` — attack roll vs AC นับจาก **เลขดิบบน d20 ที่ถูกเก็บจริง**
+  (ดู `Sides==20 && Dropped==false` ใน `RollResult.Rolls`) ไม่ใช่ total — nat20=CriticalHit เสมอ,
+  nat1=AutomaticMiss เสมอไม่สนใจ AC/modifier · throw ถ้าพบ d20 ที่ไม่ถูก drop ไม่เท่ากับ 1 ตัวพอดี
+  (ทั้งกรณีไม่มีเลยและกรณีเกิน 1 ตัว — กันกรณี caller ส่ง expression ที่ไม่ใช่ attack roll จริงเข้ามา)
+- `DiceEngine.RollDamage(expression, roller, isCritical, seed)` — crit ดับเบิล **จำนวนลูกเต๋า**
+  ต่อกลุ่ม (`DiceGroupSpec.Count`) เท่านั้น ไม่แตะ `FlatModifier` และไม่ดับเบิล `Keep.Amount` (kh/kl)
+- `src/DnDEz.Rules/DamageType.cs` — 13 damage type มาตรฐาน SRD 5.2
+- `src/DnDEz.Rules/DamageTypeResolver.cs` — resist/vulnerable/immune ต่อ damage type เดียว
+  (input เป็น `IReadOnlySet<DamageType>` กัน stack ซ้อน) — **immune ชนะทุกกรณี** · **resist+vulnerable
+  พร้อมกัน = หักล้างเป็น damage ปกติ** (implement เป็นนิยามตรง ๆ ไม่ใช่ `floor(x/2)*2` ซึ่งได้ผลต่างกัน
+  จริง เช่น raw=7 → นิยามตรงได้ 7 แต่ floor-then-double ได้ 6) · resist อย่างเดียว = `/2` (floor)
+  · vulnerable อย่างเดียว = `×2`
+- `src/DnDEz.Rules/DamageResolver.cs` — ทอย damage หลาย component คนละ type ในการโจมตีเดียวได้
+  (`DamageComponent(Expression, Type)`) · **ค่าที่ส่งเข้า resistance math ถูก clamp `Math.Max(0, ...)`
+  เสมอ** (กัน damage ติดลบจาก expression แบบ `"1d4-6"`) แต่ `DamageComponentResult.RawAmount`
+  ยังเก็บค่าดิบจริงไว้เพื่อ audit — ตั้งใจให้ต่างจาก `AdjustedAmount`
+- `src/DnDEz.Rules/HitPointResolver.cs` — apply damage (temp HP ดูดซับก่อน HP จริงเสมอ, HP clamp
+  ที่ 0, massive damage instant death: `excess=damageAppliedToHp-previousHp; IsInstantDeath =
+  droppedToZero && excess>=maxHp`) + healing (`min(current+amount,max)`) — **Phase 2 แค่รายงาน
+  `IsInstantDeath`/`DroppedToZero` เป็น fact ไม่จัดการ state ตาย/สลบ/death save เอง** นั่นเป็นหน้าที่
+  Phase 3 · **Temp HP ไม่ stack — ใช้ `Math.Max(current, incoming)`** เป็น engine-level
+  simplification ของกฎ RAW ที่จริงเป็นตัวเลือกผู้เล่น (engine ไม่รู้จัก concept ผู้ใช้)
+
+บทเรียนจาก code review Phase 2 (พบ 2 รอบ ตอนรอบแรก approve แต่มีข้อควรแก้ 3 ข้อ แก้แล้วผ่านรอบ 2):
+damage รวมต้อง clamp ไม่ให้ติดลบ **ก่อน** เข้า resistance math เสมอ (ไม่ใช่ clamp ทีหลัง) และ resolver
+ที่หา "เต๋าตัวเดียวที่ควรมี" (เช่น d20 ของ attack roll) ต้องเช็คทั้งกรณี "ไม่มีเลย" และ "มีเกิน 1 ตัว"
+ไม่ใช่แค่กรณีแรก — สองแพทเทิร์นนี้เจอซ้ำได้ใน Phase 3 เช่นกัน (death save ก็เป็น d20 เดี่ยว)
 
 Guard rail ของ parser ที่ล็อกไว้ (เทสต์อ้างอิงค่าพวกนี้ ห้ามแก้เงียบ ๆ):
 `MaxDiceCountPerGroup=100` · `MaxGroupsPerExpression=20` · `MaxSides=1000` · `MinSides=2` · `MaxExpressionLength=200`

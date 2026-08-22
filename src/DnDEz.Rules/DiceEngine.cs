@@ -99,6 +99,40 @@ public sealed class DiceEngine
             group => RollGroupFromRawValues(group, rawValues, ref cursor));
     }
 
+    /// <summary>
+    /// ทอย damage — ตอน isCritical=true ให้ทอยลูกเต๋าความเสียหายเป็น "สองเท่าของจำนวนลูก" ต่อกลุ่ม
+    /// (ดับเบิล Count ของแต่ละ DiceGroupSpec) ไม่ใช่ทอยครั้งเดียวแล้วคูณผลรวม×2 และไม่แตะ FlatModifier
+    /// เลย (D&D 2024: crit ดับเบิลเฉพาะเต๋า ไม่ดับเบิล modifier) — reuse BuildNormalResult/
+    /// RollGroupFromRoller เดิมของ Phase 1 ทั้งหมด ไม่มี dice-rolling logic ใหม่ในเมธอดนี้
+    ///
+    /// ตัดสินใจเรื่อง kh/kl บน crit (damage ปกติไม่ใช้ kh/kl แต่ parser Phase 1 ไม่ได้ห้าม):
+    /// Keep.Amount **ไม่ถูกดับเบิลตาม** เมื่อดับเบิล Count — เหตุผล: "kh3" ที่ผู้ใช้ตั้งค่าไว้แปลว่า
+    /// "เก็บสูงสุด 3 เม็ดที่ดีที่สุด" ซึ่งเป็นความตั้งใจของผู้ใช้ตรง ๆ ไม่มีกฎ D&D ข้อไหนบอกว่าจำนวนที่
+    /// "เก็บ" ต้องโตตามจำนวนที่ "ทอย" เพิ่มจาก crit ถ้าดับเบิล Keep.Amount ไปด้วยจะเปลี่ยนความหมายของ
+    /// การตั้งค่าเดิมโดยไม่มีที่มา ส่วนการดับเบิลแค่ Count (pool ที่ทอย) แล้วคง Keep.Amount เดิมไว้
+    /// ยังคงเป็นพฤติกรรมที่คาดเดาได้ตรงไปตรงมาที่สุด — ดูเทสต์ยืนยันใน DiceEngineDamageTests
+    /// </summary>
+    public RollResult RollDamage(
+        string expression,
+        IDiceRoller roller,
+        bool isCritical,
+        long? seed = null)
+    {
+        var parsed = DiceExpressionParser.Parse(expression);
+
+        if (isCritical)
+        {
+            var doubledGroups = parsed.Groups
+                .Select(group => group with { Count = group.Count * 2 })
+                .ToList();
+            parsed = new ParsedDiceExpression(doubledGroups, parsed.FlatModifier);
+        }
+
+        return BuildNormalResult(
+            expression, DiceSource.SystemRoll, seed, AdvantageMode.None, parsed,
+            group => RollGroupFromRoller(group, roller));
+    }
+
     private static RollResult BuildAdvantageResult(
         string expression,
         DiceSource source,
