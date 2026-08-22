@@ -5,7 +5,8 @@
 > [`player-side-design.md`](./player-side-design.md) ถ้าต้องการรายละเอียดเต็ม
 >
 > **สถานะ**: ฝั่ง DM ออกแบบเสร็จแล้ว · ฝั่ง Player ออกแบบรอบแรกเสร็จแล้ว (2026-08-21)
-> · **DB schema + RLS ลงโค้ดแล้ว** (30 ตาราง — ดู [`db-schema.md`](./db-schema.md)) · ยังไม่มี API/frontend
+> · **DB schema + RLS ลงโค้ดแล้ว** (30 ตาราง — ดู [`db-schema.md`](./db-schema.md)) ·
+> **rules engine ครบ 3 phase แล้ว** (221 เทสต์ผ่าน — ดู §4) · ยังไม่มี API/frontend
 >
 > **ก่อนเริ่มเขียนโค้ด**: repo นี้มีระบบ [Tier Agent System](../CLAUDE.md) ติดตั้งไว้แล้ว (routing/review/TDD
 > convention สำหรับ Claude Code) — ปิดโดยดีฟอลต์ เปิดด้วยการขึ้นต้น prompt ด้วย `<tier>` เท่านั้น
@@ -197,7 +198,7 @@ EF Core ต่อด้วย role `dndez_app` + `SET LOCAL` แล้ว RLS �
 |---|---|---|
 | **1** | โครงโปรเจกต์ + dice notation parser + advantage/disadvantage + seeded replay + ทาง DmEntered | ✅ **เสร็จ 2026-08-21** — 106 เทสต์ผ่านจริง (`dotnet test` 106/106) |
 | **2** | check/save vs DC · attack vs AC · crit · damage + resist/vuln/immune · temp HP · 0 HP | ✅ **เสร็จ 2026-08-22** — 170 เทสต์ผ่านจริง (`dotnet test` 170/170) |
-| **3** | death save state machine · action economy (action/bonus/reaction/movement) | ⏳ ยังไม่เริ่ม |
+| **3** | death save state machine · action economy (action/bonus/reaction/movement) | ✅ **เสร็จ 2026-08-22** — 221 เทสต์ผ่านจริง (`dotnet test` 221/221) — **rules engine 3 phase ครบแล้ว** |
 
 โครงสร้างที่ได้จาก Phase 1:
 - `src/DnDEz.Rules/` — `DiceNotation.cs` (record/enum), `IDiceRoller.cs`, `SeededDiceRoller.cs`
@@ -245,6 +246,36 @@ Guard rail ของ parser ที่ล็อกไว้ (เทสต์อ�
 **⚠️ ยังไม่ได้แก้ (ยกไปชั้น API/frontend)** — ข้อความ `DiceExpressionException` สะท้อน input ดิบกลับมาด้วย
 (เช่น `Expression syntax ไม่ถูกต้อง: '<script>...'`) ตัว engine ไม่ผิดเพราะเป็น library แต่**ชั้นที่เอาไปแสดงผล
 ต้อง escape ก่อนเสมอ** ไม่งั้นกลายเป็น reflected XSS
+
+โครงสร้างที่เพิ่มจาก Phase 3 (ต่อยอด `AttackResolver`/`HitPointResolver` เดิม ไม่คำนวณ massive damage ซ้ำ):
+- `src/DnDEz.Rules/DeathSaveResolver.cs` — death save state machine (SRD 5.2) ทอย `"1d20"` **ไม่มี
+  modifier** ผ่าน `DiceEngine.RollSystem` เดิม (รองรับ advantage/disadvantage แต่ adv/disadv มีผลแค่
+  เลือกลูกที่เก็บ ไม่ใช่กติกาพิเศษของ death save) · **nat20 = ฟื้นทันที** (จบกระบวนการทั้งหมดกลับสู่
+  `NotDying` พร้อม flag `RevivedWithOneHp` ให้ caller ไปเรียก `HitPointResolver.ApplyHealing` เอง — ไม่ใช่
+  แค่ +1 success) · **nat1 = นับ 2 failures** · ดิบ 10-19 = success, ดิบ 2-9 = failure ·
+  Successes/Failures clamp ที่ 3 เสมอ · สะสม success ครบ 3 → `Stable` และหยุดทอย, ครบ 3 failure → `Dead`
+  · `ApplyAttackedAtZeroHp` แยกต่างหากสำหรับ "โดนโจมตีตอน 0 HP" (1 failure อัตโนมัติ, 2 ถ้า crit — ไม่ผ่าน
+  การทอยลูกเต๋า) · ใช้แพทเทิร์นหา "เลขดิบบน d20 ที่ถูกเก็บจริง" เดียวกับ `AttackResolver` ทุกประการ
+  (throw ทั้งกรณีไม่มี d20 ที่ไม่ถูก drop เลยและกรณีมีเกิน 1 ตัว) · `DeathSaveStatus` ประกาศเอง 4 ค่า
+  (`NotDying/Rolling/Stable/Dead`) ต่างจาก `DnDEz.Domain.Enums.DeathSaveStatus` (3 ค่า) โดยตั้งใจ เพราะ
+  ต้องมีสถานะ "ไม่ได้กำลัง 0 HP" แยกจาก "กำลังทอยอยู่" — แปลง 4→3 ค่าเป็นหน้าที่ชั้น application
+  · **massive damage instant death (Phase 2's `HitPointResolver.ApplyDamageResult.IsInstantDeath`) เป็น
+  คนละกลไกกับ death save โดยสิ้นเชิง — resolver นี้ไม่มี logic คำนวณซ้ำ** ถ้า `IsInstantDeath=true`
+  caller เซ็ต `Dead` ตรง ๆ โดยไม่ผ่าน death save เลย
+- `src/DnDEz.Rules/ActionEconomyResolver.cs` — resource tracking ล้วน ไม่มี RNG/timer เกี่ยวข้อง
+  (`StartTurn`/`SpendAction`/`SpendBonusAction`/`SpendReaction`/`SpendMovement`) — action/bonus action
+  ใช้ได้ 1 ครั้ง/เทิร์น, **reaction reset เฉพาะตอน `StartTurn` เท่านั้น** (ไม่รีเซ็ตตอนคนอื่นขึ้นเทิร์น),
+  movement หักทีละส่วนได้ไม่ใช่ all-or-nothing · double-spend/เกินคงเหลือ = throw (caller bug ตาม
+  convention เดียวกับ resolver อื่น) · **reaction timeout เป็นหน้าที่ชั้น application/Hangfire ไม่ใช่
+  engine** — ในนี้ไม่มี timer/async ใด ๆ ทั้งสิ้น (ข้อบังคับสถาปัตยกรรมจาก §3 "Reaction timeout เป็น
+  timer ฝั่ง server" ยังต้องทำที่ชั้นบน ไม่ใช่ในไฟล์นี้)
+
+**🎉 rules engine ครบ 3 phase แล้ว (2026-08-22)** — `src/DnDEz.Rules` + `tests/DnDEz.Rules.Tests`
+221 เทสต์ผ่านจริง ครอบ dice notation, advantage/disadvantage, seeded replay, check/save, attack/AC,
+crit, damage+resistance, HP/temp HP, death save, action economy — **ยังไม่มี**: spellcasting เต็มรูป,
+fog of war (รอ grid/geometry layer), condition effects (poisoned/prone ฯลฯ ที่กระทบ check/attack) —
+ขั้นถัดไปตาม PROJECT-CONTEXT ที่เสนอไว้เดิมคือ ASP.NET Core API layer + SignalR hub (ดูข้อเสนอด้านบนใน
+หัวข้อนี้) เพื่อให้ rules engine ที่มีอยู่ใช้งานได้จริงผ่านเกม ไม่ใช่แค่เทสต์
 
 **ฝั่ง Player — ออกแบบรอบแรกเสร็จแล้ว** (2026-08-21)
 คำถามเปิดเดิม "แท็บเล็ตผู้เล่นดู sheet อย่างเดียวหรือประกาศ action ได้ด้วย" → **ตอบแล้ว: ประกาศ action ได้**

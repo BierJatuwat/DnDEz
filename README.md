@@ -16,7 +16,7 @@
 
 - ✅ ฝั่ง DM — ออกแบบเสร็จ
 - ✅ ฝั่ง Player — ออกแบบรอบแรกเสร็จ
-- 🚧 โค้ด — DB schema + RLS เสร็จแล้ว (30 ตาราง) · rules engine Phase 1-2 (dice, combat core) เสร็จแล้ว · ยังไม่มี API/frontend
+- 🚧 โค้ด — DB schema + RLS เสร็จแล้ว (30 ตาราง) · rules engine ครบ 3 phase (dice, combat core, death save + action economy) เสร็จแล้ว · ยังไม่มี API/frontend
 
 ## เริ่มต้นใช้งาน (local dev)
 
