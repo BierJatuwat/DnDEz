@@ -297,13 +297,37 @@ loop เล็ก ๆ end-to-end ก่อน (ทดสอบ/เดโมไ�
     (circular bootstrap: insert แถวแรกใน `campaign_members`/`campaigns` ต้องมี `app_is_member()`
     เป็นจริงก่อน ทั้งที่กำลังสร้างแคมเปญนั้นอยู่พอดี) — แนะนำแก้ด้วย Postgres function
     `SECURITY DEFINER` เฉพาะสำหรับสร้างแคมเปญ รายละเอียดดู `db-schema.md`
-- **Part 2** ⏳ — ⚠️ **ต้องตัดสินใจ auth mechanism ตรงนี้** ข้อเสนอ: **ASP.NET Core Identity**
-  (email+password) สำหรับบัญชีเต็มของ DM/player · quick-play ใช้กลไก **claim token ที่มีอยู่ใน
-  schema แล้ว** (`Character.ClaimToken`/`ClaimExpiresAt`) แทนการทำระบบ auth คู่ขนาน — ไม่ต้องสร้าง
-  อะไรใหม่ แค่ไม่ผูก `OwnerUserId` · middleware `SET LOCAL app.user_id/campaign_id` ต่อ request
-  ภายใน transaction เดียวกันเป๊ะ (จุดเสี่ยงที่เตือนไว้หลายรอบเรื่อง connection pooling + RLS) ·
-  **ทดสอบ RLS ข้ามแคมเปญผ่าน HTTP จริง** (บทเรียนเดียวกับตอนทดสอบ RLS รอบแรกที่เจอช่องโหว่จากการ
-  ทดสอบจริง ไม่ใช่อ่านโค้ด)
+- **Part 2** ✅ **เสร็จ 2026-08-25** — ⚠️ **auth mechanism ปรับจากข้อเสนอเดิม** (พบตอนเริ่ม Part 2):
+  ตาราง `users` มี `PasswordHash` column อยู่แล้วแบบ minimal (`Id/Email/DisplayName/PasswordHash/
+  CreatedAt`) ไม่ใช่ schema ที่ออกแบบรับ **ASP.NET Core Identity เต็มรูป** ซึ่งต้องการตารางคู่ขนาน
+  (`AspNetUsers`/`AspNetRoles`/`AspNetUserClaims` ฯลฯ) ทับ schema เดิม → **เปลี่ยนเป็น lightweight
+  custom auth**: ใช้ `PasswordHasher<T>` (utility hashing algorithm จาก Identity package แต่ไม่ดึง
+  framework เต็ม ไม่มี `AddIdentity<>()`) เก็บ hash ใน `users.password_hash` เดิม + ออก **JWT bearer
+  token** ตอน login (ไม่ใช่ cookie — เข้ากับสถาปัตยกรรม API-first/PWA frontend มากกว่า) ·
+  quick-play ยังใช้กลไก **claim token ที่มีอยู่ใน schema แล้ว** (`Character.ClaimToken`/
+  `ClaimExpiresAt`) เหมือนเดิม ไม่ต้องสร้างอะไรใหม่ แค่ไม่ผูก `OwnerUserId`
+  · middleware `SET LOCAL app.user_id/campaign_id` ต่อ request ภายใน transaction เดียวกันเป๊ะ
+  (จุดเสี่ยงที่เตือนไว้หลายรอบเรื่อง connection pooling + RLS)
+  · **ทดสอบ RLS ข้ามแคมเปญผ่าน HTTP จริง** (บทเรียนเดียวกับตอนทดสอบ RLS รอบแรกที่เจอช่องโหว่จากการ
+  ทดสอบจริง ไม่ใช่อ่านโค้ด) — seed แคมเปญ/สมาชิกผ่าน owner role โดยตรง (ข้าม bootstrap gap ของ
+  Part 3 ที่ยังไม่แก้ เพราะ Part 2 ไม่ต้องสร้างแคมเปญจริงผ่าน API)
+
+  ผ่าน code review 2 รอบ (รอบแรกเจอบั๊กจริง — `catch (DbUpdateException)` ใน `/auth/register`
+  กว้างเกินไป ยืนยันด้วยการรันจริงว่า `DisplayName` เกิน `varchar(100)` ถูกจัดผิดเป็น
+  `email_already_registered` แก้ด้วยแยก `PostgresException.SqlState == "23505"` แล้ว `throw;`
+  รักษา stack trace สำหรับ error อื่น รอบ 2 approve ไม่มี blocker) + security review pass ไม่มี
+  critical (escalate ได้แต่ reviewer ประเมินว่าไม่จำเป็นเพราะ verify ได้หมดด้วยหลักฐานโค้ดจริง —
+  algorithm confusion ปิดถูก, timing-safe login ยืนยันเชิงประจักษ์, SET LOCAL parameterized ไม่มี
+  injection surface) — มี backlog สำหรับก่อน production จริง (ไม่บล็อก Part 2): rate limiting บน
+  `/auth/login`/`/auth/register`, password max-length cap (กัน CPU-exhaustion DoS ผ่าน PBKDF2),
+  log เตือนตอนใช้ dev JWT fallback key, `UseHttpsRedirection()`, JWT revocation/refresh-token
+
+  ⚠️ **บทเรียนกระบวนการ**: dispatch งาน green ไปยัง `sonnet-worker` 3 รอบติดกันไม่คืบหน้าเลย
+  (มี tool call จริงแต่ไม่เคยแก้ไฟล์ที่ต้องสร้างใหม่) — วินิจฉัยว่า **`sonnet-worker` ไม่มี `Write`
+  tool** (มีแค่ Read/Grep/Glob/Bash/Edit/Agent ตาม `CLAUDE.md`) จึงสร้างไฟล์ใหม่ไม่ได้ escalate ไป
+  `opus-worker` (มี `Write`) จึงสำเร็จ — **งานที่ต้องสร้างไฟล์ใหม่ ควร dispatch ไป opus-worker ตรง ๆ
+  ไม่ต้องเสีย 3 รอบกับ sonnet-worker ก่อน** (งานที่แก้ไฟล์เดิมอย่างเดียวยังส่ง sonnet-worker ได้ปกติ
+  ยืนยันแล้วตอนแก้ finding รอบ 2 ที่ sonnet-worker ทำสำเร็จรอบเดียวเพราะเป็นแค่ Edit)
 - **Part 3** ⏳ — CRUD บาง ๆ ของ campaign/session/character (แค่พอมีข้อมูลให้ใช้ต่อ) —
   ⚠️ **ต้องแก้ bootstrap gap ข้างบนก่อน** ไม่งั้นสร้างแคมเปญใหม่ไม่ได้เลย
 
