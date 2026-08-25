@@ -71,7 +71,7 @@ Postgres จริง (`relrowsecurity=t`, `relforcerowsecurity=t`, policy `camp
 (ไม่ใช่แค่เชื่อว่า loop ครอบหมดเพราะ "ดูน่าจะครอบ") — อีกครั้งที่ยืนยันบทเรียนเดิม: ต้องทดสอบจริงถึงจะเจอ
 อ่านโค้ด/migration เฉย ๆ ไม่มีทางจับได้
 
-### ⚠️🟡 ช่องโหว่ที่พบต่อเนื่อง (ยังไม่แก้ — บล็อก Sprint A Part 3) — สร้างแคมเปญใหม่ไม่ได้ผ่าน `dndez_app`
+### ✅ ช่องโหว่ที่พบต่อเนื่อง — แก้แล้ว (2026-08-25) — สร้างแคมเปญใหม่ไม่ได้ผ่าน `dndez_app`
 
 การแก้บทเรียนที่ 2 ข้างบนทำให้เห็นปัญหาที่ซ่อนอยู่ก่อนหน้านี้แล้ว (มีมาตั้งแต่ schema เดิม ไม่ใช่ผลจาก
 migration ใหม่): **`campaign_members` ก็มีคอลัมน์ `campaign_id` จึงติด policy เดียวกันด้วย**
@@ -82,11 +82,22 @@ migration ใหม่): **`campaign_members` ก็มีคอลัมน์ 
 เช่นเดียวกับ INSERT แถวแรกของ `campaigns` เองหลังแก้บทเรียนที่ 2 (ต้องมี `app_is_member()` เป็นจริงก่อน
 ทั้งที่กำลังสร้างแคมเปญนั้นอยู่)
 
-**ต้องแก้ก่อนเริ่ม Sprint A Part 3 (CRUD)** — แนวทางที่แนะนำ: เขียน Postgres function แบบ
-`SECURITY DEFINER` (รูปแบบเดียวกับ `app_is_member()`/`app_current_campaign()` ที่มีอยู่แล้ว) สำหรับ
-"สร้างแคมเปญ" โดยเฉพาะ ให้ insert ทั้ง `campaigns` + `campaign_members` (แถว DM คนแรก) แบบ atomic
-ภายใน function เดียวที่ bypass RLS ของตัวเองได้ชั่วคราว แทนที่จะให้แอป insert ตรงผ่าน `dndez_app`
-ทั้งสองตารางแยกกัน — เก็บหลักการเดิมไว้ (แอปต่อด้วย `dndez_app` เสมอ ไม่สลับไป owner)
+**แก้ด้วย** migration `AddCampaignCreationBootstrapFunction` — Postgres function `app_create_campaign(...)`
+แบบ `SECURITY DEFINER` (รูปแบบเดียวกับ `app_is_member()`/`app_is_dm()` ที่มีอยู่แล้ว) insert ทั้ง
+`campaigns` + `campaign_members` (แถว DM คนแรก) แบบ atomic ภายใน function เดียวที่ bypass RLS ของ
+ตัวเองได้ชั่วคราว (function ถูกสร้างโดย role `dndez` ซึ่งเป็นเจ้าของทั้งสองตารางอยู่แล้ว) —
+แอปยังต่อด้วย `dndez_app` เสมอเหมือนเดิม ไม่สลับไป owner เลย
+
+**⚠️ ข้อจำกัดที่ต้องรู้ (กัน backdoor)**: `owner_user_id`/`user_id` ของสมาชิก DM คนแรก **มาจาก
+`app_current_user_id()` เท่านั้น ไม่รับเป็น parameter จากภายนอกเด็ดขาด** (ถ้ารับได้ ใครก็เรียกสร้าง
+แคมเปญ "เป็นเจ้าของ" ให้ user คนอื่นได้ทันที เพราะ function bypass RLS ไปแล้ว) — `RAISE EXCEPTION`
+ทันทีถ้าไม่ได้ตั้ง `app.user_id` มาก่อนเรียก
+
+**ทดสอบจริงแล้วครบทั้ง 4 เคส** (`tests/DnDEz.Api.Tests/CampaignBootstrapTests.cs`, ทดสอบตรงกับ
+role `dndez_app` ผ่าน raw SQL เพราะยังไม่มี API endpoint ห่อ — รอ Sprint A Part 3):
+สร้างสำเร็จ + creator เห็นผ่าน RLS ปกติทันที · throw ถ้าไม่ตั้ง `app.user_id` · outsider มองไม่เห็น
+แคมเปญที่เพิ่งสร้าง · **INSERT ตรง ๆ ไม่ผ่าน function ยังถูก RLS บล็อกเหมือนเดิม** (ยืนยันว่า fix
+เปิดแค่ทางผ่าน function ที่ควบคุมได้ ไม่ได้ทำให้ policy เดิมหลวมลง)
 
 ### ระดับการเข้าถึง
 

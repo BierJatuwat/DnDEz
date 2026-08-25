@@ -293,10 +293,16 @@ loop เล็ก ๆ end-to-end ก่อน (ทดสอบ/เดโมไ�
     `campaign_id` แต่ `campaigns` ใช้ `id` เป็น PK จึงหลุด loop ไป → role `dndez_app` อ่าน/เขียนทุก
     แคมเปญของทุกคนได้หมดแบบ fail-open **แก้แล้ว** ด้วย migration ใหม่ `AddCampaignsRowLevelSecurity`
     ยืนยัน apply บน Postgres จริงแล้ว — รายละเอียดเต็มดู `db-schema.md` "บทเรียนที่ 2"
-  - 🟡 **พบช่องโหว่ต่อเนื่องที่ยังไม่แก้ — บล็อก Part 3** — สร้างแคมเปญใหม่ผ่าน `dndez_app` ไม่ได้เลย
+  - ✅ **ช่องโหว่ต่อเนื่องแก้แล้ว (2026-08-25)** — เดิมสร้างแคมเปญใหม่ผ่าน `dndez_app` ไม่ได้เลย
     (circular bootstrap: insert แถวแรกใน `campaign_members`/`campaigns` ต้องมี `app_is_member()`
-    เป็นจริงก่อน ทั้งที่กำลังสร้างแคมเปญนั้นอยู่พอดี) — แนะนำแก้ด้วย Postgres function
-    `SECURITY DEFINER` เฉพาะสำหรับสร้างแคมเปญ รายละเอียดดู `db-schema.md`
+    เป็นจริงก่อน ทั้งที่กำลังสร้างแคมเปญนั้นอยู่พอดี) — แก้ด้วย migration
+    `AddCampaignCreationBootstrapFunction` (Postgres function `app_create_campaign()` แบบ
+    `SECURITY DEFINER`, insert `campaigns`+`campaign_members` atomic, `owner_user_id`/DM user_id
+    มาจาก `app_current_user_id()` เท่านั้นห้ามรับจากภายนอก กัน backdoor) ทดสอบจริงครบ 4 เคสผ่าน
+    role `dndez_app` (`tests/DnDEz.Api.Tests/CampaignBootstrapTests.cs`) รวม negative case ว่า
+    INSERT ตรง ๆ ไม่ผ่าน function ยังถูก RLS บล็อกเหมือนเดิม — รายละเอียดเต็มดู `db-schema.md`
+    (**หมายเหตุ: งานนี้ทำนอก `<tier>` — ไม่ผ่าน code review/security review แบบ Sprint A Part 1-2**
+    ตรวจเองด้วยการทดสอบจริงกับ Postgres จริงครบทั้ง happy path และ negative case แทน)
 - **Part 2** ✅ **เสร็จ 2026-08-25** — ⚠️ **auth mechanism ปรับจากข้อเสนอเดิม** (พบตอนเริ่ม Part 2):
   ตาราง `users` มี `PasswordHash` column อยู่แล้วแบบ minimal (`Id/Email/DisplayName/PasswordHash/
   CreatedAt`) ไม่ใช่ schema ที่ออกแบบรับ **ASP.NET Core Identity เต็มรูป** ซึ่งต้องการตารางคู่ขนาน
@@ -328,8 +334,8 @@ loop เล็ก ๆ end-to-end ก่อน (ทดสอบ/เดโมไ�
   `opus-worker` (มี `Write`) จึงสำเร็จ — **งานที่ต้องสร้างไฟล์ใหม่ ควร dispatch ไป opus-worker ตรง ๆ
   ไม่ต้องเสีย 3 รอบกับ sonnet-worker ก่อน** (งานที่แก้ไฟล์เดิมอย่างเดียวยังส่ง sonnet-worker ได้ปกติ
   ยืนยันแล้วตอนแก้ finding รอบ 2 ที่ sonnet-worker ทำสำเร็จรอบเดียวเพราะเป็นแค่ Edit)
-- **Part 3** ⏳ — CRUD บาง ๆ ของ campaign/session/character (แค่พอมีข้อมูลให้ใช้ต่อ) —
-  ⚠️ **ต้องแก้ bootstrap gap ข้างบนก่อน** ไม่งั้นสร้างแคมเปญใหม่ไม่ได้เลย
+- **Part 3** ⏳ — CRUD บาง ๆ ของ campaign/session/character (แค่พอมีข้อมูลให้ใช้ต่อ) — bootstrap gap
+  แก้แล้ว (ดูด้านบน) เอา `app_create_campaign()` มาเรียกจาก endpoint สร้างแคมเปญได้เลย พร้อมเริ่ม
 
 **Sprint B — ต่อ rules engine เข้า API จริง** (proof แรกว่าสถาปัตยกรรมทำงาน)
 5. application service: รับ request "ทอยเต๋า"/"attack" → เรียก `DnDEz.Rules` → persist ผ่าน
