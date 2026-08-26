@@ -416,9 +416,39 @@ Sprint A Part 3) — แบ่งให้แต่ละ part มีไฟล�
   - ⚠️ **งานนี้ทำโดยไม่มี `<tier>` นำหน้า** เหมือน Part 1 — ไม่ผ่าน code/security review แบบ
     Sprint A ตรวจเองด้วยการทดสอบจริงกับ Postgres จริงครบทุกจุด (CHECK constraint, backward
     compatibility, validation order)
-- **Part 3** ⏳ — Check/attack/damage resolution endpoint (แคบลงเพราะ Part 2 ตัดสินใจ shape ให้
-  แล้ว) เรียก `CheckResolver`/`AttackResolver`/`DamageResolver`/`HitPointResolver` persist ผล HP
-  dispatch ได้ตรงไปตรงมาเพราะไม่ต้องเดา schema เอง
+- **Part 3** ✅ **เสร็จ 2026-08-26** — Check/attack/damage resolution: 2 endpoint ใหม่ต่อ
+  `CheckResolver`/`AttackResolver`/`DamageResolver`/`HitPointResolver` เป็น flow เดียวกันครั้งแรก
+  (Part 1 มีแค่ `DiceEngine` เดี่ยว ๆ)
+  - `POST /campaigns/{id}/sessions/{id}/characters/{characterId}/checks` — body
+    `{ Expression, Advantage?, Dc (1..40, required) }` → ทอย 1d20+mod เทียบ `Dc` ผ่าน
+    `CheckResolver` เก็บลง `dice_rolls` โดยผูก `character_id` จริงเป็นครั้งแรก (Part 1 ตั้งใจปล่อย
+    `null` ไว้ก่อน)
+  - `POST /campaigns/{id}/sessions/{id}/characters/{characterId}/attacks` — body
+    `{ Expression, Advantage?, TargetCharacterId, DamageComponents: [{Expression, Type}] (1..20) }`
+    → ทอย attack roll ผ่าน `AttackResolver` เทียบ AC ของเป้าหมาย **ทอย damage เฉพาะตอน
+    hit/critical เท่านั้น** (miss/automatic-miss ไม่แตะ `DamageResolver`/`HitPointResolver` เลย
+    ไม่ใช่แค่ = 0) หัก resistance/vulnerability/immunity ของเป้าหมายผ่าน `DamageTypeResolver` แล้ว
+    เอาผลไป `HitPointResolver.ApplyDamage` เขียน `current_hp`/`current_temp_hp` ของเป้าหมายจริง —
+    persist ทั้ง attack roll และทุก damage component เป็นแถว `dice_rolls` แยกกัน (คนละ
+    seed/roller ต่อ "หนึ่งเหตุการณ์ทอย" ตามกฎเดิม) ผูก `character_id` เป็นผู้โจมตีเสมอ
+  - รองรับแค่ `DiceMode.SystemRoll` เหมือน Part 1 (DmEntered → 400) · seed ไม่โผล่ใน response
+    เด็ดขาดทั้งสอง endpoint (เหมือน Part 1) · validate expression/damage-type ให้ผ่านทุกจุดแบบ
+    pure (parse อย่างเดียว ไม่ทอย ไม่แตะ DB) ก่อนแตะ DB หรือ CSPRNG เสมอ กัน "ทอย attack ไปแล้ว
+    แต่ damage component ผิด format" ต้อง rollback ทั้ง transaction โดยไม่จำเป็น
+  - ทดสอบจริง 118/118 ผ่าน (94 เดิม + 24 ใหม่ ใน `CombatResolutionTests.cs`) รวม 339 เทสต์ทั้ง repo
+    — checks endpoint ทดสอบแบบ deterministic เต็มรูป (Dc=1 การันตี success, Dc=21 การันตี fail
+    จากช่วงของ 1d20) ส่วน attacks ทดสอบด้วย AC สุดขั้ว (1/50) + retry loop ที่ bound รอบไว้ชัดเจน
+    เพื่อข้าม 5% ของ AutomaticMiss/CriticalHit ที่ override AC เสมอ — **เจอบั๊กจริงระหว่างเขียนเทสต์
+    เอง**: retry loop ของเทสต์ miss-path รอบแรกใช้ target ตัวเดียวกันซ้ำทุกรอบ ถ้ารอบต้น ๆ ดัน
+    critical hit (5%) ดาเมจจะ apply ลง DB จริงถาวรก่อนจะเจอรอบที่ miss ทำให้ HP ก่อน/หลังไม่ตรงกับ
+    ที่จับไว้ตอนต้น — แก้โดยสร้าง target ใหม่ทุกรอบ retry (throwaway target ต่อ attempt)
+  - ⚠️ **งานนี้ทำโดยไม่มี `<tier>` นำหน้า** เหมือน Part 1/2 — ไม่ผ่าน code/security review แบบ
+    Sprint A ตรวจเองด้วยการอ่านโค้ดซ้ำละเอียด + ทดสอบจริงกับ Postgres จริง (รวมถึงเจอ/แก้บั๊ก
+    test isolation ข้างต้นด้วยตัวเอง)
+  - **เก็บไว้นอกขอบเขต Part นี้โดยตั้งใจ**: ไม่ผูกกับ `DeathSaveState`/`ActionEconomyResolver` แม้
+    `ApplyDamageResult` จะมี `DroppedToZero`/`IsInstantDeath` ให้พร้อมใช้แล้วก็ตาม (response คืนค่า
+    สองฟิลด์นี้ไว้เป็นข้อมูลอย่างเดียว) — การตัดสินใจว่า "HP ถึง 0 ต้องเข้า dying state อัตโนมัติ
+    หรือ DM ต้องยืนยันก่อน" เป็นการตัดสินใจ UX/gameplay ที่ต้องออกแบบแยก ไม่ใช่แค่ wiring โค้ด
 
 ทุก part มี integration test จริงกับ Postgres จริงในตัว (ไม่ใช่ mock) ตาม TDD flow ปกติของ
 project — Part 1 คือจุดแรกที่พิสูจน์หลักการ "AI ตัดสินใจเรียก tool, rules engine คำนวณ, DB
