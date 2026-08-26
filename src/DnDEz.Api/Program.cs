@@ -9,12 +9,15 @@ using System.Security.Claims;
 using DnDEz.Api.Auth;
 using DnDEz.Api.Endpoints;
 using DnDEz.Api.Realtime;
+using DnDEz.Api.Security;
 using DnDEz.Domain.Entities;
 using DnDEz.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -37,6 +40,26 @@ builder.Services.AddDbContext<DnDEzDbContext>(options =>
 var redisConnectionString = Environment.GetEnvironmentVariable("DNDEZ_REDIS")
     ?? "localhost:6379";
 builder.Services.AddSignalR().AddStackExchangeRedis(redisConnectionString);
+
+// ── Sprint D Part 1: BYOK — Data Protection key ring ────────────────────────
+// key ring เก็บใน Redis ตัวเดียวกับ SignalR backplane (multiplexer แยกต่างหาก — SignalR ผูก
+// connection ของตัวเองไว้ภายใน AddStackExchangeRedis ไม่ได้ expose ให้ share ใช้ซ้ำ) เหตุผลเดียวกับ
+// Sprint C: ถูกตอนนี้ แพงถ้าย้อนแก้ทีหลัง (ต่างกันตรงนี้ยิ่งจริงกว่าเดิม — คีย์ที่เข้ารหัส ApiKey
+// ไว้ก่อนหน้าจะ decrypt ไม่ได้อีกเลยถ้า key ring หายหรือย้ายที่เก็บแบบไม่ migrate ก่อน)
+var dataProtectionRedis = ConnectionMultiplexer.Connect(redisConnectionString);
+var dataProtectionBuilder = builder.Services
+    .AddDataProtection()
+    .SetApplicationName("DnDEz")
+    .PersistKeysToStackExchangeRedis(dataProtectionRedis, "DnDEz-DataProtection-Keys");
+
+// นอก Development ต้องมี cert ป้องกัน key ring เอง ไม่งั้น key-encryption-key จะไม่ถูกเข้ารหัสเลย
+// บน Linux (ดูเหตุผลเต็มใน DataProtectionCertificateResolver) — fail-fast ตอน startup เหมือน
+// JwtSigningKeyResolver ด้านล่าง
+var dataProtectionCertificate = DataProtectionCertificateResolver.Resolve(builder.Environment);
+if (dataProtectionCertificate is not null)
+{
+    dataProtectionBuilder.ProtectKeysWithCertificate(dataProtectionCertificate);
+}
 
 // ── Auth wiring ───────────────────────────────────────────────────────────
 // key ถูก resolve ครั้งเดียวตอน startup: ถ้าไม่ใช่ Development แล้วไม่ได้ตั้ง DNDEZ_JWT_SIGNING_KEY
@@ -339,6 +362,10 @@ app.MapCombatEndpoints();
 
 // ── Sprint C Part 1: realtime hub (ยังไม่ broadcast อะไรจริง — Part 2/3 wire เข้า endpoint เดิม) ──
 app.MapHub<CampaignHub>(CampaignHubPath).RequireAuthorization();
+
+// ── Sprint D Part 1: BYOK — เก็บ/ดึง/ลบ API key เข้ารหัสของผู้ใช้ (ยังไม่ validate ผ่าน live call
+// ไปหา provider จริง — เก็บไว้ Part 2 ที่ต้องต่อ Anthropic API client อยู่แล้ว) ────────────────
+app.MapApiKeyEndpoints();
 
 app.Run();
 

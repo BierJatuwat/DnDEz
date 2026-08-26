@@ -86,7 +86,12 @@ public class DnDEzDbContext(DbContextOptions<DnDEzDbContext> options) : DbContex
             e.Property(x => x.Provider).HasMaxLength(32);
             e.Property(x => x.KeySuffix).HasMaxLength(8);
             e.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
-            e.HasIndex(x => new { x.UserId, x.Provider });
+            // Sprint D Part 1 — พบว่า index เดิมไม่ unique (ตั้งแต่ InitialSchema) แปลว่า upsert
+            // "หนึ่ง key ต่อหนึ่ง provider ต่อ user" ไม่ถูกบังคับที่ชั้น DB เลย ถ้า race กันสอง
+            // request พร้อมกันจะได้ 2 แถวซ้อนสำหรับ provider เดียวกัน — ตารางนี้ไม่เคยถูกใช้งานจริง
+            // มาก่อน (Sprint D เป็นคนแรกที่ต่อ endpoint เข้า) จึงแก้ตอนนี้ก่อนมีข้อมูลจริงในตาราง
+            e.HasIndex(x => new { x.UserId, x.Provider }).IsUnique();
+            EnumCheck<ApiKey, ApiKeyStatus>(e, x => x.Status, "status");
         });
 
         b.Entity<StorageQuota>(e =>

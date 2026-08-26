@@ -72,9 +72,13 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                         .HasName("pk_api_keys");
 
                     b.HasIndex("UserId", "Provider")
+                        .IsUnique()
                         .HasDatabaseName("ix_api_keys_user_id_provider");
 
-                    b.ToTable("api_keys", (string)null);
+                    b.ToTable("api_keys", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_status_apikey", "status IN ('Active', 'Invalid', 'Revoked')");
+                        });
                 });
 
             modelBuilder.Entity("DnDEz.Domain.Entities.AutonomySetting", b =>

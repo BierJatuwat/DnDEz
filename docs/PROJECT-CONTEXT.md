@@ -556,10 +556,55 @@ persist" ที่ล็อกไว้ตั้งแต่ต้นทำง�
     Sprint B Part 3 ไม่ใช่บั๊กใหม่จาก Part 3 นี้ — ตัดสินใจไม่ dispatch security-reviewer (เหตุผล
     เดียวกับ Part 2: ไม่มี input surface/auth/dependency ใหม่) code-reviewer ยืนยันซ้ำว่าถูกต้อง
 
-**Sprint D — BYOK + orchestrator ขั้นต่ำ**
-9. เข้ารหัสเก็บ API key (Data Protection API)
-10. Tool-calling loop แรก: narration + tool เดียว (`roll_dice`) ผ่าน approval gate — พิสูจน์
-    dial/gate ทำงานจริง
+**Sprint D — BYOK + orchestrator ขั้นต่ำ** (2026-08-27) แบ่ง 3 part: Part 1 BYOK key storage →
+Part 2 tool-calling loop skeleton (ไม่มี approval gate) → Part 3 approval gate ผูก `AutonomySetting`
+
+- **Part 1** ✅ **เสร็จ 2026-08-27** — BYOK: เก็บ/ดึง/ลบ API key ผู้ใช้แบบเข้ารหัสผ่าน ASP.NET Data
+  Protection (`dm-side-design.md` §7) — `PUT/GET/DELETE /users/me/api-keys[/{provider}]`
+  - **ทำเองตรง ๆ ไม่ dispatch** แม้มี `<tier>` — เจอการตัดสินใจสถาปัตยกรรมหลายจุดที่ต้องเห็นภาพรวม
+    พร้อมกัน (decision framework exception):
+    1. พบว่า `api_keys` table/`ApiKey` entity/`ApiKeyStatus` enum มีอยู่แล้วตั้งแต่ `InitialSchema`
+       (2026-08-21) แต่ไม่เคยมี endpoint ต่อจริงมาก่อน — ต่อครั้งแรกเจอช่องโหว่จริง 2 จุด: index
+       `(user_id, provider)` ไม่ unique (upsert สอง request พร้อมกันได้ 2 แถวซ้อน) และ `status`
+       ไม่มี CHECK constraint (ขัดกับหลัก "enum เก็บเป็น text + มี CHECK constraint ทุกตัว" ใน
+       db-schema.md) แก้ทั้งคู่ด้วย migration `AddApiKeysConstraints` ยืนยันด้วย raw SQL จริงว่า
+       reject duplicate/garbage-status ตามที่ตั้งใจ + ยืนยัน RLS `own_rows_only` (ของเดิม) บล็อก
+       cross-user ที่ระดับ raw SQL ตรง ๆ ด้วย (ไม่ใช่แค่ผ่าน WHERE ของ C#)
+    2. Data Protection key ring persist ลง Redis เดียวกับ SignalR backplane (`ConnectionMultiplexer`
+       แยกเพราะ SignalR ไม่ expose ให้ share) + **นอก Development ต้องมี certificate ป้องกัน key
+       ring เอง** ไม่งั้น key-encryption-key จะไม่ถูกป้องกันเลยบน Linux —
+       `DataProtectionCertificateResolver` mirror `JwtSigningKeyResolver`'s fail-fast pattern เป๊ะ
+    3. เจอ+แก้ vulnerability จริงอีกจุด (นอกเหนือจาก MessagePack ของ Sprint C):
+       `System.Security.Cryptography.Xml 8.0.2` (transitive จาก
+       `Microsoft.AspNetCore.DataProtection.StackExchangeRedis`) มีช่องโหว่ High 8 รายการ —
+       pin เป็น `10.0.11`
+  - **ขอบเขตที่ตัดออกตั้งใจ**: "validate ด้วย test call ทันทีตอนกรอก" ตามที่ dm-side-design.md §7
+    ระบุไว้ ยกไป Part 2 เพราะต้องมี Anthropic HTTP client อยู่แล้วตอนนั้น — key ใหม่ทุกตัวเริ่มที่
+    `ApiKeyStatus.Active` แบบ optimistic, `LastValidatedAt = null` จนกว่าจะมี Part 2 · รองรับแค่
+    `provider = "anthropic"` ตอนนี้
+  - ผ่าน **Code Review** (round 1 ไม่บล็อกแต่ชี้ 2 จุดจริง: PUT upsert race ไม่จับ
+    `DbUpdateException` เลย [catch ที่มีอยู่ผูกกับ `/auth/register` เท่านั้นไม่ใช่ global] กับเทสต์
+    round-trip เดิม decrypt ผ่าน factory เดียวกับที่ encrypt ไม่ได้พิสูจน์ Redis persistence จริง —
+    แก้ทั้งคู่: เพิ่ม savepoint+catch 23505→409 pattern เดียวกับ `/auth/register` เป๊ะ, เพิ่มเทสต์ใช้
+    `WebApplicationFactory` ตัวที่สองแยกอิสระ decrypt ciphertext ข้าม process) และ **Security
+    Review** (ไม่มี Critical ไม่ escalate opus-worker — รัน `dotnet list package --vulnerable`
+    อิสระเองยืนยันซ้ำว่า pin สะอาดจริงทั้งคู่ ยืนยัน IDOR เป็นไปไม่ได้โดยโครงสร้าง [ไม่มี user-id
+    param ให้ substitute เลย] และ cert protection กัน Redis-compromise-alone ได้จริง พบ 1 Warning
+    จริงเพิ่ม: **ไม่มี upper bound ความยาว API key เลยทั้งชั้น API และ DB** — แก้แล้วด้วย
+    `MaxApiKeyLength = 200` validate ก่อนแตะ protector/DB)
+  - **backlog ไม่บล็อก 2 ข้อจาก security review**: (1) Development ที่ไม่มี cert ควร log คำเตือนให้
+    ชัดกว่า default ของ framework (nice-to-have ไม่บังคับ) (2) **ต้องใส่ rate limit ก่อน Part 2
+    เพิ่ม live validation** — ไม่งั้น endpoint นี้จะกลายเป็น oracle เช็คว่า stolen API key ยังใช้ได้
+    ไหมผ่านบัญชีที่ compromised (ยังไม่ exploitable วันนี้เพราะยังไม่มี live call ไปหา provider จริง)
+  - ทดสอบจริง 148/148 ผ่าน (18 ใหม่ ใน `ApiKeyCrudTests.cs` รวม encrypt/decrypt round-trip ข้าม
+    `WebApplicationFactory` สองตัวแยกอิสระผ่าน Redis จริง, concurrent-race ผ่าน `Task.WhenAll` จริง,
+    multi-tenant uniqueness, cross-user RLS isolation) รวม **369 เทสต์ทั้ง repo**
+- **Part 2** ⏳ — Tool-calling loop skeleton: เรียก Anthropic API ด้วยคีย์ BYOK จริงจาก Part 1 มี
+  tool เดียว (`roll_dice`) พิสูจน์ narration → tool_use → tool_result → narration จบ loop ได้จริง
+  ยังไม่มี approval gate (auto-allow ไปก่อน) — รวม "validate ด้วย test call" ที่เลื่อนมาจาก Part 1
+- **Part 3** ⏳ — Approval gate ผูกกับ `AutonomySetting` (dial ที่มีอยู่แล้วในสคีมา) ตัดสินว่าเมื่อไหร่
+  ต้องรอ approve เมื่อไหร่ auto-execute ได้เลย — sync รอ approve ตรง ๆ vs async ยิง pending state
+  แล้วแจ้งผ่าน SignalR hub (Sprint C) เป็นการตัดสินใจสถาปัตยกรรมที่ยังไม่ได้ทำ
 
 **Sprint E — Frontend MVP**
 11. Next.js scaffold + PWA config

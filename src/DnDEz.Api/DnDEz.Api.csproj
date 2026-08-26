@@ -9,6 +9,13 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.10" />
     <PackageReference Include="Microsoft.AspNetCore.SignalR.StackExchangeRedis" Version="8.0.10" />
+    <!-- Sprint D Part 1 — persist Data Protection key ring ไปที่ Redis เดียวกับ SignalR backplane
+         (ต่อ instance เดียวก็ควรทำตั้งแต่ตอนนี้ เหตุผลเดียวกับ Redis backplane ของ Sprint C: ถูกตอนนี้
+         แพงถ้าย้อนแก้ทีหลัง — คีย์ที่เข้ารหัส ApiKey ไว้จะ decrypt ไม่ได้อีกเลยถ้า key ring หาย) -->
+    <PackageReference Include="Microsoft.AspNetCore.DataProtection.StackExchangeRedis" Version="8.0.10" />
+    <!-- pin เวอร์ชันใหม่กว่าที่ DataProtection ดึงมา transitively (8.0.2 มีช่องโหว่ High หลายรายการ
+         จาก dotnet list package vulnerable — เหตุผลเดียวกับที่ pin MessagePack ไว้ตอน Sprint C) -->
+    <PackageReference Include="System.Security.Cryptography.Xml" Version="10.0.11" />
     <!-- pin เวอร์ชันใหม่กว่าที่ StackExchangeRedis ดึงมา transitively (2.5.108 มีช่องโหว่ High/Moderate
          หลายรายการจาก "dotnet list package vulnerable" (flag ตัดออกจากคอมเมนต์เพราะ XML ห้าม double
          hyphen) ดู PROJECT-CONTEXT ข้อ 4 Sprint C Part 1 -->
