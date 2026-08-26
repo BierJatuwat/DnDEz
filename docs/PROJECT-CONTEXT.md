@@ -334,8 +334,42 @@ loop เล็ก ๆ end-to-end ก่อน (ทดสอบ/เดโมไ�
   `opus-worker` (มี `Write`) จึงสำเร็จ — **งานที่ต้องสร้างไฟล์ใหม่ ควร dispatch ไป opus-worker ตรง ๆ
   ไม่ต้องเสีย 3 รอบกับ sonnet-worker ก่อน** (งานที่แก้ไฟล์เดิมอย่างเดียวยังส่ง sonnet-worker ได้ปกติ
   ยืนยันแล้วตอนแก้ finding รอบ 2 ที่ sonnet-worker ทำสำเร็จรอบเดียวเพราะเป็นแค่ Edit)
-- **Part 3** ⏳ — CRUD บาง ๆ ของ campaign/session/character (แค่พอมีข้อมูลให้ใช้ต่อ) — bootstrap gap
-  แก้แล้ว (ดูด้านบน) เอา `app_create_campaign()` มาเรียกจาก endpoint สร้างแคมเปญได้เลย พร้อมเริ่ม
+- **Part 3** ✅ **เสร็จ 2026-08-26** — thin CRUD (create+list+get เท่านั้น ไม่มี update/delete) ของ
+  campaign/session/character — **🎉 Sprint A ครบ 3 part แล้ว**
+  - `POST/GET /campaigns`, `GET /campaigns/{id}` — สร้างผ่าน `app_create_campaign()` เท่านั้น
+    (ห้าม `db.Campaigns.Add()` ตรง ๆ เด็ดขาด — ไม่มี INSERT policy บนตารางนี้แล้ว)
+  - `POST/GET /campaigns/{id}/sessions`, `GET .../sessions/{sessionId}` — ใช้ EF Core ปกติ
+    (policy เดิมของ sessions ไม่มีปัญหา circular bootstrap)
+  - `POST/GET /campaigns/{id}/characters`, `GET .../characters/{characterId}` — `OwnerUserId` มาจาก
+    JWT claim เท่านั้น (`principal.GetUserId()`) ห้ามรับจาก request body — list ไม่ส่ง `Sheet` (jsonb เต็ม)
+  - **แพทเทิร์นที่ต้องรักษาไว้ในทุก endpoint ลูก**: validate input ก่อนแตะ DB เสมอ + เช็ค
+    `CampaignVisibility.IsVisibleAsync` (มองเห็นแคมเปญไหม จาก RLS) **ก่อน** insert เสมอ — เพราะ
+    request ทั้งหมดอยู่ใน transaction เดียวที่ middleware เปิดไว้ ถ้าปล่อยให้ RLS `WITH CHECK` เป็น
+    คนดักตอน insert transaction จะ abort กลายเป็น 500 แทนที่จะเป็น 400/404 ที่ควรเป็น
+  - ไม่ใช่สมาชิกแคมเปญ = **404 เสมอ** (ไม่ใช่ 403, ไม่ใช่ array ว่าง) — เพราะ RLS ทำให้แถวหายเหมือนกัน
+    ทั้ง "ไม่มีอยู่จริง" และ "มีอยู่แต่ไม่ใช่สมาชิก" ป้องกัน enumeration ผ่านความต่างของ error code
+
+  ผ่าน code review (approve, 3 ข้อเสนอแนะเล็กน้อยไม่บล็อก: enum parser ยอมรับ string ตัวเลขดิบ,
+  `CharacterEndpoints` ไม่ trim ชื่อ [ต่างจาก `CampaignEndpoints` ที่ trim], ไม่มีเทสต์ผสม
+  validation-fail + non-member พร้อมกัน) + security review (approve, 2 informational ไม่บล็อก:
+  `Sheet` เห็นได้ทุกสมาชิกในแคมเปญไม่จำกัดแค่ owner/DM — เป็น design ที่ตั้งใจ ไม่ใช่บั๊ก, pattern
+  authorization ไม่ consistent ระหว่างไฟล์ — `campaigns` พึ่ง RLS อย่างเดียวไม่มี C# check ซ้ำ
+  ต่างจาก session/character ที่เช็คสองชั้น ทั้งคู่ fail-closed ได้จริงเหมือนกัน แค่ style ต่างกัน)
+
+  ทดสอบจริง 295/295 ผ่าน (221 Rules + 74 API)
+
+  **สิ่งที่ยังไม่ทำ (ตั้งใจ ไม่ใช่ scope creep)**: update/delete endpoint, role check DM-only
+  (ทุกสมาชิกสร้าง session/character ได้เท่ากันตอนนี้), join-campaign API (เทสต์ seed
+  membership ผ่าน owner role ตรง ๆ), quick-play/companion mode flow
+
+  **RLS foundation ที่ต้องมีก่อน Part 3 นี้ทำงานได้** (ทำนอก tier dispatch โดย main โดยตรง เพราะเป็น
+  งานตัดสินใจต่อเนื่องที่ต้องเห็นภาพรวมพร้อมกัน — ทั้งคู่ผ่าน security review แยกต่างหากแล้ว):
+  - `app_create_campaign()` (bootstrap gap fix, ดู db-schema.md)
+  - `app_is_member_of(uuid)` + policy `campaign_member_read` — พบระหว่างออกแบบ Part 3 ว่า policy เดิม
+    ของ `campaigns` ผูกกับ `app.campaign_id` ตัวเดียวเสมอ ทำให้ **"list แคมเปญของตัวเอง" เป็นไปไม่ได้
+    เลยในทางโครงสร้าง** (ไม่ใช่แค่ `campaigns` — `campaign_members` เดิมก็ติดปัญหาเดียวกัน) แก้ด้วย
+    ฟังก์ชันใหม่ที่เช็คสมาชิกภาพทีละแถวแทนการผูกกับ session variable ตัวเดียว รายละเอียดเต็มใน
+    `db-schema.md`
 
 **Sprint B — ต่อ rules engine เข้า API จริง** (proof แรกว่าสถาปัตยกรรมทำงาน)
 5. application service: รับ request "ทอยเต๋า"/"attack" → เรียก `DnDEz.Rules` → persist ผ่าน

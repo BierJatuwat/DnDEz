@@ -7,6 +7,7 @@
 //   endpoint จึง query แบบตรงไปตรงมาแล้วปล่อยให้ policy กรองแถวออกเอง (แถวหาย = 404 ไม่ใช่ 403)
 using System.Security.Claims;
 using DnDEz.Api.Auth;
+using DnDEz.Api.Endpoints;
 using DnDEz.Domain.Entities;
 using DnDEz.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -292,6 +293,13 @@ if (app.Environment.IsDevelopment())
             : Results.Ok(new WhoAmIResponse(campaign.Id, campaign.Name, userId.Value));
     }).RequireAuthorization();
 }
+
+// ── Sprint A Part 3: thin CRUD (campaign / session / character) ───────────
+// แยกออกเป็นไฟล์ละ entity ใน DnDEz.Api/Endpoints เพื่อไม่ให้ Program.cs (auth + middleware ที่ห้ามแตะ)
+// บวมจนอ่านไม่ออก — ทุกตัวถูกลงทะเบียนหลัง middleware ที่ตั้ง app.user_id/app.campaign_id แล้ว
+app.MapCampaignEndpoints();
+app.MapSessionEndpoints();
+app.MapCharacterEndpoints();
 
 app.Run();
 

@@ -16,7 +16,7 @@
 
 - ✅ ฝั่ง DM — ออกแบบเสร็จ
 - ✅ ฝั่ง Player — ออกแบบรอบแรกเสร็จ
-- 🚧 โค้ด — DB schema + RLS เสร็จแล้ว (30 ตาราง) · rules engine ครบ 3 phase (dice, combat core, death save + action economy) เสร็จแล้ว · API Sprint A Part 1-2 เสร็จแล้ว (scaffold + auth JWT + RLS session middleware) · ยังไม่มี frontend
+- 🚧 โค้ด — DB schema + RLS เสร็จแล้ว (30 ตาราง) · rules engine ครบ 3 phase (dice, combat core, death save + action economy) เสร็จแล้ว · **Sprint A ครบ 3 part แล้ว** (scaffold + auth JWT + RLS middleware + thin CRUD campaign/session/character) · ยังไม่มี frontend
 
 ## เริ่มต้นใช้งาน (local dev)
 
