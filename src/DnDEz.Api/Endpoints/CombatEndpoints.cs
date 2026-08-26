@@ -1,8 +1,10 @@
 using System.Text.Json;
+using DnDEz.Api.Realtime;
 using DnDEz.Domain.Entities;
 using DnDEz.Domain.Enums;
 using DnDEz.Infrastructure.Persistence;
 using DnDEz.Rules;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 
 namespace DnDEz.Api.Endpoints;
@@ -130,8 +132,15 @@ public static class CombatEndpoints
             Guid sessionId,
             Guid characterId,
             CreateAttackRequest request,
-            DnDEzDbContext db) =>
+            DnDEzDbContext db,
+            IHubContext<CampaignHub> hubContext,
+            ILoggerFactory loggerFactory) =>
         {
+            // CombatEndpoints เป็น static class (จำเป็นสำหรับ extension method `this WebApplication`)
+            // จึงใช้เป็น type argument ของ ILogger<T> ไม่ได้ (CS0718) — สร้าง logger ผ่าน
+            // ILoggerFactory.CreateLogger(Type) แทน ได้ category name เดียวกันเป๊ะ
+            // ("DnDEz.Api.Endpoints.CombatEndpoints") โดยไม่ต้องพึ่ง generic constraint
+            var logger = loggerFactory.CreateLogger(typeof(CombatEndpoints));
             if (string.IsNullOrWhiteSpace(request.Expression))
             {
                 return Results.BadRequest();
@@ -319,6 +328,27 @@ public static class CombatEndpoints
 
             await db.SaveChangesAsync();
 
+            if (targetNewHp is not null)
+            {
+                try
+                {
+                    await hubContext.Clients.Group(CampaignHub.GroupName(campaignId)).SendAsync(
+                        "HpUpdated",
+                        new HpUpdatedBroadcast(
+                            targetCharacterId,
+                            targetPreviousHp!.Value,
+                            targetNewHp!.Value,
+                            targetPreviousTempHp!.Value,
+                            targetNewTempHp!.Value,
+                            targetDroppedToZero!.Value,
+                            targetIsInstantDeath!.Value));
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Failed to broadcast HpUpdated for character {CharacterId}", targetCharacterId);
+                }
+            }
+
             return Results.Ok(new AttackResolutionResponse(
                 attackDiceRoll.Id,
                 characterId,
@@ -386,3 +416,17 @@ internal record AttackResolutionResponse(
     int? TargetNewTempHp,
     bool? TargetDroppedToZero,
     bool? TargetIsInstantDeath);
+
+/// <summary>
+/// Sprint C Part 3 — payload ที่ broadcast เข้า SignalR group ของแคมเปญตอน attack ที่ hit ทำให้ HP
+/// ของ target เปลี่ยน (เฉพาะ hit/critical เท่านั้น — miss/automatic-miss ไม่ broadcast เลย ตามกฎเดียวกับ
+/// ที่ล็อกไว้ด้านบนว่า "damage roll เกิดเฉพาะตอน hit/critical เท่านั้น")
+/// </summary>
+internal record HpUpdatedBroadcast(
+    Guid CharacterId,
+    int PreviousHp,
+    int NewHp,
+    int PreviousTempHp,
+    int NewTempHp,
+    bool DroppedToZero,
+    bool IsInstantDeath);

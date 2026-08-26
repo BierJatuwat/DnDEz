@@ -526,10 +526,35 @@ persist" ที่ล็อกไว้ตั้งแต่ต้นทำง�
     ทั้งที่ dice roll เองไม่มีปัญหาอะไรเลย — reviewer แนะนำให้ wrap try/catch แบบ log-and-swallow
     แต่เสนอให้แก้ตอน**เดียวกับ Part 3** เพราะจะมี broadcast call site ที่สองเกิดขึ้น (แก้ครั้งเดียว
     ให้ทั้งคู่สอดคล้องกันดีกว่าแพตช์ทีละจุด — ยังไม่มี pattern outbox/retry ในโปรเจกต์นี้เลยสักที่)
-- **Part 3** ⏳ — wire `HpUpdated` event เข้า `CombatEndpoints.cs` (broadcast หลัง target HP เปลี่ยน
-  จริงตอน hit/critical เท่านั้น — ตรงกับ Part 3 ของ Sprint B ที่ทำ HP change เฉพาะตอนนั้นอยู่แล้ว) —
-  **ต้องแก้ design smell ของ Part 2 ด้วยตอนนี้** (wrap ทั้งสอง broadcast call site ด้วย log-and-
-  swallow แบบเดียวกัน ไม่ใช่แค่จุดใหม่จุดเดียว)
+- **Part 3** ✅ **เสร็จ 2026-08-27 — 🎉 Sprint C ครบ 3 part แล้ว** — wire `HpUpdated` event เข้า
+  `CombatEndpoints.cs` (เฉพาะ endpoint "attacks" เท่านั้น — "checks" ไม่ได้ broadcast) broadcast
+  ต่อเมื่อ `targetNewHp is not null` (คือตอน hit/critical ที่มี damage จริงเท่านั้น ตรงกับ null-ness
+  contract เดิมของ `AttackResolutionResponse` จาก Sprint B Part 3) + แก้ design smell ของ Part 2
+  พร้อมกันตามแผน: wrap ทั้งสอง broadcast call site (`DiceRolled` ใน `DiceRollEndpoints.cs` และ
+  `HpUpdated` ใหม่) ด้วย `try/catch` แบบ log-and-swallow — broadcast fail (เช่น Redis สะดุด) จะไม่
+  ทำให้ transaction ทั้ง request ถูก rollback อีกต่อไป
+  - **dispatch ผ่าน tier ปกติเหมือน Part 2** — `sonnet-worker` รับเป็น first triage สำเร็จโดยไม่ต้อง
+    escalate ขึ้น `opus-worker` เลย (แก้ 3 ไฟล์ที่มีอยู่แล้วด้วย `Edit` ล้วน)
+  - **ปัญหาทางเทคนิคที่เจอระหว่างทำ**: `ILogger<T>` ใช้กับ `CombatEndpoints`/`DiceRollEndpoints` ไม่ได้
+    (`CS0718` — ห้ามใช้ static class เป็น generic type argument เพราะทั้งสองคลาสต้อง `static` สำหรับ
+    extension method `this WebApplication`) แก้ด้วย `ILoggerFactory.CreateLogger(typeof(X))` แทน
+    ได้ category name เดียวกับ `ILogger<X>` เป๊ะ ไม่มี DI registration เพิ่ม (`ILoggerFactory` ลงทะเบียน
+    ให้อัตโนมัติจาก `WebApplication.CreateBuilder` อยู่แล้ว)
+  - **เจอบั๊กจริงในเทสต์เดิมที่ไม่เกี่ยวกับงานนี้เลย** ระหว่าง sonnet-worker รัน verify:
+    `Post_attacks_that_hits_rolls_damage_and_updates_target_hp` (Sprint B Part 3, ตัว main เองเขียน
+    ไว้) assert `20 - body.TotalDamage == body.TargetNewHp` แบบไม่ clamp ที่ 0 — fail เป็นครั้งคราว
+    เมื่อ critical hit ทอยดาเมจเกิน 20 (`HitPointResolver.ApplyDamage` clamp `NewHp` ที่ 0 จริง แต่
+    เทสต์ลืม clamp ตาม) — sonnet-worker วินิจฉัยถูกต้องแล้วรายงานกลับแทนที่จะแก้เอง (นอก scope ที่สั่ง)
+    main แก้เองเป็น `Math.Max(0, 20 - body.TotalDamage!.Value)` ให้ตรงกับ resolver — ยืนยันเสถียร
+    3 รอบติดกันก่อน dispatch code review
+  - ทดสอบจริง 129/129 ผ่าน (127 เดิม + 2 ใหม่ ใน `CombatResolutionTests.cs`) รวม **350 เทสต์ทั้ง
+    repo** (221 Rules + 129 API)
+  - ผ่าน code review — approve ไม่มี blocker (ยืนยันการแก้ flaky-test ตรงกับสูตร `HitPointResolver`
+    จริงด้วย) มี 2 note ไม่บล็อก: (1) ไม่มีเทสต์จำลอง broadcast ล้มเหลวจริง (ไม่มี seam mock
+    `IHubContext` ในสไตล์ integration test ของโปรเจกต์นี้ — เข้าใจได้ว่าทำไมไม่มี) (2) broadcast
+    ยังยิงแม้ damage สุทธิ = 0 (target immune ทุก type ที่โจมตี) แต่เป็น null-ness contract เดิมจาก
+    Sprint B Part 3 ไม่ใช่บั๊กใหม่จาก Part 3 นี้ — ตัดสินใจไม่ dispatch security-reviewer (เหตุผล
+    เดียวกับ Part 2: ไม่มี input surface/auth/dependency ใหม่) code-reviewer ยืนยันซ้ำว่าถูกต้อง
 
 **Sprint D — BYOK + orchestrator ขั้นต่ำ**
 9. เข้ารหัสเก็บ API key (Data Protection API)

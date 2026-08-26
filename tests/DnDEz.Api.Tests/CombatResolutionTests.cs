@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.SignalR.Client;
 using Npgsql;
 
 namespace DnDEz.Api.Tests;
@@ -223,6 +224,27 @@ public class CombatResolutionTests : IAsyncLifetime
         return client;
     }
 
+    // ── SignalR helper (Sprint C Part 3 — copied/adapted from CampaignHubTests/DiceRollCrudTests'
+    //    BuildConnection so HpUpdated broadcast tests below can join the campaign group) ──
+    private HubConnection BuildConnection(string? token)
+    {
+        return new HubConnectionBuilder()
+            .WithUrl(new Uri(_factory.Server.BaseAddress, "/hubs/campaign"), options =>
+            {
+                options.HttpMessageHandlerFactory = _ => _factory.Server.CreateHandler();
+                options.WebSocketFactory = async (context, cancellationToken) =>
+                {
+                    var client = _factory.Server.CreateWebSocketClient();
+                    return await client.ConnectAsync(context.Uri, cancellationToken);
+                };
+                if (token is not null)
+                {
+                    options.AccessTokenProvider = () => Task.FromResult<string?>(token);
+                }
+            })
+            .Build();
+    }
+
     private async Task<(int CurrentHp, int CurrentTempHp)> ReadTargetHpAsync(Guid characterId)
     {
         await using var conn = new NpgsqlConnection(OwnerConnectionString);
@@ -404,7 +426,10 @@ public class CombatResolutionTests : IAsyncLifetime
         Assert.NotNull(body.TargetPreviousHp);
         Assert.NotNull(body.TargetNewHp);
         Assert.Equal(20, body.TargetPreviousHp);
-        Assert.Equal(20 - body.TotalDamage, body.TargetNewHp);
+        // HitPointResolver.ApplyDamage clamp NewHp ที่ 0 เสมอ (ห้ามติดลบ) — 20-TotalDamage เพียว ๆ
+        // ติดลบได้จริงถ้า critical hit ทอยแรงพอ (4d6+3 max=27 > 20) ต้อง Math.Max(0, ...) เหมือน
+        // resolver เอง ไม่งั้น flaky ~5%*บางส่วนของรอบที่ crit ทอยสูง (พบจริงระหว่าง Sprint C Part 3)
+        Assert.Equal(Math.Max(0, 20 - body.TotalDamage!.Value), body.TargetNewHp);
 
         var (currentHp, _) = await ReadTargetHpAsync(_lowAcTargetId);
         Assert.Equal(body.TargetNewHp, currentHp);
@@ -484,6 +509,60 @@ public class CombatResolutionTests : IAsyncLifetime
         Assert.Equal(before.CurrentHp - component.AdjustedAmount, after.CurrentHp);
     }
 
+    // ── attacks — SignalR broadcast (Sprint C Part 3 — wires HpUpdated into CampaignHub group,
+    //    same retry-until-hit pattern as Post_attacks_that_hits_rolls_damage_and_updates_target_hp) ──
+
+    [Fact]
+    public async Task Post_attacks_that_hits_broadcasts_HpUpdated_to_joined_campaign_group()
+    {
+        await using var connection = BuildConnection(_memberToken);
+
+        var received = new TaskCompletionSource<HpUpdatedBroadcastDto>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        connection.On<HpUpdatedBroadcastDto>("HpUpdated", broadcast => received.TrySetResult(broadcast));
+
+        await connection.StartAsync();
+        await connection.InvokeAsync("JoinCampaign", _campaignId);
+
+        AttackResolutionResponse? body = null;
+        for (var attempt = 0; attempt < MaxRetries; attempt++)
+        {
+            var response = await AuthedClient(_memberToken).PostAsJsonAsync(
+                $"/campaigns/{_campaignId}/sessions/{_sessionId}/characters/{_attackerId}/attacks",
+                new
+                {
+                    Expression = "1d20+50",
+                    TargetCharacterId = _lowAcTargetId,
+                    DamageComponents = new[] { new { Expression = "2d6+3", Type = "Slashing" } },
+                });
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            body = await response.Content.ReadFromJsonAsync<AttackResolutionResponse>(JsonOptions);
+            Assert.NotNull(body);
+            if (body!.Hit)
+            {
+                break;
+            }
+        }
+
+        Assert.NotNull(body);
+        Assert.True(body!.Hit, $"AutomaticMiss เกิดขึ้น {MaxRetries} รอบติดกัน (โอกาสจริง ~{Math.Pow(0.05, MaxRetries):E2}) — น่าสงสัยว่า RNG ผิดปกติ");
+
+        var completed = await Task.WhenAny(received.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+        Assert.Same(received.Task, completed);
+        var broadcastPayload = await received.Task;
+
+        Assert.Equal(_lowAcTargetId, broadcastPayload.CharacterId);
+        Assert.Equal(body.TargetPreviousHp, broadcastPayload.PreviousHp);
+        Assert.Equal(body.TargetNewHp, broadcastPayload.NewHp);
+        Assert.Equal(body.TargetPreviousTempHp, broadcastPayload.PreviousTempHp);
+        Assert.Equal(body.TargetNewTempHp, broadcastPayload.NewTempHp);
+        Assert.Equal(body.TargetDroppedToZero, broadcastPayload.DroppedToZero);
+        Assert.Equal(body.TargetIsInstantDeath, broadcastPayload.IsInstantDeath);
+
+        await connection.StopAsync();
+    }
+
     // ── attacks — miss path (ไม่แตะ HP/damage เลย) ─────────────────────────
     // AC=50 + "1d20+0": Hit ธรรมดาเป็นไปไม่ได้ (max 20 < 50) มีแค่ CriticalHit (นัด20, 5%) หรือ
     // Miss/AutomaticMiss (95%) — retry จนกว่าจะไม่ hit เพื่อยืนยัน miss-path ไม่ flaky
@@ -530,6 +609,60 @@ public class CombatResolutionTests : IAsyncLifetime
         Assert.Null(body.DamageComponents);
         Assert.Null(body.TotalDamage);
         Assert.Null(body.TargetNewHp);
+    }
+
+    /// <summary>
+    /// ยืนยันกฎเดียวกับ Post_attacks_that_misses_does_not_roll_damage_or_change_target_hp แต่ฝั่ง
+    /// broadcast — miss/automatic-miss ไม่มี HP เปลี่ยนแปลงจริง จึงต้องไม่มี HpUpdated ยิงออกไปเลย
+    /// (bounded wait 2 วินาที มิเรอร์ pattern เดียวกับ
+    /// Outsider_connection_that_never_joined_group_does_not_receive_broadcast ใน DiceRollCrudTests)
+    /// </summary>
+    [Fact]
+    public async Task Post_attacks_that_misses_does_not_broadcast_HpUpdated()
+    {
+        await using var conn = new NpgsqlConnection(OwnerConnectionString);
+        await conn.OpenAsync();
+
+        await using var connection = BuildConnection(_memberToken);
+
+        var received = new TaskCompletionSource<HpUpdatedBroadcastDto>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        connection.On<HpUpdatedBroadcastDto>("HpUpdated", broadcast => received.TrySetResult(broadcast));
+
+        await connection.StartAsync();
+        await connection.InvokeAsync("JoinCampaign", _campaignId);
+
+        AttackResolutionResponse? body = null;
+        for (var attempt = 0; attempt < MaxRetries; attempt++)
+        {
+            var disposableTargetId = Guid.NewGuid();
+            await InsertCharacterAsync(conn, disposableTargetId, _campaignId, $"Miss Broadcast Target {attempt}", armorClass: 50);
+
+            var response = await AuthedClient(_memberToken).PostAsJsonAsync(
+                $"/campaigns/{_campaignId}/sessions/{_sessionId}/characters/{_attackerId}/attacks",
+                new
+                {
+                    Expression = "1d20",
+                    TargetCharacterId = disposableTargetId,
+                    DamageComponents = new[] { new { Expression = "1d6", Type = "Piercing" } },
+                });
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            body = await response.Content.ReadFromJsonAsync<AttackResolutionResponse>(JsonOptions);
+            Assert.NotNull(body);
+            if (!body!.Hit)
+            {
+                break;
+            }
+        }
+
+        Assert.NotNull(body);
+        Assert.False(body!.Hit, $"CriticalHit เกิดขึ้น {MaxRetries} รอบติดกัน (โอกาสจริง ~{Math.Pow(0.05, MaxRetries):E2}) — น่าสงสัยว่า RNG ผิดปกติ");
+
+        await Task.WhenAny(received.Task, Task.Delay(TimeSpan.FromSeconds(2)));
+        Assert.False(received.Task.IsCompleted, "attack ที่ miss ต้องไม่ broadcast HpUpdated เลย");
+
+        await connection.StopAsync();
     }
 
     // ── attacks — validation (400 ก่อนแตะ DB/CSPRNG เลย) ────────────────────
@@ -727,4 +860,13 @@ public class CombatResolutionTests : IAsyncLifetime
         int? TargetNewTempHp,
         bool? TargetDroppedToZero,
         bool? TargetIsInstantDeath);
+
+    private record HpUpdatedBroadcastDto(
+        Guid CharacterId,
+        int PreviousHp,
+        int NewHp,
+        int PreviousTempHp,
+        int NewTempHp,
+        bool DroppedToZero,
+        bool IsInstantDeath);
 }

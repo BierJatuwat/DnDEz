@@ -33,8 +33,14 @@ public static class DiceRollEndpoints
             Guid sessionId,
             CreateDiceRollRequest request,
             DnDEzDbContext db,
-            IHubContext<CampaignHub> hubContext) =>
+            IHubContext<CampaignHub> hubContext,
+            ILoggerFactory loggerFactory) =>
         {
+            // DiceRollEndpoints เป็น static class (จำเป็นสำหรับ extension method `this WebApplication`)
+            // จึงใช้เป็น type argument ของ ILogger<T> ไม่ได้ (CS0718) — สร้าง logger ผ่าน
+            // ILoggerFactory.CreateLogger(Type) แทน ได้ category name เดียวกันเป๊ะ
+            // ("DnDEz.Api.Endpoints.DiceRollEndpoints") โดยไม่ต้องพึ่ง generic constraint
+            var logger = loggerFactory.CreateLogger(typeof(DiceRollEndpoints));
             if (string.IsNullOrWhiteSpace(request.Expression))
             {
                 return Results.BadRequest();
@@ -98,16 +104,23 @@ public static class DiceRollEndpoints
             db.DiceRolls.Add(diceRoll);
             await db.SaveChangesAsync();
 
-            await hubContext.Clients.Group(CampaignHub.GroupName(campaignId)).SendAsync(
-                "DiceRolled",
-                new DiceRolledBroadcast(
-                    diceRoll.Id,
-                    sessionId,
-                    diceRoll.CharacterId,
-                    result.Expression,
-                    result.Rolls.Select(r => new DieRollDetailResponse(r.Sides, r.Value, r.Dropped, r.Sign)).ToList(),
-                    result.Total,
-                    result.Source.ToString()));
+            try
+            {
+                await hubContext.Clients.Group(CampaignHub.GroupName(campaignId)).SendAsync(
+                    "DiceRolled",
+                    new DiceRolledBroadcast(
+                        diceRoll.Id,
+                        sessionId,
+                        diceRoll.CharacterId,
+                        result.Expression,
+                        result.Rolls.Select(r => new DieRollDetailResponse(r.Sides, r.Value, r.Dropped, r.Sign)).ToList(),
+                        result.Total,
+                        result.Source.ToString()));
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to broadcast DiceRolled for session {SessionId}", sessionId);
+            }
 
             return Results.Created(
                 $"/campaigns/{campaignId}/sessions/{sessionId}/dice-rolls/{diceRoll.Id}",
