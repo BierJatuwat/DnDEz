@@ -506,9 +506,30 @@ persist" ที่ล็อกไว้ตั้งแต่ต้นทำง�
        `JoinCampaign` ด้วย GUID สุ่มรัว ๆ อาจดูด connection จาก Npgsql pool ที่ใช้ร่วมกับ REST
        endpoint ทั้งหมดจนหมดเร็วกว่า — ยังไม่บล็อก Part 1 (ยังไม่มี broadcast ของจริงให้กังวลเรื่อง
        cost) แต่ควรใส่ throttle ก่อน/พร้อม Part 2/3 ที่เริ่มมี broadcast จริงที่มีต้นทุนต่อครั้งแล้ว
-- **Part 2** ⏳ — wire `DiceRolled` event เข้า `DiceRollEndpoints.cs` (broadcast หลัง persist สำเร็จ)
+- **Part 2** ✅ **เสร็จ 2026-08-27** — wire `DiceRolled` event เข้า `DiceRollEndpoints.cs`
+  (broadcast เข้า `CampaignHub.GroupName(campaignId)` ทันทีหลัง `SaveChangesAsync()` สำเร็จ)
+  - **dispatch ผ่าน tier ปกติเป็นครั้งแรกของ Sprint C** (Part 1 ทำเองเพราะเป็นการตัดสินใจ
+    สถาปัตยกรรม แต่ Part 2 เป็นงานเชิงกลไกล้วน ๆ ตามที่ประกาศไว้) — `sonnet-worker` รับเป็น first
+    triage ตามกฎข้อ 1 ทำสำเร็จโดยไม่ต้อง escalate ขึ้น `opus-worker` เลย (แก้แค่ 2 ไฟล์ที่มีอยู่แล้ว
+    ด้วย `Edit` ล้วน ไม่ชนข้อจำกัด Write tool) — ยกเว้น TDD เต็มรูปเพราะเป็นงาน passthrough/
+    boilerplate ตาม CLAUDE.md ข้อ 6
+  - payload ใหม่ `DiceRolledBroadcast` มีฟิลด์เหมือน `DiceRollCreatedResponse` แต่ตั้งใจไม่มี `Seed`
+    เด็ดขาด (กฎเดียวกับ HTTP response — PROJECT-CONTEXT §3)
+  - **ตัดสินใจไม่ dispatch security-reviewer รอบนี้** (บันทึกเหตุผลไว้ล่วงหน้าใน
+    `.claude/logs/routing.md` ก่อน dispatch) เพราะไม่มี input surface ใหม่/auth decision ใหม่/
+    dependency ใหม่ — code-reviewer ยืนยันตอนจบว่าไม่จำเป็นต้อง escalate ขึ้น security-reviewer จริง
+  - ทดสอบจริง 127/127 ผ่าน (124 เดิม + 3 ใหม่ ใน `DiceRollCrudTests.cs` ต่อ SignalR jointly กับ
+    Postgres+Redis จริง) รวม 348 เทสต์ทั้ง repo
+  - ผ่าน code review — ไม่มี blocker พบ 1 design smell ที่ตั้งใจ**ไม่แก้ตอนนี้**: broadcast เกิด
+    "ใน" transaction เดียวกับ request (middleware เปิดคลุมทั้ง request ใน `Program.cs`) ถ้า
+    `SendAsync` throw (เช่น Redis สะดุดชั่วคราว) จะ rollback แถว `DiceRoll` ที่ persist สำเร็จไปแล้ว
+    ทั้งที่ dice roll เองไม่มีปัญหาอะไรเลย — reviewer แนะนำให้ wrap try/catch แบบ log-and-swallow
+    แต่เสนอให้แก้ตอน**เดียวกับ Part 3** เพราะจะมี broadcast call site ที่สองเกิดขึ้น (แก้ครั้งเดียว
+    ให้ทั้งคู่สอดคล้องกันดีกว่าแพตช์ทีละจุด — ยังไม่มี pattern outbox/retry ในโปรเจกต์นี้เลยสักที่)
 - **Part 3** ⏳ — wire `HpUpdated` event เข้า `CombatEndpoints.cs` (broadcast หลัง target HP เปลี่ยน
-  จริงตอน hit/critical เท่านั้น — ตรงกับ Part 3 ของ Sprint B ที่ทำ HP change เฉพาะตอนนั้นอยู่แล้ว)
+  จริงตอน hit/critical เท่านั้น — ตรงกับ Part 3 ของ Sprint B ที่ทำ HP change เฉพาะตอนนั้นอยู่แล้ว) —
+  **ต้องแก้ design smell ของ Part 2 ด้วยตอนนี้** (wrap ทั้งสอง broadcast call site ด้วย log-and-
+  swallow แบบเดียวกัน ไม่ใช่แค่จุดใหม่จุดเดียว)
 
 **Sprint D — BYOK + orchestrator ขั้นต่ำ**
 9. เข้ารหัสเก็บ API key (Data Protection API)

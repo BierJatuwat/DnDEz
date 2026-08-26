@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.SignalR.Client;
 using Npgsql;
 
 namespace DnDEz.Api.Tests;
@@ -181,6 +182,25 @@ public class DiceRollCrudTests : IAsyncLifetime
         var client = _factory.CreateClient();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         return client;
+    }
+
+    private HubConnection BuildConnection(string? token)
+    {
+        return new HubConnectionBuilder()
+            .WithUrl(new Uri(_factory.Server.BaseAddress, "/hubs/campaign"), options =>
+            {
+                options.HttpMessageHandlerFactory = _ => _factory.Server.CreateHandler();
+                options.WebSocketFactory = async (context, cancellationToken) =>
+                {
+                    var client = _factory.Server.CreateWebSocketClient();
+                    return await client.ConnectAsync(context.Uri, cancellationToken);
+                };
+                if (token is not null)
+                {
+                    options.AccessTokenProvider = () => Task.FromResult<string?>(token);
+                }
+            })
+            .Build();
     }
 
     private async Task<long> CountDiceRollsAsync(Guid sessionId)
@@ -384,9 +404,104 @@ public class DiceRollCrudTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
+    // ── SignalR broadcast (Sprint C Part 2 — wires DiceRolled into CampaignHub group) ──
+
+    [Fact]
+    public async Task Post_dice_rolls_broadcasts_DiceRolled_to_joined_campaign_group()
+    {
+        await using var connection = BuildConnection(_memberToken);
+
+        var received = new TaskCompletionSource<DiceRolledBroadcastDto>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        connection.On<DiceRolledBroadcastDto>("DiceRolled", broadcast => received.TrySetResult(broadcast));
+
+        await connection.StartAsync();
+        await connection.InvokeAsync("JoinCampaign", _campaignSystemRollId);
+
+        var response = await AuthedClient(_memberToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignSystemRollId}/sessions/{_sessionInSystemRollCampaignId}/dice-rolls",
+            new { Expression = "1d20+3" });
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var created = await response.Content.ReadFromJsonAsync<DiceRollCreatedResponse>(JsonOptions);
+        Assert.NotNull(created);
+
+        var completed = await Task.WhenAny(received.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+        Assert.Same(received.Task, completed);
+        var broadcastPayload = await received.Task;
+
+        Assert.Equal(created!.Id, broadcastPayload.Id);
+        Assert.Equal(_sessionInSystemRollCampaignId, broadcastPayload.SessionId);
+        Assert.Null(broadcastPayload.CharacterId);
+        Assert.Equal("1d20+3", broadcastPayload.Expression);
+        Assert.Equal(created.Total, broadcastPayload.Total);
+        Assert.Equal("SystemRoll", broadcastPayload.Source);
+
+        await connection.StopAsync();
+    }
+
+    /// <summary>ล็อกไว้ใน PROJECT-CONTEXT §3 เช่นเดียวกับ HTTP response — broadcast ก็ห้าม seed หลุดออกไปด้วย</summary>
+    [Fact]
+    public async Task Broadcast_payload_never_exposes_seed_field()
+    {
+        await using var connection = BuildConnection(_memberToken);
+
+        var received = new TaskCompletionSource<DiceRolledBroadcastDto>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        connection.On<DiceRolledBroadcastDto>("DiceRolled", broadcast => received.TrySetResult(broadcast));
+
+        await connection.StartAsync();
+        await connection.InvokeAsync("JoinCampaign", _campaignSystemRollId);
+
+        var response = await AuthedClient(_memberToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignSystemRollId}/sessions/{_sessionInSystemRollCampaignId}/dice-rolls",
+            new { Expression = "1d20" });
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+
+        var completed = await Task.WhenAny(received.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+        Assert.Same(received.Task, completed);
+        var broadcastPayload = await received.Task;
+
+        var json = JsonSerializer.Serialize(broadcastPayload);
+        Assert.DoesNotContain("seed", json, StringComparison.OrdinalIgnoreCase);
+
+        await connection.StopAsync();
+    }
+
+    [Fact]
+    public async Task Outsider_connection_that_never_joined_group_does_not_receive_broadcast()
+    {
+        await using var connection = BuildConnection(_outsiderToken);
+
+        var received = new TaskCompletionSource<DiceRolledBroadcastDto>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        connection.On<DiceRolledBroadcastDto>("DiceRolled", broadcast => received.TrySetResult(broadcast));
+
+        await connection.StartAsync();
+        // outsider ไม่ join group ของแคมเปญนี้เลย (และไม่ใช่สมาชิกอยู่แล้ว จึงไม่มีทาง join ได้ด้วย)
+
+        var response = await AuthedClient(_memberToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignSystemRollId}/sessions/{_sessionInSystemRollCampaignId}/dice-rolls",
+            new { Expression = "1d20" });
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+
+        await Task.WhenAny(received.Task, Task.Delay(TimeSpan.FromSeconds(2)));
+        Assert.False(received.Task.IsCompleted, "connection ที่ไม่ได้ join group ต้องไม่ได้รับ broadcast");
+
+        await connection.StopAsync();
+    }
+
     private record AuthResponse(string Token, Guid UserId);
 
     private record DieRollDetailDto(int Sides, int Value, bool Dropped, int Sign);
+
+    private record DiceRolledBroadcastDto(
+        Guid Id,
+        Guid SessionId,
+        Guid? CharacterId,
+        string Expression,
+        IReadOnlyList<DieRollDetailDto> Rolls,
+        int Total,
+        string Source);
 
     private record DiceRollCreatedResponse(
         Guid Id,

@@ -1,8 +1,10 @@
 using System.Text.Json;
+using DnDEz.Api.Realtime;
 using DnDEz.Domain.Entities;
 using DnDEz.Domain.Enums;
 using DnDEz.Infrastructure.Persistence;
 using DnDEz.Rules;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 
 namespace DnDEz.Api.Endpoints;
@@ -30,7 +32,8 @@ public static class DiceRollEndpoints
             Guid campaignId,
             Guid sessionId,
             CreateDiceRollRequest request,
-            DnDEzDbContext db) =>
+            DnDEzDbContext db,
+            IHubContext<CampaignHub> hubContext) =>
         {
             if (string.IsNullOrWhiteSpace(request.Expression))
             {
@@ -95,6 +98,17 @@ public static class DiceRollEndpoints
             db.DiceRolls.Add(diceRoll);
             await db.SaveChangesAsync();
 
+            await hubContext.Clients.Group(CampaignHub.GroupName(campaignId)).SendAsync(
+                "DiceRolled",
+                new DiceRolledBroadcast(
+                    diceRoll.Id,
+                    sessionId,
+                    diceRoll.CharacterId,
+                    result.Expression,
+                    result.Rolls.Select(r => new DieRollDetailResponse(r.Sides, r.Value, r.Dropped, r.Sign)).ToList(),
+                    result.Total,
+                    result.Source.ToString()));
+
             return Results.Created(
                 $"/campaigns/{campaignId}/sessions/{sessionId}/dice-rolls/{diceRoll.Id}",
                 new DiceRollCreatedResponse(
@@ -115,6 +129,20 @@ internal record DieRollDetailResponse(int Sides, int Value, bool Dropped, int Si
 internal record DiceRollCreatedResponse(
     Guid Id,
     Guid SessionId,
+    string Expression,
+    IReadOnlyList<DieRollDetailResponse> Rolls,
+    int Total,
+    string Source);
+
+/// <summary>
+/// Sprint C Part 2 — payload ที่ broadcast เข้า SignalR group ของแคมเปญตอนมีการทอยลูกเต๋าใหม่
+/// (ดู CampaignHub.GroupName) จงใจไม่มีฟิลด์ Seed เลย — กฎเดียวกับ DiceRollCreatedResponse
+/// ที่ห้าม seed โผล่ให้ client เห็นเด็ดขาด (PROJECT-CONTEXT §3)
+/// </summary>
+internal record DiceRolledBroadcast(
+    Guid Id,
+    Guid SessionId,
+    Guid? CharacterId,
     string Expression,
     IReadOnlyList<DieRollDetailResponse> Rolls,
     int Total,
