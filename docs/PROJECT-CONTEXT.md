@@ -392,12 +392,30 @@ Sprint A Part 3) — แบ่งให้แต่ละ part มีไฟล�
     code review/security review แบบ Sprint A** ตรวจเองด้วยการอ่านโค้ดซ้ำละเอียด + ทดสอบจริงกับ
     Postgres จริงครบทุก edge case (validation order, membership check, DmEntered rejection,
     seed ไม่รั่ว, cross-campaign session isolation)
-- **Part 2** ⏳ — ⚠️ **ตัดสินใจ character sheet ↔ rules engine mapping** — `Character.Sheet`
-  เป็น jsonb ก้อนเดียว ไม่มี column HP/AC แยก ต้องเลือก: (ก) promote HP/AC เป็น typed column
-  ผ่าน migration ใหม่ (ข) เก็บใน jsonb แต่กำหนด shape ชัดเจนแล้ว parse ที่ชั้นแอป หรือ (ค) รับ
-  AC/modifier ตรงจาก request ไปก่อน (เลื่อนการ parse sheet เต็มรูปออกไป) — **เป็นงานตัดสินใจ
-  ต่อเนื่องเหมือน RLS list policy fix ของ Part 3 — ทำเองโดยตรง ไม่ dispatch แบบเปิดกว้าง แม้มี
-  `<tier>`** (ตรงกับ decision framework: "การตัดสินใจที่ต้องเห็นภาพรวมพร้อมกัน → ทำเองรวดเดียวจบ")
+- **Part 2** ✅ **เสร็จ 2026-08-26** — ตัดสินใจ character sheet ↔ rules engine mapping: **เลือก
+  ตัวเลือก (ก) promote เฉพาะ HP/AC/resistance เป็น typed column** (migration
+  `AddCharacterCombatStats`) เหตุผล: "ทุกตัวละครมีแน่นอน ไม่ผันแปรตามคลาส" ต่างจากของที่เหลือใน
+  `Sheet` (spell list, inventory, feature text) ที่ผันแปรจริง — ของสองแบบอยู่ร่วมกันได้ ไม่ได้
+  ยกเลิก jsonb sheet ทำให้ DB บังคับ invariant ได้ตรง ๆ (`ck_characters_current_hp` ฯลฯ เหมือน
+  `ck_character_resources_range` ที่มีอยู่แล้ว) และ Sprint B Part 3 อ่าน HP/AC ตรงเป็น int ได้เลย
+  ไม่ต้อง parse jsonb ทุกครั้ง
+  - `characters` เพิ่ม 7 column: `current_hp`, `max_hp`, `current_temp_hp`, `armor_class` (int) +
+    `damage_resistances`/`damage_vulnerabilities`/`damage_immunities` (`text[]`, validate ด้วย
+    `Enum.TryParse<DnDEz.Rules.DamageType>` ไม่ hardcode รายชื่อซ้ำ — CHECK constraint ที่ DB ก็อิง
+    13 ชนิดเดียวกัน)
+  - `POST /campaigns/{id}/characters` (Sprint A Part 3) ขยายรับ field ใหม่ทั้งหมดแบบ **optional
+    ทั้งหมด ไม่ breaking** — ไม่ส่งมา = fallback เป็น safe placeholder (MaxHp=10, AC=10, resistance
+    sets ว่าง) ไม่ส่ง CurrentHp = เต็มเลือดตาม MaxHp ที่ resolve แล้วเสมอ (ตัวละครใหม่เริ่มเต็มเลือด)
+    `GET .../characters/{id}` คืนค่าทั้งหมดกลับมาด้วย
+  - ทดสอบจริง 94/94 ผ่าน (85 เดิม + 9 ใหม่) รวม CHECK constraint ที่ยืนยันด้วย raw SQL ตรง ๆ ก่อน
+    เขียนโค้ด C# (current_hp>max_hp, max_hp=0, damage type ปลอม — ทุกเคส fail ตามที่ตั้งใจ)
+  - ⚠️ **หมายเหตุ backward-compat**: เทสต์เดิมบางตัวใน `CharacterCrudTests.cs` (ก่อน Part 2) seed
+    `Sheet` jsonb ด้วย `{"hp": 24}` ตามสมมติฐานเดิมที่ HP อยู่ใน sheet — ค่านั้น**ไม่เกี่ยวกับ**
+    `CurrentHp`/`MaxHp` column ใหม่เลย (คนละที่เก็บกัน) ยังผ่านเทสต์ปกติเพราะเป็นแค่การอ่าน jsonb
+    ดิบกลับมา ไม่ใช่ที่มาของค่า HP จริงที่ rules engine จะใช้ต่อจากนี้
+  - ⚠️ **งานนี้ทำโดยไม่มี `<tier>` นำหน้า** เหมือน Part 1 — ไม่ผ่าน code/security review แบบ
+    Sprint A ตรวจเองด้วยการทดสอบจริงกับ Postgres จริงครบทุกจุด (CHECK constraint, backward
+    compatibility, validation order)
 - **Part 3** ⏳ — Check/attack/damage resolution endpoint (แคบลงเพราะ Part 2 ตัดสินใจ shape ให้
   แล้ว) เรียก `CheckResolver`/`AttackResolver`/`DamageResolver`/`HitPointResolver` persist ผล HP
   dispatch ได้ตรงไปตรงมาเพราะไม่ต้องเดา schema เอง

@@ -251,6 +251,10 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
+                    b.Property<int>("ArmorClass")
+                        .HasColumnType("integer")
+                        .HasColumnName("armor_class");
+
                     b.Property<Guid>("CampaignId")
                         .HasColumnType("uuid")
                         .HasColumnName("campaign_id");
@@ -273,6 +277,29 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                         .HasColumnName("created_at")
                         .HasDefaultValueSql("now()");
 
+                    b.Property<int>("CurrentHp")
+                        .HasColumnType("integer")
+                        .HasColumnName("current_hp");
+
+                    b.Property<int>("CurrentTempHp")
+                        .HasColumnType("integer")
+                        .HasColumnName("current_temp_hp");
+
+                    b.Property<string[]>("DamageImmunities")
+                        .IsRequired()
+                        .HasColumnType("text[]")
+                        .HasColumnName("damage_immunities");
+
+                    b.Property<string[]>("DamageResistances")
+                        .IsRequired()
+                        .HasColumnType("text[]")
+                        .HasColumnName("damage_resistances");
+
+                    b.Property<string[]>("DamageVulnerabilities")
+                        .IsRequired()
+                        .HasColumnType("text[]")
+                        .HasColumnName("damage_vulnerabilities");
+
                     b.Property<bool>("HarvestConsent")
                         .HasColumnType("boolean")
                         .HasColumnName("harvest_consent");
@@ -284,6 +311,10 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                     b.Property<int>("Level")
                         .HasColumnType("integer")
                         .HasColumnName("level");
+
+                    b.Property<int>("MaxHp")
+                        .HasColumnType("integer")
+                        .HasColumnName("max_hp");
 
                     b.Property<string>("Name")
                         .IsRequired()

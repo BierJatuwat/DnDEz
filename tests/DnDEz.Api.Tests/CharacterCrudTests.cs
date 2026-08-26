@@ -434,7 +434,19 @@ public class CharacterCrudTests : IAsyncLifetime
 
     private record AuthResponse(string Token, Guid UserId);
 
-    private record CharacterCreatedResponse(Guid Id, Guid CampaignId, string Name, int Level, Guid? OwnerUserId);
+    private record CharacterCreatedResponse(
+        Guid Id,
+        Guid CampaignId,
+        string Name,
+        int Level,
+        Guid? OwnerUserId,
+        int CurrentHp,
+        int MaxHp,
+        int CurrentTempHp,
+        int ArmorClass,
+        string[] DamageResistances,
+        string[] DamageVulnerabilities,
+        string[] DamageImmunities);
 
     private record CharacterListItem(Guid Id, string Name, int Level, Guid? OwnerUserId, bool ControlledByDm);
 
@@ -448,5 +460,169 @@ public class CharacterCrudTests : IAsyncLifetime
         bool ControlledByDm,
         bool HarvestConsent,
         bool IsOrphan,
-        DateTimeOffset CreatedAt);
+        DateTimeOffset CreatedAt,
+        int CurrentHp,
+        int MaxHp,
+        int CurrentTempHp,
+        int ArmorClass,
+        string[] DamageResistances,
+        string[] DamageVulnerabilities,
+        string[] DamageImmunities);
+
+    // ── Sprint B Part 2 — HP/AC/resistance ต่อยอดจาก endpoint เดิมของ Sprint A Part 3 ──────────
+    // (ดู migration AddCharacterCombatStats + PROJECT-CONTEXT §4 "Sprint B Part 2" สำหรับเหตุผลเต็ม)
+
+    [Fact]
+    public async Task Post_characters_without_combat_stats_falls_back_to_safe_placeholder_defaults()
+    {
+        var response = await AuthedClient(_userAToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignAId}/characters", new { Name = "No Stats Given" });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var created = await response.Content.ReadFromJsonAsync<CharacterCreatedResponse>(JsonOptions);
+        Assert.NotNull(created);
+        Assert.Equal(10, created!.MaxHp);
+        Assert.Equal(10, created.CurrentHp);
+        Assert.Equal(0, created.CurrentTempHp);
+        Assert.Equal(10, created.ArmorClass);
+        Assert.Empty(created.DamageResistances);
+        Assert.Empty(created.DamageVulnerabilities);
+        Assert.Empty(created.DamageImmunities);
+    }
+
+    [Fact]
+    public async Task Post_characters_with_only_max_hp_specified_defaults_current_hp_to_full()
+    {
+        // สร้างตัวละครใหม่ควรเริ่มที่ HP เต็มเสมอถ้าไม่ได้บอก CurrentHp มาตรง ๆ
+        var response = await AuthedClient(_userAToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignAId}/characters", new { Name = "Full Health Rookie", MaxHp = 42 });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var created = await response.Content.ReadFromJsonAsync<CharacterCreatedResponse>(JsonOptions);
+        Assert.NotNull(created);
+        Assert.Equal(42, created!.MaxHp);
+        Assert.Equal(42, created.CurrentHp);
+    }
+
+    [Fact]
+    public async Task Post_characters_with_explicit_combat_stats_persists_them_exactly()
+    {
+        var response = await AuthedClient(_userAToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignAId}/characters", new
+            {
+                Name = "Fully Statted",
+                MaxHp = 30,
+                CurrentHp = 18,
+                CurrentTempHp = 5,
+                ArmorClass = 17,
+                DamageResistances = new[] { "Fire", "Cold" },
+                DamageVulnerabilities = new[] { "Radiant" },
+                DamageImmunities = new[] { "Poison" },
+            });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var created = await response.Content.ReadFromJsonAsync<CharacterCreatedResponse>(JsonOptions);
+        Assert.NotNull(created);
+        Assert.Equal(30, created!.MaxHp);
+        Assert.Equal(18, created.CurrentHp);
+        Assert.Equal(5, created.CurrentTempHp);
+        Assert.Equal(17, created.ArmorClass);
+        Assert.Equal(new[] { "Fire", "Cold" }, created.DamageResistances);
+        Assert.Equal(new[] { "Radiant" }, created.DamageVulnerabilities);
+        Assert.Equal(new[] { "Poison" }, created.DamageImmunities);
+
+        // ยืนยันแถวจริงใน DB ตรงกับ response ไม่ใช่แค่ echo กลับมาเฉย ๆ
+        await using var conn = new NpgsqlConnection(OwnerConnectionString);
+        await conn.OpenAsync();
+        await using var select = new NpgsqlCommand(
+            "SELECT current_hp, max_hp, current_temp_hp, armor_class FROM characters WHERE id = @id", conn);
+        select.Parameters.AddWithValue("id", created.Id);
+        await using var reader = await select.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(18, reader.GetInt32(0));
+        Assert.Equal(30, reader.GetInt32(1));
+        Assert.Equal(5, reader.GetInt32(2));
+        Assert.Equal(17, reader.GetInt32(3));
+    }
+
+    [Fact]
+    public async Task Post_characters_with_max_hp_below_one_returns_400()
+    {
+        var response = await AuthedClient(_userAToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignAId}/characters", new { Name = "Zero HP", MaxHp = 0 });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Post_characters_with_current_hp_exceeding_max_hp_returns_400()
+    {
+        var response = await AuthedClient(_userAToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignAId}/characters",
+            new { Name = "Overhealed", MaxHp = 10, CurrentHp = 999 });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Post_characters_with_negative_current_hp_returns_400()
+    {
+        var response = await AuthedClient(_userAToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignAId}/characters",
+            new { Name = "Negative HP", MaxHp = 10, CurrentHp = -1 });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Post_characters_with_armor_class_out_of_range_returns_400()
+    {
+        var response = await AuthedClient(_userAToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignAId}/characters", new { Name = "Absurd AC", ArmorClass = 999 });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Post_characters_with_unknown_damage_type_string_returns_400_and_creates_no_row()
+    {
+        await using var conn = new NpgsqlConnection(OwnerConnectionString);
+        await conn.OpenAsync();
+        await using var countBefore = new NpgsqlCommand(
+            "SELECT count(*) FROM characters WHERE campaign_id = @id", conn);
+        countBefore.Parameters.AddWithValue("id", _campaignAId);
+        var before = (long)(await countBefore.ExecuteScalarAsync())!;
+
+        var response = await AuthedClient(_userAToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignAId}/characters",
+            new { Name = "Fake Resist", DamageResistances = new[] { "NotARealDamageType" } });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+        await using var countAfter = new NpgsqlCommand(
+            "SELECT count(*) FROM characters WHERE campaign_id = @id", conn);
+        countAfter.Parameters.AddWithValue("id", _campaignAId);
+        var after = (long)(await countAfter.ExecuteScalarAsync())!;
+        Assert.Equal(before, after);
+    }
+
+    [Fact]
+    public async Task Get_character_by_id_includes_combat_stats()
+    {
+        var createResponse = await AuthedClient(_userAToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignAId}/characters",
+            new { Name = "Detail Check", MaxHp = 25, ArmorClass = 14, DamageImmunities = new[] { "Poison" } });
+        var created = await createResponse.Content.ReadFromJsonAsync<CharacterCreatedResponse>(JsonOptions);
+
+        var response = await AuthedClient(_userAToken)
+            .GetAsync($"/campaigns/{_campaignAId}/characters/{created!.Id}");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var detail = await response.Content.ReadFromJsonAsync<CharacterDetailResponse>(JsonOptions);
+        Assert.NotNull(detail);
+        Assert.Equal(25, detail!.MaxHp);
+        Assert.Equal(25, detail.CurrentHp);
+        Assert.Equal(14, detail.ArmorClass);
+        Assert.Equal(new[] { "Poison" }, detail.DamageImmunities);
+    }
 }

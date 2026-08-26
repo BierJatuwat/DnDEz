@@ -8,6 +8,8 @@ namespace DnDEz.Api.Endpoints;
 
 /// <summary>
 /// Sprint A Part 3 — thin CRUD ของ `characters` ภายใต้แคมเปญที่เลือกแล้ว (create + list + get)
+/// Sprint B Part 2 — เพิ่ม combat stats (HP/AC/resistance) ที่ promote จาก Sheet jsonb เป็น typed
+/// column แล้ว (ดู migration `AddCharacterCombatStats` + PROJECT-CONTEXT §4 "Sprint B Part 2")
 ///
 /// contract เต็มอยู่ใน <c>tests/DnDEz.Api.Tests/CharacterCrudTests.cs</c> — ห้ามแก้เทสต์เพื่อให้ผ่าน
 ///
@@ -16,12 +18,22 @@ namespace DnDEz.Api.Endpoints;
 ///    ไม่งั้นใครก็สร้างตัวละคร "ของคนอื่น" ได้
 ///  • ลิสต์ห้ามส่ง `Sheet` (jsonb ทั้งก้อน) ออกไป — เฉพาะ endpoint ตัวเดียวเท่านั้นที่ส่ง
 ///  • Level ต้องอยู่ในช่วง 1–20 (ck_characters_level) — ดักที่ handler ก่อนแตะ DB
+///  • ไม่ส่ง MaxHp มา = default 10 (safe placeholder ไม่ใช่ค่าที่ถูกต้องสำหรับตัวละครจริง — DM/ผู้เล่น
+///    ต้องมา update ทีหลัง) · ไม่ส่ง CurrentHp มา = full health ตาม MaxHp ที่ resolve แล้ว (ตัวละคร
+///    ใหม่เริ่มเต็มเลือดเสมอ) · CurrentHp ต้องอยู่ใน [0, MaxHp] เสมอ (ck_characters_current_hp) —
+///    validate ที่ handler ก่อนแตะ DB เพื่อคืน 400 ไม่ใช่ 500 (transaction เดียวคลุมทั้ง request)
+///  • damage type string ต้องตรงกับ `DnDEz.Rules.DamageType` enum เป๊ะ — validate ด้วย Enum.TryParse
+///    ไม่ hardcode รายชื่อซ้ำ (กัน list สองที่ไม่ตรงกันในอนาคต)
 /// </summary>
 public static class CharacterEndpoints
 {
     private const int MaxNameLength = 100;
     private const int MinLevel = 1;
     private const int MaxLevel = 20;
+    private const int DefaultMaxHp = 10;
+    private const int DefaultArmorClass = 10;
+    private const int MinArmorClass = 1;
+    private const int MaxArmorClass = 50;
 
     public static void MapCharacterEndpoints(this WebApplication app)
     {
@@ -44,6 +56,42 @@ public static class CharacterEndpoints
                 return Results.BadRequest();
             }
 
+            var maxHp = request.MaxHp ?? DefaultMaxHp;
+            if (maxHp < 1)
+            {
+                return Results.BadRequest();
+            }
+
+            // ไม่ส่ง CurrentHp มา = เต็มเลือดตาม maxHp ที่ resolve แล้ว (รวม default ด้วย) ไม่ใช่ตาม
+            // DefaultMaxHp เฉย ๆ — ถ้า caller ส่ง MaxHp=42 มาแต่ไม่ส่ง CurrentHp ต้องได้ CurrentHp=42
+            var currentHp = request.CurrentHp ?? maxHp;
+            if (currentHp < 0 || currentHp > maxHp)
+            {
+                return Results.BadRequest();
+            }
+
+            var currentTempHp = request.CurrentTempHp ?? 0;
+            if (currentTempHp < 0)
+            {
+                return Results.BadRequest();
+            }
+
+            var armorClass = request.ArmorClass ?? DefaultArmorClass;
+            if (armorClass < MinArmorClass || armorClass > MaxArmorClass)
+            {
+                return Results.BadRequest();
+            }
+
+            var damageResistances = request.DamageResistances ?? [];
+            var damageVulnerabilities = request.DamageVulnerabilities ?? [];
+            var damageImmunities = request.DamageImmunities ?? [];
+            if (!AreValidDamageTypes(damageResistances) ||
+                !AreValidDamageTypes(damageVulnerabilities) ||
+                !AreValidDamageTypes(damageImmunities))
+            {
+                return Results.BadRequest();
+            }
+
             if (!await CampaignVisibility.IsVisibleAsync(db, campaignId))
             {
                 return Results.NotFound();
@@ -59,6 +107,13 @@ public static class CharacterEndpoints
                 Name = name,
                 Level = level,
                 Sheet = "{}",
+                CurrentHp = currentHp,
+                MaxHp = maxHp,
+                CurrentTempHp = currentTempHp,
+                ArmorClass = armorClass,
+                DamageResistances = damageResistances,
+                DamageVulnerabilities = damageVulnerabilities,
+                DamageImmunities = damageImmunities,
                 ControlledByDm = false,
                 HarvestConsent = false,
                 IsOrphan = false,
@@ -71,7 +126,18 @@ public static class CharacterEndpoints
             return Results.Created(
                 $"/campaigns/{campaignId}/characters/{character.Id}",
                 new CharacterCreatedResponse(
-                    character.Id, character.CampaignId, character.Name, character.Level, character.OwnerUserId));
+                    character.Id,
+                    character.CampaignId,
+                    character.Name,
+                    character.Level,
+                    character.OwnerUserId,
+                    character.CurrentHp,
+                    character.MaxHp,
+                    character.CurrentTempHp,
+                    character.ArmorClass,
+                    character.DamageResistances,
+                    character.DamageVulnerabilities,
+                    character.DamageImmunities));
         }).RequireAuthorization();
 
         app.MapGet("/campaigns/{campaignId:guid}/characters", async (
@@ -106,17 +172,43 @@ public static class CharacterEndpoints
                 .Where(c => c.Id == characterId && c.CampaignId == campaignId)
                 .Select(c => new CharacterDetailResponse(
                     c.Id, c.CampaignId, c.Name, c.Level, c.Sheet, c.OwnerUserId,
-                    c.ControlledByDm, c.HarvestConsent, c.IsOrphan, c.CreatedAt))
+                    c.ControlledByDm, c.HarvestConsent, c.IsOrphan, c.CreatedAt,
+                    c.CurrentHp, c.MaxHp, c.CurrentTempHp, c.ArmorClass,
+                    c.DamageResistances, c.DamageVulnerabilities, c.DamageImmunities))
                 .SingleOrDefaultAsync();
 
             return character is null ? Results.NotFound() : Results.Ok(character);
         }).RequireAuthorization();
     }
+
+    private static bool AreValidDamageTypes(IEnumerable<string> values) =>
+        values.All(v => Enum.TryParse<DnDEz.Rules.DamageType>(v, out _));
 }
 
-internal record CreateCharacterRequest(string? Name, int? Level);
+internal record CreateCharacterRequest(
+    string? Name,
+    int? Level,
+    int? MaxHp,
+    int? CurrentHp,
+    int? CurrentTempHp,
+    int? ArmorClass,
+    string[]? DamageResistances,
+    string[]? DamageVulnerabilities,
+    string[]? DamageImmunities);
 
-internal record CharacterCreatedResponse(Guid Id, Guid CampaignId, string Name, int Level, Guid? OwnerUserId);
+internal record CharacterCreatedResponse(
+    Guid Id,
+    Guid CampaignId,
+    string Name,
+    int Level,
+    Guid? OwnerUserId,
+    int CurrentHp,
+    int MaxHp,
+    int CurrentTempHp,
+    int ArmorClass,
+    string[] DamageResistances,
+    string[] DamageVulnerabilities,
+    string[] DamageImmunities);
 
 internal record CharacterListItem(Guid Id, string Name, int Level, Guid? OwnerUserId, bool ControlledByDm);
 
@@ -130,4 +222,11 @@ internal record CharacterDetailResponse(
     bool ControlledByDm,
     bool HarvestConsent,
     bool IsOrphan,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    int CurrentHp,
+    int MaxHp,
+    int CurrentTempHp,
+    int ArmorClass,
+    string[] DamageResistances,
+    string[] DamageVulnerabilities,
+    string[] DamageImmunities);

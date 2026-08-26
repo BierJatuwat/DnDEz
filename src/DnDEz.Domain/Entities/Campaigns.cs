@@ -93,8 +93,27 @@ public class Character
 
     public string Name { get; set; } = null!;
 
-    /// <summary>stats/HP/inventory/spell slots — jsonb เพราะ schema เปลี่ยนบ่อย</summary>
+    /// <summary>
+    /// stats ที่เหลือ/inventory/spell slots/feature ฯลฯ — jsonb เพราะ schema เปลี่ยนบ่อยจริง ๆ
+    /// (ต่างคลาส/subclass มี field ไม่เหมือนกัน, homebrew เพิ่ม field เองได้)
+    /// </summary>
     public string Sheet { get; set; } = "{}";
+
+    // ── ตัวเลขที่ rules engine (DnDEz.Rules) ต้องใช้โดยตรง — promote ออกจาก Sheet jsonb (Sprint B
+    // Part 2, 2026-08-26) เป็น typed column เพราะ "ทุกตัวละครมีแน่นอน ไม่ผันแปรตามคลาส" ต่างจากของ
+    // ที่เหลือใน Sheet ที่ผันแปรจริง — ทำให้ DB บังคับ invariant ได้ (HP ไม่ติดลบ/ไม่เกิน max) และ
+    // API อ่าน-เขียนตรง ๆ ไม่ต้อง parse jsonb ทุกครั้งที่คำนวณ combat — รายละเอียดเหตุผลเต็มดู
+    // migration `AddCharacterCombatStats` และ PROJECT-CONTEXT §4 "Sprint B Part 2"
+    public int CurrentHp { get; set; } = 10;
+    public int MaxHp { get; set; } = 10;
+    public int CurrentTempHp { get; set; }
+    public int ArmorClass { get; set; } = 10;
+
+    /// <summary>ชื่อค่าต้องตรงกับ DnDEz.Rules.DamageType enum เป๊ะ (Acid, Bludgeoning, ... 13 ค่า) —
+    /// validate ที่ชั้น API ตอนสร้าง/แก้ตัวละคร ไม่ validate ในนี้ (Domain ไม่ reference Rules)</summary>
+    public string[] DamageResistances { get; set; } = [];
+    public string[] DamageVulnerabilities { get; set; } = [];
+    public string[] DamageImmunities { get; set; } = [];
 
     public int Level { get; set; } = 1;
 
