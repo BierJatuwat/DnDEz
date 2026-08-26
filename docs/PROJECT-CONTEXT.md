@@ -454,9 +454,61 @@ Sprint A Part 3) — แบ่งให้แต่ละ part มีไฟล�
 project — Part 1 คือจุดแรกที่พิสูจน์หลักการ "AI ตัดสินใจเรียก tool, rules engine คำนวณ, DB
 persist" ที่ล็อกไว้ตั้งแต่ต้นทำงานได้จริงในโค้ด ไม่ใช่แค่เอกสาร
 
-**Sprint C — Realtime ขั้นต่ำสุด**
-7. SignalR hub เดียว broadcast แค่ dice-roll/HP-update จาก Sprint B ก่อน (ไม่ต้องครบทุก feature)
-8. **ต่อ Redis backplane ตั้งแต่ตอนนี้แม้รัน instance เดียว** — ถูกตอนนี้ แพงถ้าย้อนแก้ทีหลัง
+**Sprint C — Realtime ขั้นต่ำสุด** (2026-08-26) ผ่าน `<tier>` ตามหลัก decision framework: แตกเป็น
+3 part ได้จริง (infra+auth → wire dice-roll → wire HP-update)
+
+- **Part 1** ✅ **เสร็จ 2026-08-26** — SignalR hub เดียว (`CampaignHub`) + Redis backplane
+  (`docker-compose.yml` มี service `redis` อยู่แล้วตั้งแต่ต้น แค่ยังไม่เคย `up -d`) **ยังไม่
+  broadcast อะไรจริง** (แค่โครง connection/group/authorization — ของจริงเป็น Part 2/3)
+  - **ทำเองตรง ๆ ไม่ dispatch** แม้มี `<tier>` — เพราะเจอการตัดสินใจสถาปัตยกรรมที่ต้องเห็นภาพรวม
+    พร้อมกัน (ตาม decision framework exception): middleware ที่ตั้ง `SET LOCAL app.user_id` ให้
+    RLS ผูกกับ**หนึ่ง HTTP request**เท่านั้น (`app.Use(...)` วิ่งตอน handshake ครั้งเดียว) —
+    หลัง WebSocket upgrade แล้ว Hub method invocation ถัดไปทุกครั้ง**ไม่ผ่าน middleware pipeline
+    นั้นซ้ำอีกเลย** (SignalR dispatch ตรงไป HubDispatcher) ถ้าใช้ DbContext ที่ inject ผ่าน
+    constructor ปกติ (scoped ผูกกับ connection ทั้งชีวิต) จะเจอบั๊กคลาสเดียวกับที่เคยเจอมาแล้วจริง
+    ในโปรเจกต์นี้ (connection pooling + RLS) — แก้ด้วย `CampaignHub.IsMemberAsync` เปิด
+    `IServiceScopeFactory.CreateScope()` + transaction สั้น ๆ ของตัวเองต่อการเช็คสิทธิ์หนึ่งครั้ง
+    (เหมือนที่ middleware ทำต่อ HTTP request แต่ทำเองต่อ Hub invocation แทน)
+  - `JoinCampaign`/`LeaveCampaign` join ได้เฉพาะสมาชิกแคมเปญจริง — ไม่ใช่สมาชิก/แคมเปญไม่มีจริง
+    ได้ `HubException("campaign_not_found")` ข้อความเดียวกันทั้งคู่ (กัน enumeration เหมือน REST 404)
+  - JWT ผ่าน query string (`?access_token=`) รับเฉพาะ path `/hubs/campaign` เท่านั้น (browser
+    WebSocket ตั้ง custom header ตอน handshake เองไม่ได้) REST endpoint อื่นทุกตัวยังคงต้องใช้
+    `Authorization` header เท่านั้น — มีเทสต์ยืนยันตรง ๆ ว่า REST endpoint reject token จาก query
+    string แม้ token จะ valid จริงก็ตาม (เพิ่มหลัง code review แนะนำ)
+  - ทดสอบจริง 123/123 ผ่าน (117 เดิม + 6 ใหม่ ใน `CampaignHubTests.cs`, ใช้
+    `Microsoft.AspNetCore.SignalR.Client` ต่อ `WebApplicationFactory` จริง + Redis จริง ไม่ mock)
+    รวม 344 เทสต์ทั้ง repo — **ผ่านตั้งแต่รอบแรกที่รัน** (ยืนยันว่า design การแก้ RLS-per-invocation
+    ถูกต้องจริง ไม่ใช่แค่ทฤษฎี)
+  - ผ่าน **Code Review** (approve ไม่มี blocker เสนอเพิ่มเทสต์ query-string-token-ต้อง-reject-ที่
+    REST — เพิ่มแล้ว) และ **Security Review** (ไม่มี Critical escalate 2 ข้อขึ้น opus-worker ตาม
+    trigger auth/session-management ซับซ้อน — main ตัดสินใจเองไม่ spawn opus-worker เพิ่มเพราะมี
+    ข้อมูลพอ ดูรายละเอียดเต็มใน `.claude/logs/routing.md`):
+    1. **แก้แล้ว**: `dotnet list package --vulnerable` (security-reviewer รันไม่ได้เพราะ sandbox
+       ไม่มี SDK 8 — main รันเองได้จริงเพราะมี SDK 8.0.423) เจอ `MessagePack 2.5.108` (transitive
+       จาก `Microsoft.AspNetCore.SignalR.StackExchangeRedis`) มีช่องโหว่ High/Moderate จริง 12
+       รายการ — pin `PackageReference` MessagePack เป็น `3.1.8` ตรง ๆ ทั้ง `DnDEz.Api.csproj`
+       และ `DnDEz.Api.Tests.csproj` (override ไม่ไหลข้าม `ProjectReference` ต้องประกาศซ้ำสองที่)
+       ยืนยันสะอาดทั้งคู่ + 344/344 เทสต์ยังผ่านหลัง bump
+    2. **backlog ไม่บล็อก** — JWT ผ่าน query string เป็น bearer token เต็ม (ไม่ใช่ one-time
+       ticket อายุสั้นแยก audience) reviewer เสนอว่า ticket-exchange ปลอดภัยกว่าจริง แต่ไม่ได้เปิด
+       ช่องโหว่ใหม่เกินกว่าที่ทั้งระบบยอมรับอยู่แล้ว (token อายุสั้น 1 ชม. ไม่มี revocation ทั่วทั้ง
+       API) — เก็บไว้ก่อน production เหมือน rate limiting/password-max-length ที่ Sprint A Part 2
+       บันทึกไว้แล้ว
+    3. **ต้องแก้ก่อนมี feature ถอนสมาชิก (ยังไม่ใช่วันนี้)** — group membership ไม่ re-verify หลัง
+       join สำเร็จ (ถูกถอนสิทธิ์กลางเซสชันจะยังอยู่ใน group ต่อจนกว่า socket จะหลุด) **ยืนยันแล้วว่า
+       ยัง exploit ไม่ได้จริงตอนนี้** เพราะทั้งระบบยังไม่มี endpoint ลบ/ถอนสมาชิกแคมเปญเลยสักตัว
+       (grep ทั้ง repo ไม่เจอ ตรงกับที่ Sprint A Part 3 บันทึกไว้แล้วว่า "ยังไม่ทำ") — ต้องกลับมาแก้
+       (เช่น re-check membership ก่อน broadcast ทุกครั้ง หรือ evict group ตอน membership เปลี่ยน)
+       ทันทีที่มี feature ถอน/ลบสมาชิกเกิดขึ้นจริง ไม่ใช่ปล่อยผ่านถาวร
+    4. **backlog ที่ต้องจับตาตอน Part 2/3** — `JoinCampaign` ไม่มี rate limit ต่อ connection เลย
+       แต่ต่างจาก "ไม่มี rate limit ทั่วทั้งระบบ" (backlog เดิมของ `/auth/login`) ตรงที่ WebSocket
+       เดียวเรียก Hub method รัวได้โดยไม่มี HTTP round-trip คั่นเหมือน REST — client ตัวเดียว spam
+       `JoinCampaign` ด้วย GUID สุ่มรัว ๆ อาจดูด connection จาก Npgsql pool ที่ใช้ร่วมกับ REST
+       endpoint ทั้งหมดจนหมดเร็วกว่า — ยังไม่บล็อก Part 1 (ยังไม่มี broadcast ของจริงให้กังวลเรื่อง
+       cost) แต่ควรใส่ throttle ก่อน/พร้อม Part 2/3 ที่เริ่มมี broadcast จริงที่มีต้นทุนต่อครั้งแล้ว
+- **Part 2** ⏳ — wire `DiceRolled` event เข้า `DiceRollEndpoints.cs` (broadcast หลัง persist สำเร็จ)
+- **Part 3** ⏳ — wire `HpUpdated` event เข้า `CombatEndpoints.cs` (broadcast หลัง target HP เปลี่ยน
+  จริงตอน hit/critical เท่านั้น — ตรงกับ Part 3 ของ Sprint B ที่ทำ HP change เฉพาะตอนนั้นอยู่แล้ว)
 
 **Sprint D — BYOK + orchestrator ขั้นต่ำ**
 9. เข้ารหัสเก็บ API key (Data Protection API)

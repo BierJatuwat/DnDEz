@@ -8,6 +8,7 @@
 using System.Security.Claims;
 using DnDEz.Api.Auth;
 using DnDEz.Api.Endpoints;
+using DnDEz.Api.Realtime;
 using DnDEz.Domain.Entities;
 using DnDEz.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -17,6 +18,10 @@ using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Sprint C Part 1 — hub path ที่ query-string JWT (ด้านล่าง) กับ MapHub ต้องตรงกันเป๊ะ ประกาศ
+// ค่าเดียวไว้ตรงนี้กันพิมพ์ผิดแยกกันสองที่
+const string CampaignHubPath = "/hubs/campaign";
+
 // role runtime ของ API ต้องเป็น dndez_app (ไม่ใช่ dndez ซึ่งเป็น owner ที่ bypass RLS)
 // แยก env var จาก DNDEZ_DB ที่ DnDEzDbContextFactory ใช้ตอน design-time โดยตั้งใจ (คนละ concern)
 var appDbConnectionString = Environment.GetEnvironmentVariable("DNDEZ_APP_DB")
@@ -25,6 +30,13 @@ var appDbConnectionString = Environment.GetEnvironmentVariable("DNDEZ_APP_DB")
 builder.Services.AddDbContext<DnDEzDbContext>(options =>
     options.UseNpgsql(appDbConnectionString, o => o.UseVector())
         .UseSnakeCaseNamingConvention());
+
+// ── Sprint C Part 1: SignalR + Redis backplane ─────────────────────────────
+// ต่อ backplane ตั้งแต่ตอนนี้แม้รัน instance เดียว (ล็อกไว้ใน PROJECT-CONTEXT §4 "Sprint C" —
+// ถูกตอนนี้ แพงถ้าย้อนแก้ทีหลังตอน scale-out หลาย instance)
+var redisConnectionString = Environment.GetEnvironmentVariable("DNDEZ_REDIS")
+    ?? "localhost:6379";
+builder.Services.AddSignalR().AddStackExchangeRedis(redisConnectionString);
 
 // ── Auth wiring ───────────────────────────────────────────────────────────
 // key ถูก resolve ครั้งเดียวตอน startup: ถ้าไม่ใช่ Development แล้วไม่ได้ตั้ง DNDEZ_JWT_SIGNING_KEY
@@ -60,6 +72,24 @@ builder.Services
             // ⚠️ ล็อก algorithm ไว้ตัวเดียว — กัน algorithm-confusion (เช่นโทเคนที่อ้าง alg=none
             // หรือสลับไปใช้ RS256 แล้วเอา public key มาเป็น HMAC secret)
             ValidAlgorithms = new[] { SecurityAlgorithms.HmacSha256 },
+        };
+
+        // SignalR/WebSocket: browser ตั้ง header กำหนดเองตอน handshake ไม่ได้ (WebSocket API ไม่ให้
+        // custom header) จึงต้องรับ token จาก query string แทนสำหรับ hub path นี้เท่านั้น — ไม่ใช่
+        // relax ทั้งระบบ (endpoint REST อื่นทุกตัวยังคงต้องใช้ Authorization header ปกติเท่านั้น)
+        options.Events = new JwtBearerEvents
+        {
+            OnMessageReceived = context =>
+            {
+                var accessToken = context.Request.Query["access_token"];
+                if (!string.IsNullOrEmpty(accessToken)
+                    && context.HttpContext.Request.Path.StartsWithSegments(CampaignHubPath))
+                {
+                    context.Token = accessToken;
+                }
+
+                return Task.CompletedTask;
+            },
         };
     });
 
@@ -306,6 +336,9 @@ app.MapDiceRollEndpoints();
 
 // ── Sprint B Part 3: check/attack/damage resolution ────────────────────────
 app.MapCombatEndpoints();
+
+// ── Sprint C Part 1: realtime hub (ยังไม่ broadcast อะไรจริง — Part 2/3 wire เข้า endpoint เดิม) ──
+app.MapHub<CampaignHub>(CampaignHubPath).RequireAuthorization();
 
 app.Run();
 

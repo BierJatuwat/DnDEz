@@ -8,6 +8,11 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.10" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.StackExchangeRedis" Version="8.0.10" />
+    <!-- pin เวอร์ชันใหม่กว่าที่ StackExchangeRedis ดึงมา transitively (2.5.108 มีช่องโหว่ High/Moderate
+         หลายรายการจาก "dotnet list package vulnerable" (flag ตัดออกจากคอมเมนต์เพราะ XML ห้าม double
+         hyphen) ดู PROJECT-CONTEXT ข้อ 4 Sprint C Part 1 -->
+    <PackageReference Include="MessagePack" Version="3.1.8" />
   </ItemGroup>
 
   <ItemGroup>
