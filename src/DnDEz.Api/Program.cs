@@ -301,6 +301,9 @@ app.MapCampaignEndpoints();
 app.MapSessionEndpoints();
 app.MapCharacterEndpoints();
 
+// ── Sprint B Part 1: ต่อ DnDEz.Rules (rules engine) เข้า API จริงเป็นครั้งแรก ─
+app.MapDiceRollEndpoints();
+
 app.Run();
 
 // ให้ WebApplicationFactory<Program> ใน integration test มองเห็นคลาสนี้ได้

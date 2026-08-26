@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\DnDEz.Infrastructure\DnDEz.Infrastructure.csproj" />
+    <ProjectReference Include="..\DnDEz.Rules\DnDEz.Rules.csproj" />
   </ItemGroup>
 
 </Project>

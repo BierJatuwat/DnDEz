@@ -371,11 +371,40 @@ loop เล็ก ๆ end-to-end ก่อน (ทดสอบ/เดโมไ�
     ฟังก์ชันใหม่ที่เช็คสมาชิกภาพทีละแถวแทนการผูกกับ session variable ตัวเดียว รายละเอียดเต็มใน
     `db-schema.md`
 
-**Sprint B — ต่อ rules engine เข้า API จริง** (proof แรกว่าสถาปัตยกรรมทำงาน)
-5. application service: รับ request "ทอยเต๋า"/"attack" → เรียก `DnDEz.Rules` → persist ผ่าน
-   EF Core (`dice_rolls` พร้อม seed) → คืนผล
-6. Integration test จริงกับ Postgres จริง (ไม่ใช่ mock) — จุดแรกที่พิสูจน์หลักการ "AI ตัดสินใจ
-   เรียก tool, rules engine คำนวณ, DB persist" ที่ล็อกไว้ตั้งแต่ต้นทำงานได้จริงในโค้ด ไม่ใช่แค่เอกสาร
+**Sprint B — ต่อ rules engine เข้า API จริง** (proof แรกว่าสถาปัตยกรรมทำงาน) — **แบ่ง 3 part**
+(2026-08-26) ตามบทเรียนจาก Sprint A: dispatch ที่ scope กว้างเกินไปทำให้ worker เสียเวลา/token
+ไปกับการสำรวจเอง (เจอกับ opus-worker ที่อ่าน context ~72 นาทีก่อนเริ่มเขียนโค้ดเลยด้วยซ้ำตอน
+Sprint A Part 3) — แบ่งให้แต่ละ part มีไฟล์ที่ต้องอ่านเป็นรายการปิด ไม่ใช่ "ไปสำรวจเอง"
+
+- **Part 1** ✅ **เสร็จ 2026-08-26** — Dice roll endpoint
+  `POST /campaigns/{campaignId}/sessions/{sessionId}/dice-rolls` เรียก `DiceEngine` ที่มีอยู่แล้ว
+  (221 เทสต์ผ่านจาก Phase 1) persist ลง `dice_rolls` ผ่าน EF Core ปกติ (ไม่มีปัญหา circular RLS
+  แบบ `campaigns` — reuse pattern เดียวกับ sessions/characters ได้ตรง ๆ) เป็น**จุดแรกที่พิสูจน์ว่า
+  "AI ตัดสินใจเรียก tool, rules engine คำนวณ, DB persist" ทำงานได้จริงในโค้ด**
+  - รองรับแค่ `DiceMode.SystemRoll` — แคมเปญที่ตั้ง `DmEntered` ถูกปฏิเสธด้วย 400 ชัดเจน (ไม่ silent
+    fallback ซึ่งจะขัดกับ anti-cheat ที่ล็อกไว้ใน player-side-design §5) — DmEntered ค้างไว้ทำทีหลัง
+  - seed generate ใหม่จาก CSPRNG ทุกครั้ง (`SeededDiceRoller.CreateWithSecureRandomSeed()`) เก็บ
+    ลง DB จริงแต่**ไม่มีฟิลด์ Seed ใน response เลย** (DTO ไม่มี property นี้ตั้งแต่ต้น — การันตีด้วย
+    type system ไม่ใช่แค่ runtime filter) มีเทสต์ยืนยันตรง ๆ
+  - `character_id` เป็น `null` เสมอในรอบนี้ (ตั้งใจ ไม่ผูก character จนกว่าจะถึง Part 3)
+  - ทดสอบจริง 85/85 ผ่าน (74 Part 3 เดิม + 11 ใหม่) รวม 306 เทสต์ทั้ง repo
+  - ⚠️ **งานนี้ทำโดยไม่มี `<tier>` นำหน้า** (ผู้ใช้สั่งตรง ไม่ผ่าน tier routing) — **ไม่ผ่าน
+    code review/security review แบบ Sprint A** ตรวจเองด้วยการอ่านโค้ดซ้ำละเอียด + ทดสอบจริงกับ
+    Postgres จริงครบทุก edge case (validation order, membership check, DmEntered rejection,
+    seed ไม่รั่ว, cross-campaign session isolation)
+- **Part 2** ⏳ — ⚠️ **ตัดสินใจ character sheet ↔ rules engine mapping** — `Character.Sheet`
+  เป็น jsonb ก้อนเดียว ไม่มี column HP/AC แยก ต้องเลือก: (ก) promote HP/AC เป็น typed column
+  ผ่าน migration ใหม่ (ข) เก็บใน jsonb แต่กำหนด shape ชัดเจนแล้ว parse ที่ชั้นแอป หรือ (ค) รับ
+  AC/modifier ตรงจาก request ไปก่อน (เลื่อนการ parse sheet เต็มรูปออกไป) — **เป็นงานตัดสินใจ
+  ต่อเนื่องเหมือน RLS list policy fix ของ Part 3 — ทำเองโดยตรง ไม่ dispatch แบบเปิดกว้าง แม้มี
+  `<tier>`** (ตรงกับ decision framework: "การตัดสินใจที่ต้องเห็นภาพรวมพร้อมกัน → ทำเองรวดเดียวจบ")
+- **Part 3** ⏳ — Check/attack/damage resolution endpoint (แคบลงเพราะ Part 2 ตัดสินใจ shape ให้
+  แล้ว) เรียก `CheckResolver`/`AttackResolver`/`DamageResolver`/`HitPointResolver` persist ผล HP
+  dispatch ได้ตรงไปตรงมาเพราะไม่ต้องเดา schema เอง
+
+ทุก part มี integration test จริงกับ Postgres จริงในตัว (ไม่ใช่ mock) ตาม TDD flow ปกติของ
+project — Part 1 คือจุดแรกที่พิสูจน์หลักการ "AI ตัดสินใจเรียก tool, rules engine คำนวณ, DB
+persist" ที่ล็อกไว้ตั้งแต่ต้นทำงานได้จริงในโค้ด ไม่ใช่แค่เอกสาร
 
 **Sprint C — Realtime ขั้นต่ำสุด**
 7. SignalR hub เดียว broadcast แค่ dice-roll/HP-update จาก Sprint B ก่อน (ไม่ต้องครบทุก feature)
