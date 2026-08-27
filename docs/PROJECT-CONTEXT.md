@@ -599,9 +599,47 @@ Part 2 tool-calling loop skeleton (ไม่มี approval gate) → Part 3 app
   - ทดสอบจริง 148/148 ผ่าน (18 ใหม่ ใน `ApiKeyCrudTests.cs` รวม encrypt/decrypt round-trip ข้าม
     `WebApplicationFactory` สองตัวแยกอิสระผ่าน Redis จริง, concurrent-race ผ่าน `Task.WhenAll` จริง,
     multi-tenant uniqueness, cross-user RLS isolation) รวม **369 เทสต์ทั้ง repo**
-- **Part 2** ⏳ — Tool-calling loop skeleton: เรียก Anthropic API ด้วยคีย์ BYOK จริงจาก Part 1 มี
+- **Part 2** ✅ **เสร็จ 2026-08-27** — Tool-calling loop skeleton: `POST
+  /campaigns/{id}/sessions/{id}/consult` เรียก Anthropic API จริงด้วยคีย์ BYOK ของ DM (Part 1) มี
   tool เดียว (`roll_dice`) พิสูจน์ narration → tool_use → tool_result → narration จบ loop ได้จริง
-  ยังไม่มี approval gate (auto-allow ไปก่อน) — รวม "validate ด้วย test call" ที่เลื่อนมาจาก Part 1
+  ยังไม่มี approval gate (auto-allow เสมอ) + เติม "validate ด้วย test call" ที่เลื่อนมาจาก Part 1
+  กลับเข้า `PUT /users/me/api-keys/{provider}` แล้ว
+  - **⚠️ งานนี้ทำเองทั้งหมดโดย main ไม่ผ่านการรีวิวอิสระเลยทั้ง code review และ security review** —
+    ไม่ใช่การตัดสินใจข้าม แต่เพราะ**agent type ของ tier ระบบทั้งหมด (sonnet/opus/fable/haiku-worker,
+    code-reviewer, security-reviewer) ใช้งานไม่ได้ในเซสชันนี้** (ระบบแจ้ง unavailable ก่อนเริ่มงาน) —
+    ชดเชยด้วยการอ่านโค้ดตัวเองซ้ำละเอียดกว่าปกติหลัง build ผ่าน เจอช่องโหว่จริง 1 จุดเอง (ดูด้านล่าง)
+    **ควรส่งย้อนหลังเข้ารีวิวจริงทันทีที่ tier agent กลับมาใช้งานได้ ก่อนต่อยอด Part 3** เพราะ Part 3
+    (approval gate) จะพึ่งพา endpoint นี้โดยตรง
+  - สถาปัตยกรรมหลัก: `IAnthropicClient` แยก interface ออกจาก implementation จริง (`AnthropicClient`
+    เรียก Messages API ตรงผ่าน `HttpClient` ไม่ใช้ SDK) — เพราะเป็น external paid API เรียกจริงใน
+    เทสต์อัตโนมัติไม่ได้เลย (ไม่มี key จริง/ไม่ deterministic/มีต้นทุนจริง) ทุกเทสต์สลับเป็น
+    `FakeAnthropicClient` แทน (pattern มาตรฐานสำหรับ external HTTP dependency ต่างจาก "ห้าม mock"
+    ที่ใช้กับกลไกภายในระบบนี้เอง เช่น dice/Postgres/Redis)
+  - **จำกัดผู้เรียกไว้แค่ DM (campaign owner) เท่านั้น** — ไม่ใช่แค่ product design
+    ("quick play ใช้ key ของ DM เท่านั้น") แต่เป็นเหตุผลทาง RLS ล้วน ๆ: `own_rows_only` ของ
+    `api_keys` กรองด้วย `app.user_id` ของ**ผู้เรียก**เท่านั้น ถ้าเปิดให้ player เรียกได้ query หา
+    "key ของ DM" จะโดน RLS กรองว่างเปล่าเสมอ (เว้นแต่ทำ `SECURITY DEFINER` function แบบ
+    `app_create_campaign()` ซึ่งเกินขอบเขต skeleton) — สมาชิกที่ไม่ใช่ DM ได้ 403 (ครั้งแรกในระบบนี้
+    ที่แยก 403 จาก 404 ชัดเจน: 404=มองไม่เห็นเลย, 403=เห็นแต่ทำ action นี้ไม่ได้)
+  - **จำกัด 1 รอบ tool round-trip เท่านั้น** — ยังไม่ใช่ agentic loop เต็มรูปที่เรียก tool ต่อเนื่องได้
+  - persist ทั้งข้อความ DM (`Message`, `AuthorType=Dm`, `Source=DmOverride`) และ narration ของ AI
+    (`AuthorType=Ai`, `Source=Ai`, `ToolCalls` jsonb ถ้ามี) ลงตาราง `messages` ที่มีอยู่แล้วตั้งแต่
+    initial schema แต่ไม่เคยมี endpoint ต่อจริงมาก่อน (เหมือน `api_keys` ตอน Part 1) — คราวนี้ตรวจ
+    แล้วไม่มีช่องโหว่แบบเดียวกัน (constraint/RLS ครบอยู่แล้ว)
+  - roll_dice ที่ AI เรียก **persist เป็น `dice_rolls` แถวจริงเสมอ** ตามข้อบังคับ PROJECT-CONTEXT §3
+    (`CharacterId=null` เพราะเป็นการทอยของ AI/DM เอง ไม่ผูก character) seed ไม่โผล่ใน tool_result/
+    ToolCalls jsonb/response เด็ดขาด (เหมือนกฎเดิมทุกจุดที่แตะ DiceEngine)
+  - **ช่องโหว่จริงที่เจอเองระหว่าง self-review**: `ExecuteRollDice` เดิมจับแค่ `KeyNotFoundException`
+    (ไม่มี field "expression") แต่ไม่ครอบ `InvalidOperationException` (input ไม่ใช่ JSON object เลย/
+    "expression" ไม่ใช่ string) — tool input ผิดรูปแบบแบบหลังจะ throw ขึ้นไปจน request ทั้งก้อนล้ม
+    500 แทนที่จะกลายเป็น tool_result error ตามที่ตั้งใจ แก้แล้ว + เพิ่มเทสต์ยืนยัน
+  - **backlog ที่รู้ตัวแต่ไม่แก้ตอนนี้** (ตรงกับ pattern "skeleton ไม่ต้องมี resilience เต็มรูป"):
+    ถ้า Anthropic API คืน error (5xx/429/network) ระหว่าง `SendWithSingleToolRoundTripAsync` จะ
+    throw `AnthropicApiException` ที่ไม่มีใครจับ กลายเป็น 500 ดิบ — ยังไม่มี retry/circuit-breaker
+    pattern ไหนในระบบนี้เลยตอนนี้ (สอดคล้องกับที่ยังไม่ต้องมี pattern แบบนั้นที่จุดอื่นเช่นกัน)
+  - ทดสอบจริง 162/162 ผ่าน (148 เดิม + 4 ใหม่ใน `ApiKeyCrudTests.cs` ครอบ validation-outcome
+    ทั้งสามกรณี + 10 ใหม่ใน `ConsultEndpointsTests.cs`) รวม **383 เทสต์ทั้ง repo** — ยืนยันเสถียร
+    2 รอบติดกัน (concurrent-race test ของ Part 1 รวมอยู่ด้วย)
 - **Part 3** ⏳ — Approval gate ผูกกับ `AutonomySetting` (dial ที่มีอยู่แล้วในสคีมา) ตัดสินว่าเมื่อไหร่
   ต้องรอ approve เมื่อไหร่ auto-execute ได้เลย — sync รอ approve ตรง ๆ vs async ยิง pending state
   แล้วแจ้งผ่าน SignalR hub (Sprint C) เป็นการตัดสินใจสถาปัตยกรรมที่ยังไม่ได้ทำ

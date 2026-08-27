@@ -8,6 +8,7 @@
 using System.Security.Claims;
 using DnDEz.Api.Auth;
 using DnDEz.Api.Endpoints;
+using DnDEz.Api.Orchestration;
 using DnDEz.Api.Realtime;
 using DnDEz.Api.Security;
 using DnDEz.Domain.Entities;
@@ -60,6 +61,15 @@ if (dataProtectionCertificate is not null)
 {
     dataProtectionBuilder.ProtectKeysWithCertificate(dataProtectionCertificate);
 }
+
+// ── Sprint D Part 2: Anthropic client (BYOK tool-calling loop) ─────────────
+// IAnthropicClient แยก interface ออกจาก implementation จริงตั้งใจ — ทดสอบด้วย fake ในเทสต์
+// (ไม่มีทางเรียก Anthropic จริงในเทสต์อัตโนมัติได้อยู่แล้ว ไม่มี key จริง/ไม่ deterministic/มีต้นทุนจริง)
+builder.Services.AddHttpClient<IAnthropicClient, AnthropicClient>(client =>
+{
+    client.BaseAddress = new Uri("https://api.anthropic.com/");
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
 
 // ── Auth wiring ───────────────────────────────────────────────────────────
 // key ถูก resolve ครั้งเดียวตอน startup: ถ้าไม่ใช่ Development แล้วไม่ได้ตั้ง DNDEZ_JWT_SIGNING_KEY
@@ -363,9 +373,11 @@ app.MapCombatEndpoints();
 // ── Sprint C Part 1: realtime hub (ยังไม่ broadcast อะไรจริง — Part 2/3 wire เข้า endpoint เดิม) ──
 app.MapHub<CampaignHub>(CampaignHubPath).RequireAuthorization();
 
-// ── Sprint D Part 1: BYOK — เก็บ/ดึง/ลบ API key เข้ารหัสของผู้ใช้ (ยังไม่ validate ผ่าน live call
-// ไปหา provider จริง — เก็บไว้ Part 2 ที่ต้องต่อ Anthropic API client อยู่แล้ว) ────────────────
+// ── Sprint D Part 1: BYOK — เก็บ/ดึง/ลบ API key เข้ารหัสของผู้ใช้ ──────────────
 app.MapApiKeyEndpoints();
+
+// ── Sprint D Part 2: tool-calling loop skeleton (narration + roll_dice, ไม่มี approval gate) ──
+app.MapConsultEndpoints();
 
 app.Run();
 

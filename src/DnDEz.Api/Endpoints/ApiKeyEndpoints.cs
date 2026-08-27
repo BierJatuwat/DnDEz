@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using DnDEz.Api.Auth;
+using DnDEz.Api.Orchestration;
 using DnDEz.Domain.Entities;
 using DnDEz.Domain.Enums;
 using DnDEz.Infrastructure.Persistence;
@@ -14,10 +15,14 @@ namespace DnDEz.Api.Endpoints;
 ///
 /// contract เต็มอยู่ใน <c>tests/DnDEz.Api.Tests/ApiKeyCrudTests.cs</c> — ห้ามแก้เทสต์เพื่อให้ผ่าน
 ///
-/// ขอบเขตที่ตั้งใจแคบ (Part 1 เท่านั้น — ดู PROJECT-CONTEXT §4 "Sprint D"):
-///  • **ไม่มี live validation call ไปหา provider จริง** ("Validate ด้วย test call ทันทีตอนกรอก" ตาม
-///    dm-side-design.md §7 ยกไป Part 2 เพราะต้องต่อ Anthropic HTTP client อยู่แล้วตอนนั้น — key ใหม่
-///    ทุกตัวเริ่มที่ `ApiKeyStatus.Active` แบบ optimistic, `LastValidatedAt = null` จนกว่าจะมี Part 2)
+/// ขอบเขต:
+///  • Sprint D **Part 2** เติม live validation กลับเข้ามาแล้ว ("Validate ด้วย test call ทันทีตอนกรอก"
+///    ตาม dm-side-design.md §7) — เรียก `IAnthropicClient.ValidateKeyAsync` ก่อนบันทึกเสมอ
+///    `Valid`→`ApiKeyStatus.Active`, `Invalid`→`ApiKeyStatus.Invalid` (แต่ยังบันทึก key ไว้ ไม่ reject
+///    ทั้ง request — ผู้ใช้เห็นสถานะแล้วแก้เองได้ ไม่ต้องพิมพ์ซ้ำ), `Unknown` (Anthropic ล่มชั่วคราว/
+///    network error) → **คงสถานะเดิมไว้** ไม่ตีเป็น Invalid เด็ดขาด (กัน Anthropic ล่มชั่วคราวทำให้ key
+///    ที่ใช้ได้จริงถูกตราว่าใช้ไม่ได้) แต่ key ใหม่ (ไม่เคยมีแถวมาก่อน) ที่เจอ Unknown จะได้ Active
+///    default ไปก่อน (optimistic เหมือน Part 1 เดิม เพราะไม่มี "สถานะเดิม" ให้คงไว้)
 ///  • รองรับแค่ `provider = "anthropic"` เท่านั้นตอนนี้ (`SupportedProviders`) — ค่าอื่นได้ 400
 ///
 /// จุดที่ห้ามพลาด:
@@ -54,7 +59,8 @@ public static class ApiKeyEndpoints
             SetApiKeyRequest request,
             ClaimsPrincipal principal,
             DnDEzDbContext db,
-            IDataProtectionProvider dataProtectionProvider) =>
+            IDataProtectionProvider dataProtectionProvider,
+            IAnthropicClient anthropicClient) =>
         {
             if (!SupportedProviders.Contains(provider))
             {
@@ -79,12 +85,27 @@ public static class ApiKeyEndpoints
             }
 
             var rawKey = request.ApiKey.Trim();
+
+            // validate ก่อนแตะ DB เสมอ (เหมือนหลักอื่นทั้งระบบนี้ที่ validate แบบ pure ก่อนเขียนอะไร)
+            // — ตอนนี้รองรับ provider เดียว ("anthropic") จึงเรียก validator เดียวได้ตรง ๆ ถ้าเพิ่ม
+            // provider อื่นทีหลังต้องแตกเป็น validator ต่อ provider แทน
+            var validationOutcome = await anthropicClient.ValidateKeyAsync(rawKey, CancellationToken.None);
+
             var protector = dataProtectionProvider.CreateProtector(ProtectorPurpose);
             var encryptedKey = protector.Protect(rawKey);
             var keySuffix = rawKey.Length <= KeySuffixLength ? rawKey : rawKey[^KeySuffixLength..];
 
             var existing = await db.ApiKeys
                 .SingleOrDefaultAsync(k => k.UserId == userId.Value && k.Provider == provider);
+
+            // Unknown (Anthropic ล่มชั่วคราว/network) ต้องไม่ตีเป็น Invalid — คงสถานะเดิมไว้ถ้ามีแถวอยู่
+            // แล้ว, ถ้าเป็น key ใหม่ (ไม่มี "สถานะเดิม" ให้คง) fallback เป็น Active แบบ optimistic
+            var (status, lastValidatedAt) = validationOutcome switch
+            {
+                ApiKeyValidationOutcome.Valid => (ApiKeyStatus.Active, (DateTimeOffset?)DateTimeOffset.UtcNow),
+                ApiKeyValidationOutcome.Invalid => (ApiKeyStatus.Invalid, (DateTimeOffset?)DateTimeOffset.UtcNow),
+                _ => (existing?.Status ?? ApiKeyStatus.Active, existing?.LastValidatedAt),
+            };
 
             ApiKey apiKey;
             if (existing is null)
@@ -96,19 +117,19 @@ public static class ApiKeyEndpoints
                     Provider = provider,
                     EncryptedKey = encryptedKey,
                     KeySuffix = keySuffix,
-                    Status = ApiKeyStatus.Active,
+                    Status = status,
                     CreatedAt = DateTimeOffset.UtcNow,
-                    LastValidatedAt = null,
+                    LastValidatedAt = lastValidatedAt,
                 };
                 db.ApiKeys.Add(apiKey);
             }
             else
             {
-                // rotate: ค่า key เปลี่ยนแล้ว validation เดิม (ถ้ามี) ใช้กับ key ใหม่นี้ไม่ได้อีกต่อไป
+                // rotate: ค่า key เปลี่ยนแล้ว validation ผลใหม่ (คำนวณจาก key ใหม่ด้านบนแล้ว) ใช้แทน
                 existing.EncryptedKey = encryptedKey;
                 existing.KeySuffix = keySuffix;
-                existing.Status = ApiKeyStatus.Active;
-                existing.LastValidatedAt = null;
+                existing.Status = status;
+                existing.LastValidatedAt = lastValidatedAt;
                 apiKey = existing;
             }
 

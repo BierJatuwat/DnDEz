@@ -2,9 +2,13 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using DnDEz.Api.Orchestration;
+using DnDEz.Api.Tests.Fakes;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Npgsql;
 
 namespace DnDEz.Api.Tests;
@@ -13,8 +17,9 @@ namespace DnDEz.Api.Tests;
 /// Sprint D Part 1 — BYOK: เก็บ/ดึง/ลบ API key ผู้ใช้แบบเข้ารหัสจริงผ่าน ASP.NET Data Protection
 /// (persist ลง Redis จริง — ดู Program.cs) ต่อ RLS `own_rows_only` ที่มีอยู่แล้วตั้งแต่ InitialSchema
 ///
-/// ขอบเขต (ดู PROJECT-CONTEXT §4 "Sprint D" Part 1):
-///  • ไม่มี live validation เรียก Anthropic จริง — key ใหม่ทุกตัวเริ่มที่ Active เสมอ (optimistic)
+/// ขอบเขต (ดู PROJECT-CONTEXT §4 "Sprint D"):
+///  • Sprint D Part 2 เติม live validation กลับมาแล้ว ผ่าน `IAnthropicClient` (สลับเป็น
+///    `FakeAnthropicClient` ในเทสต์นี้ทั้งหมด — ห้ามยิง HTTP จริงไปหา Anthropic เด็ดขาด)
 ///  • รองรับแค่ provider "anthropic" เท่านั้นตอนนี้
 ///
 /// contract:
@@ -55,7 +60,17 @@ public class ApiKeyCrudTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        _factory = new WebApplicationFactory<Program>();
+        // Sprint D Part 2 — PUT ตอนนี้เรียก IAnthropicClient.ValidateKeyAsync จริงก่อนบันทึกเสมอ
+        // ต้องสลับเป็น fake ไม่งั้นเทสต์จะพยายามยิง HTTP จริงไปหา api.anthropic.com (ไม่มี key จริง/
+        // ค้าง/ไม่ deterministic) — ดู tests/DnDEz.Api.Tests/Fakes/FakeAnthropicClient.cs
+        _factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IAnthropicClient>();
+                services.AddSingleton<IAnthropicClient, FakeAnthropicClient>();
+            });
+        });
         (_userId, _token) = await RegisterAsync("owner");
         (_otherUserId, _otherToken) = await RegisterAsync("other");
     }
@@ -146,7 +161,64 @@ public class ApiKeyCrudTests : IAsyncLifetime
         Assert.Equal("anthropic", body!.Provider);
         Assert.Equal("7890", body.KeySuffix); // ท้าย 4 หลักของ ValidRawKey
         Assert.Equal("Active", body.Status);
-        Assert.Null(body.LastValidatedAt);
+        // Sprint D Part 2 — live validation กลับมาแล้ว (FakeAnthropicClient ตอบ Valid เพราะ
+        // ValidRawKey ไม่มีคำว่า "invalid") LastValidatedAt จึงต้องไม่ null อีกต่อไป
+        Assert.NotNull(body.LastValidatedAt);
+    }
+
+    [Fact]
+    public async Task Put_api_key_that_fails_live_validation_is_stored_as_invalid_status()
+    {
+        const string invalidKey = "sk-ant-api03-this-is-an-invalid-test-key-000";
+
+        var response = await AuthedClient(_token).PutAsJsonAsync(
+            "/users/me/api-keys/anthropic", new { ApiKey = invalidKey });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode); // ยังบันทึกอยู่ ไม่ reject ทั้ง request
+        var body = await response.Content.ReadFromJsonAsync<ApiKeyResponse>(JsonOptions);
+        Assert.Equal("Invalid", body!.Status);
+        Assert.NotNull(body.LastValidatedAt);
+    }
+
+    [Fact]
+    public async Task Put_api_key_when_validation_outcome_is_unknown_keeps_optimistic_active_for_new_key()
+    {
+        const string unknownOutcomeKey = "sk-ant-api03-unknown-outcome-test-key-000";
+
+        var response = await AuthedClient(_token).PutAsJsonAsync(
+            "/users/me/api-keys/anthropic", new { ApiKey = unknownOutcomeKey });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<ApiKeyResponse>(JsonOptions);
+        // key ใหม่ไม่มี "สถานะเดิม" ให้คง — fallback เป็น Active optimistic เหมือน Part 1 เดิม
+        Assert.Equal("Active", body!.Status);
+        Assert.Null(body.LastValidatedAt); // ไม่เคย validate สำเร็จจริงเลย
+    }
+
+    [Fact]
+    public async Task Put_api_key_when_validation_outcome_is_unknown_preserves_existing_status_on_rotate()
+    {
+        // ตั้ง key แรกที่ validate สำเร็จ (Active + LastValidatedAt มีค่า) ก่อน
+        var first = await AuthedClient(_token).PutAsJsonAsync(
+            "/users/me/api-keys/anthropic", new { ApiKey = ValidRawKey });
+        var firstBody = await first.Content.ReadFromJsonAsync<ApiKeyResponse>(JsonOptions);
+        Assert.Equal("Active", firstBody!.Status);
+        Assert.NotNull(firstBody.LastValidatedAt);
+
+        // rotate ด้วย key ที่ validate ได้ผล Unknown (เช่น Anthropic ล่มชั่วคราว) — ต้องคงสถานะ/
+        // LastValidatedAt เดิมไว้ ไม่ใช่ถูกล้างหรือตีเป็น Invalid
+        const string unknownOutcomeKey = "sk-ant-api03-unknown-outcome-rotate-test-000";
+        var second = await AuthedClient(_token).PutAsJsonAsync(
+            "/users/me/api-keys/anthropic", new { ApiKey = unknownOutcomeKey });
+        var secondBody = await second.Content.ReadFromJsonAsync<ApiKeyResponse>(JsonOptions);
+
+        Assert.Equal("Active", secondBody!.Status);
+        Assert.Equal(firstBody.LastValidatedAt, secondBody.LastValidatedAt);
+
+        // แต่ key เดิมยังถูกแทนที่ด้วยค่าใหม่จริง (rotate ยังทำงานปกติ แค่ status/LastValidatedAt
+        // ไม่ถูกแตะ)
+        var (_, encryptedKey) = await ReadRawRowAsync(_userId, "anthropic");
+        Assert.Equal(unknownOutcomeKey, DecryptViaRealDataProtector(encryptedKey));
     }
 
     [Fact]
