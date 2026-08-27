@@ -753,6 +753,22 @@ Part 2 DM console → Part 3 player action input
     ยืนยันผลตรงกัน (proof ครบ auth+REST+rules engine+DB+SignalR ในรอบเดียว) → logout เคลียร์ state
     + redirect ถูกต้อง
   - sonnet-worker ping diagnostic สำเร็จก่อนเริ่ม (tier agent พร้อมใช้งานตลอด Part นี้)
+  - ผ่าน **code review 2 รอบ** — รอบ 1 เจอบั๊กจริง: `@microsoft/signalr` reconnect เปิด
+    `ConnectionId` ใหม่ แต่ server-side group membership (`Groups.AddToGroupAsync`) ผูกกับ
+    `ConnectionId` เดิม ทำให้ broadcast เงียบหายหลัง network blip โดย UI ยังโชว์ "connected" — แก้
+    ด้วยเคลียร์ `joinedCampaignId` ใน `onreconnecting`/`onclose` ให้ join effect เดิม re-invoke
+    `JoinCampaign` เอง (commit `90424a6`) ยืนยันด้วยการ kill+restart API process จริงระหว่าง
+    session แล้วดู log ว่า join group เกิดซ้ำ + ทอยลูกเต๋าหลัง reconnect ยังได้ broadcast กลับมา —
+    รอบ 2 approve ไม่มี finding ใหม่ ปิดรอบ (cap 2 รอบตาม CLAUDE.md)
+  - ผ่าน **security review** — clean ไม่มี Critical/Warning (`npm audit` 0 vulnerabilities, CORS
+    ปลอดภัยเพราะไม่มี cookie ในระบบเลยทั้ง frontend/backend, ไม่พบ XSS surface — ทุกจุดที่ render
+    ข้อมูลจากผู้ใช้ผ่าน JSX interpolation ล้วน ไม่มี `dangerouslySetInnerHTML`) มี backlog ไม่บล็อก
+    2 ข้อ: (1) scrub JWT ออกจาก proxy access log ของ `/hubs/campaign` ตอนมี deployment target จริง
+    (2) ทบทวน JWT storage (`localStorage`) อีกครั้งตอนมี refresh-token mechanism
+  - **⚠️ เงื่อนไขก่อนเริ่ม Part 2** (เสนอโดย code-reviewer, ยึดตาม CLAUDE.md TDD Flow ข้อ 6): ตั้ง
+    frontend test framework (แนะนำ Vitest + React Testing Library) ก่อน เพราะ Part 2 (proposal
+    queue/resolve, approval gate UI) เป็นงาน business logic ไม่ใช่ CRUD/boilerplate exception —
+    บั๊ก reconnect ของ Part 1 เป็นตัวอย่างจริงว่า logic แบบนี้ต้องการเทสต์ ไม่ใช่แค่ manual E2E
 - **Part 2** — DM console แบบเต็ม (proposal queue/resolve, approval gate UI) — ยังไม่เริ่ม
 - **Part 3** — player action input แบบ hybrid + HP realtime — ยังไม่เริ่ม
 
