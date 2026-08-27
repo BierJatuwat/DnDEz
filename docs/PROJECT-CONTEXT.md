@@ -765,10 +765,23 @@ Part 2 DM console → Part 3 player action input
     ข้อมูลจากผู้ใช้ผ่าน JSX interpolation ล้วน ไม่มี `dangerouslySetInnerHTML`) มี backlog ไม่บล็อก
     2 ข้อ: (1) scrub JWT ออกจาก proxy access log ของ `/hubs/campaign` ตอนมี deployment target จริง
     (2) ทบทวน JWT storage (`localStorage`) อีกครั้งตอนมี refresh-token mechanism
-  - **⚠️ เงื่อนไขก่อนเริ่ม Part 2** (เสนอโดย code-reviewer, ยึดตาม CLAUDE.md TDD Flow ข้อ 6): ตั้ง
-    frontend test framework (แนะนำ Vitest + React Testing Library) ก่อน เพราะ Part 2 (proposal
-    queue/resolve, approval gate UI) เป็นงาน business logic ไม่ใช่ CRUD/boilerplate exception —
-    บั๊ก reconnect ของ Part 1 เป็นตัวอย่างจริงว่า logic แบบนี้ต้องการเทสต์ ไม่ใช่แค่ manual E2E
+  - **✅ เงื่อนไขก่อนเริ่ม Part 2 ทำแล้ว (2026-08-27)** — ตั้ง Vitest + React Testing Library
+    (`vitest.config.mts`, `vitest.setup.ts`, script `npm run test`) และ **แตก SignalR connection
+    lifecycle + rejoin-on-reconnect ออกจาก `CampaignConsole.tsx` เป็น
+    `src/lib/campaign-hub-manager.ts`** (plain TS class ไม่มี dependency กับ React, รับ
+    `HubConnectionLike` interface แทน `signalR.HubConnection` ตรง ๆ เพื่อ inject fake connection
+    ในเทสต์ได้โดยไม่ต้องมี WebSocket จริง) — `CampaignConsole.tsx` เหลือแค่เรียกผ่าน hook บาง ๆ
+    `use-campaign-hub.ts`
+    - เขียน regression test ของบั๊ก reconnect โดยเฉพาะ (`campaign-hub-manager.test.ts`) —
+      **ยืนยันว่าเทสต์จับบั๊กได้จริง** ด้วยการลบ `this.queueSync()` ออกจาก `onreconnected` ชั่วคราว
+      (จำลองบั๊กเดิม) แล้วรัน `npm run test` เห็น test นี้ fail ตรงจุดเดียวที่ควร แล้วค่อย revert กลับ —
+      ไม่ใช่แค่เขียนเทสต์แล้วเชื่อว่าผ่าน
+    - เก็บ `syncChain` (promise chain serialize การ join/leave) แก้ theoretical race ที่
+      code-reviewer เคยตั้งข้อสังเกตไว้ตอน round 1 (ไม่บล็อกตอนนั้น) ไปด้วยในตัว เพราะ manager ใหม่
+      re-read state ล่าสุดทุกครั้งก่อน sync แทนการพึ่ง `cancelled` flag ต่อ effect เหมือนโค้ดเดิม
+    - เพิ่มเทสต์ `console-store.test.ts` คู่กัน (log cap ที่ 50 แถว, เลือกแคมเปญใหม่ล้าง session)
+    - 9/9 เทสต์ผ่าน + `tsc --noEmit`/`lint`/`build` สะอาด + ทดสอบซ้ำผ่าน browser จริงยืนยันพฤติกรรม
+      ไม่เปลี่ยนหลัง refactor (join/roll dice ยังทำงานถูกต้อง)
 - **Part 2** — DM console แบบเต็ม (proposal queue/resolve, approval gate UI) — ยังไม่เริ่ม
 - **Part 3** — player action input แบบ hybrid + HP realtime — ยังไม่เริ่ม
 

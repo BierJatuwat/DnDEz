@@ -1,12 +1,10 @@
 "use client";
 
-import { useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import * as signalR from "@microsoft/signalr";
 import { useAuthStore } from "@/lib/auth-store";
 import { useConsoleStore } from "@/lib/console-store";
 import { apiFetch, ApiError } from "@/lib/api";
-import { createCampaignHubConnection } from "@/lib/signalr";
+import { useCampaignHub } from "@/lib/use-campaign-hub";
 
 type Campaign = { id: string; name: string; mode: string; createdAt: string };
 type GameSession = {
@@ -58,8 +56,6 @@ export function CampaignConsole() {
   const setHubStatus = useConsoleStore((s) => s.setHubStatus);
   const setRollExpression = useConsoleStore((s) => s.setRollExpression);
   const appendLog = useConsoleStore((s) => s.appendLog);
-
-  const connectionRef = useRef<signalR.HubConnection | null>(null);
 
   const campaignsQuery = useQuery({
     queryKey: ["campaigns"],
@@ -121,94 +117,21 @@ export function CampaignConsole() {
     },
   });
 
-  // ── SignalR connection lifecycle: เปิดครั้งเดียวหลัง token พร้อม, ปิดตอน unmount ──────────
-  useEffect(() => {
-    if (!token) return;
-
-    const connection = createCampaignHubConnection(() => token);
-    connectionRef.current = connection;
-    // React StrictMode (dev) รัน effect นี้ mount→cleanup→mount ทันที — ถ้าไม่ guard ตัวนี้
-    // ผล .then()/.catch() ของ connection ตัวแรก (ที่ถูก stop() ไปแล้วตอน cleanup) จะมาเขียนทับ
-    // สถานะของ connection ตัวที่สองที่เพิ่งเชื่อมสำเร็จ (ดู `cancelled` ด้านล่าง)
-    let cancelled = false;
-
-    connection.on("DiceRolled", (payload: DiceRolledEvent) => {
+  // SignalR connection lifecycle + group rejoin-on-reconnect: ดูตรรกะจริงใน
+  // src/lib/campaign-hub-manager.ts (เทสต์แยกต่างหากที่ campaign-hub-manager.test.ts)
+  useCampaignHub({
+    token,
+    selectedCampaignId,
+    onStatusChange: setHubStatus,
+    onJoinedChange: setJoinedCampaignId,
+    onLog: appendLog,
+    onDiceRolled: (payload) => {
+      const event = payload as DiceRolledEvent;
       appendLog(
-        `📡 realtime DiceRolled: ${payload.expression} = ${payload.total} (source=${payload.source})`,
+        `📡 realtime DiceRolled: ${event.expression} = ${event.total} (source=${event.source})`,
       );
-    });
-
-    connection.onreconnecting(() => {
-      // reconnect ของ @microsoft/signalr เปิด connection ใหม่ (ConnectionId ใหม่) — group
-      // membership ฝั่ง server (Groups.AddToGroupAsync ผูกกับ ConnectionId เดิม) หายไปด้วย
-      // เคลียร์ joinedCampaignId ให้ join effect ด้านล่างเห็นว่ายังไม่ได้ join แล้ว rejoin ให้เอง
-      // หลัง reconnect สำเร็จ (ไม่งั้น broadcast จะเงียบหายไปเฉย ๆ โดยที่ hubStatus ยังโชว์ connected)
-      setJoinedCampaignId(null);
-      setHubStatus("connecting");
-    });
-    connection.onreconnected(() => setHubStatus("connected"));
-    connection.onclose(() => {
-      setJoinedCampaignId(null);
-      setHubStatus("disconnected");
-    });
-
-    setHubStatus("connecting");
-    connection
-      .start()
-      .then(() => {
-        if (cancelled) return;
-        setHubStatus("connected");
-        appendLog("เชื่อมต่อ SignalR hub สำเร็จ");
-      })
-      .catch((err) => {
-        // "stopped during negotiation" คือผลข้างเคียงปกติของ StrictMode double-invoke ใน dev
-        // (cleanup เรียก stop() ก่อน start() ของตัวแรกจะเสร็จ) ไม่ใช่ connection ที่ผู้ใช้เห็นจริง
-        if (cancelled) return;
-        setHubStatus("disconnected");
-        appendLog(`เชื่อมต่อ SignalR ไม่สำเร็จ: ${String(err)}`);
-      });
-
-    return () => {
-      cancelled = true;
-      void connection.stop();
-      connectionRef.current = null;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- appendLog/setHubStatus เป็น zustand action อ้างอิงคงที่ ไม่ต้องใส่
-  }, [token]);
-
-  // ── join/leave group ตาม campaign ที่เลือก ─────────────────────────────────────────────
-  useEffect(() => {
-    const connection = connectionRef.current;
-    if (!connection || hubStatus !== "connected" || !selectedCampaignId) {
-      return;
-    }
-    if (joinedCampaignId === selectedCampaignId) {
-      return;
-    }
-
-    let cancelled = false;
-    (async () => {
-      if (joinedCampaignId) {
-        await connection.invoke("LeaveCampaign", joinedCampaignId);
-      }
-      try {
-        await connection.invoke("JoinCampaign", selectedCampaignId);
-        if (!cancelled) {
-          setJoinedCampaignId(selectedCampaignId);
-          appendLog(`join group ของแคมเปญ ${selectedCampaignId} สำเร็จ`);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          appendLog(`join group ไม่สำเร็จ: ${String(err)}`);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- appendLog/setJoinedCampaignId เป็น zustand action อ้างอิงคงที่
-  }, [hubStatus, selectedCampaignId, joinedCampaignId]);
+    },
+  });
 
   const campaigns = campaignsQuery.data ?? [];
   const sessions = sessionsQuery.data ?? [];
