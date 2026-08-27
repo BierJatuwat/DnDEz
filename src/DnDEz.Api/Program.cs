@@ -155,6 +155,22 @@ builder.Services
 
 builder.Services.AddAuthorization();
 
+// ── Sprint E Part 1: CORS สำหรับ Next.js frontend ──────────────────────────
+// backend ไม่เคยมี CORS มาก่อนเลยเพราะไม่มี client ข้าม origin จนถึงตอนนี้ (เทสต์ทั้งหมดยิงตรงผ่าน
+// WebApplicationFactory ไม่ผ่าน browser) frontend แยก origin จริง (Next.js dev server) จึงต้องเปิด —
+// ไม่ใช้ AllowCredentials เพราะ auth ทั้งระบบใช้ Bearer token (Authorization header / query string
+// เฉพาะ SignalR) ไม่ใช่ cookie เลย ไม่มีเหตุผลต้องเปิด credentialed CORS ที่ซับซ้อนกว่าโดยไม่จำเป็น
+var frontendOrigin = Environment.GetEnvironmentVariable("DNDEZ_FRONTEND_ORIGIN")
+    ?? "http://localhost:3001";
+const string FrontendCorsPolicy = "Frontend";
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(FrontendCorsPolicy, policy =>
+        policy.WithOrigins(frontendOrigin)
+            .AllowAnyHeader()
+            .AllowAnyMethod());
+});
+
 var app = builder.Build();
 
 // hash หลอกสำหรับเคส "ไม่พบ email" — ทำให้ /auth/login ใช้เวลาใกล้เคียงกันทั้งเคสเจอและไม่เจอ user
@@ -174,6 +190,7 @@ var dummyPasswordHashForTiming =
 static IResult InvalidCredentials() =>
     Results.Json(new AuthErrorResponse("invalid_credentials"), statusCode: StatusCodes.Status401Unauthorized);
 
+app.UseCors(FrontendCorsPolicy);
 app.UseAuthentication();
 app.UseAuthorization();
 

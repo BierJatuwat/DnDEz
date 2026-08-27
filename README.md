@@ -16,7 +16,11 @@
 
 - ✅ ฝั่ง DM — ออกแบบเสร็จ
 - ✅ ฝั่ง Player — ออกแบบรอบแรกเสร็จ
-- 🚧 โค้ด — DB schema + RLS เสร็จแล้ว (30 ตาราง) · rules engine ครบ 3 phase (dice, combat core, death save + action economy) เสร็จแล้ว · **Sprint A ครบ 3 part แล้ว** (scaffold + auth JWT + RLS middleware + thin CRUD campaign/session/character) · ยังไม่มี frontend
+- 🚧 โค้ด — DB schema + RLS เสร็จแล้ว (30 ตาราง) · rules engine ครบ 3 phase เสร็จแล้ว ·
+  **Sprint A-D ครบทั้งหมดแล้ว** (API foundation, rules engine ต่อ API, realtime SignalR,
+  BYOK+AI orchestrator) · **Sprint E Part 1 เสร็จแล้ว** (Next.js scaffold + PWA config +
+  auth/SignalR connection proof ที่ `frontend/`) — Part 2/3 (DM console เต็ม, player action input)
+  ยังไม่เริ่ม
 
 ## เริ่มต้นใช้งาน (local dev)
 
@@ -24,7 +28,17 @@
 docker compose up -d postgres redis minio
 export DOTNET_ROOT="$HOME/.dotnet"                 # macOS: SDK 8 อยู่ที่ ~/.dotnet
 dotnet ef database update --project src/DnDEz.Infrastructure
+
+# API (ต้อง Development environment ถึงจะมี dev fallback JWT signing key)
+ASPNETCORE_ENVIRONMENT=Development dotnet run --project src/DnDEz.Api --urls http://localhost:5080
+
+# Frontend (terminal แยก) — ต้องมี API รันอยู่ที่ :5080 ก่อน (ดู frontend/.env.example)
+cd frontend && npm install && npm run dev   # http://localhost:3001
 ```
+
+**หมายเหตุพอร์ต**: frontend dev server ตั้งไว้ที่ `3001` (ไม่ใช่ `3000` default) เพราะ backend
+เปิด CORS เฉพาะ origin ที่ตั้งไว้ (`DNDEZ_FRONTEND_ORIGIN`, default `http://localhost:3001`) —
+ถ้าเปลี่ยนพอร์ต frontend ต้องตั้ง env var นี้ให้ตรงกันทั้งสองฝั่งด้วย
 
 ### หมายเหตุสภาพแวดล้อม (macOS เครื่องนี้)
 
@@ -44,7 +58,10 @@ dotnet ef database update --project src/DnDEz.Infrastructure
 | `src/DnDEz.Domain` | entity + enum (ไม่มี dependency กับ EF/infra) |
 | `src/DnDEz.Infrastructure` | DbContext, EF configuration, migrations |
 | `src/DnDEz.Rules` | rules engine — zero-dependency (BCL ล้วน) ห้าม reference EF/infra/orchestrator |
+| `src/DnDEz.Api` | Minimal API + SignalR hub + auth |
+| `frontend/` | Next.js (App Router) + PWA — root-level ไม่ใช่ `src/` เพราะไม่ใช่ .NET project |
 | `tests/DnDEz.Rules.Tests` | xUnit ของ rules engine |
+| `tests/DnDEz.Api.Tests` | integration test ของ API ผ่าน `WebApplicationFactory` + Postgres/Redis จริง |
 
 รันเทสต์ของ rules engine:
 

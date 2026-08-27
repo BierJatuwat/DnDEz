@@ -1,0 +1,357 @@
+"use client";
+
+import { useEffect, useRef } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import * as signalR from "@microsoft/signalr";
+import { useAuthStore } from "@/lib/auth-store";
+import { useConsoleStore } from "@/lib/console-store";
+import { apiFetch, ApiError } from "@/lib/api";
+import { createCampaignHubConnection } from "@/lib/signalr";
+
+type Campaign = { id: string; name: string; mode: string; createdAt: string };
+type GameSession = {
+  id: string;
+  mode: string;
+  status: string;
+  joinCode: string | null;
+};
+type DieRollDetail = {
+  sides: number;
+  value: number;
+  dropped: boolean;
+  sign: number;
+};
+type DiceRolledEvent = {
+  id: string;
+  sessionId: string;
+  characterId: string | null;
+  expression: string;
+  rolls: DieRollDetail[];
+  total: number;
+  source: string;
+};
+
+/**
+ * Sprint E Part 1 — proof ว่า frontend คุยกับ Sprint A-D จริงครบ auth + REST + rules engine +
+ * SignalR realtime: สร้างแคมเปญ/เซสชันจริงผ่าน API, join SignalR group จริง, ทอยลูกเต๋าจริงผ่าน
+ * DiceEngine แล้วเห็นผล broadcast กลับมาแบบ realtime (ไม่ใช่แค่ response ของ REST call เดียวกัน)
+ * — Part 2/3 จะปรับ UX ให้เป็น DM console/player action input จริงต่อจากโครงนี้
+ *
+ * server state (campaigns/sessions) ผ่าน TanStack Query, UI state ผ่าน Zustand (console-store) —
+ * ตาม stack ที่ล็อกไว้ใน PROJECT-CONTEXT §3
+ */
+export function CampaignConsole() {
+  const token = useAuthStore((s) => s.token);
+  const userId = useAuthStore((s) => s.userId);
+  const logout = useAuthStore((s) => s.logout);
+  const queryClient = useQueryClient();
+
+  const selectedCampaignId = useConsoleStore((s) => s.selectedCampaignId);
+  const selectedSessionId = useConsoleStore((s) => s.selectedSessionId);
+  const joinedCampaignId = useConsoleStore((s) => s.joinedCampaignId);
+  const hubStatus = useConsoleStore((s) => s.hubStatus);
+  const log = useConsoleStore((s) => s.log);
+  const rollExpression = useConsoleStore((s) => s.rollExpression);
+  const setSelectedCampaignId = useConsoleStore((s) => s.setSelectedCampaignId);
+  const setSelectedSessionId = useConsoleStore((s) => s.setSelectedSessionId);
+  const setJoinedCampaignId = useConsoleStore((s) => s.setJoinedCampaignId);
+  const setHubStatus = useConsoleStore((s) => s.setHubStatus);
+  const setRollExpression = useConsoleStore((s) => s.setRollExpression);
+  const appendLog = useConsoleStore((s) => s.appendLog);
+
+  const connectionRef = useRef<signalR.HubConnection | null>(null);
+
+  const campaignsQuery = useQuery({
+    queryKey: ["campaigns"],
+    queryFn: () => apiFetch<Campaign[]>("/campaigns", { token }),
+    enabled: !!token,
+  });
+
+  const sessionsQuery = useQuery({
+    queryKey: ["sessions", selectedCampaignId],
+    queryFn: () =>
+      apiFetch<GameSession[]>(`/campaigns/${selectedCampaignId}/sessions`, {
+        token,
+      }),
+    enabled: !!token && !!selectedCampaignId,
+  });
+
+  const createCampaign = useMutation({
+    mutationFn: (name: string) =>
+      apiFetch<{ id: string }>("/campaigns", {
+        method: "POST",
+        token,
+        body: { name },
+      }),
+    onSuccess: async (created) => {
+      await queryClient.invalidateQueries({ queryKey: ["campaigns"] });
+      setSelectedCampaignId(created.id);
+    },
+  });
+
+  const createSession = useMutation({
+    mutationFn: () =>
+      apiFetch<{ id: string }>(
+        `/campaigns/${selectedCampaignId}/sessions`,
+        { method: "POST", token, body: { mode: "Online" } },
+      ),
+    onSuccess: async (created) => {
+      await queryClient.invalidateQueries({
+        queryKey: ["sessions", selectedCampaignId],
+      });
+      setSelectedSessionId(created.id);
+    },
+  });
+
+  const rollDice = useMutation({
+    mutationFn: () =>
+      apiFetch<{ total: number; expression: string }>(
+        `/campaigns/${selectedCampaignId}/sessions/${selectedSessionId}/dice-rolls`,
+        { method: "POST", token, body: { expression: rollExpression } },
+      ),
+    onSuccess: (result) => {
+      appendLog(
+        `✅ REST response: ${result.expression} = ${result.total} (รอ broadcast ตามมา...)`,
+      );
+    },
+    onError: (err) => {
+      if (err instanceof ApiError) {
+        appendLog(`ทอยลูกเต๋าไม่สำเร็จ: HTTP ${err.status}`);
+      }
+    },
+  });
+
+  // ── SignalR connection lifecycle: เปิดครั้งเดียวหลัง token พร้อม, ปิดตอน unmount ──────────
+  useEffect(() => {
+    if (!token) return;
+
+    const connection = createCampaignHubConnection(() => token);
+    connectionRef.current = connection;
+    // React StrictMode (dev) รัน effect นี้ mount→cleanup→mount ทันที — ถ้าไม่ guard ตัวนี้
+    // ผล .then()/.catch() ของ connection ตัวแรก (ที่ถูก stop() ไปแล้วตอน cleanup) จะมาเขียนทับ
+    // สถานะของ connection ตัวที่สองที่เพิ่งเชื่อมสำเร็จ (ดู `cancelled` ด้านล่าง)
+    let cancelled = false;
+
+    connection.on("DiceRolled", (payload: DiceRolledEvent) => {
+      appendLog(
+        `📡 realtime DiceRolled: ${payload.expression} = ${payload.total} (source=${payload.source})`,
+      );
+    });
+
+    connection.onreconnecting(() => setHubStatus("connecting"));
+    connection.onreconnected(() => setHubStatus("connected"));
+    connection.onclose(() => setHubStatus("disconnected"));
+
+    setHubStatus("connecting");
+    connection
+      .start()
+      .then(() => {
+        if (cancelled) return;
+        setHubStatus("connected");
+        appendLog("เชื่อมต่อ SignalR hub สำเร็จ");
+      })
+      .catch((err) => {
+        // "stopped during negotiation" คือผลข้างเคียงปกติของ StrictMode double-invoke ใน dev
+        // (cleanup เรียก stop() ก่อน start() ของตัวแรกจะเสร็จ) ไม่ใช่ connection ที่ผู้ใช้เห็นจริง
+        if (cancelled) return;
+        setHubStatus("disconnected");
+        appendLog(`เชื่อมต่อ SignalR ไม่สำเร็จ: ${String(err)}`);
+      });
+
+    return () => {
+      cancelled = true;
+      void connection.stop();
+      connectionRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- appendLog/setHubStatus เป็น zustand action อ้างอิงคงที่ ไม่ต้องใส่
+  }, [token]);
+
+  // ── join/leave group ตาม campaign ที่เลือก ─────────────────────────────────────────────
+  useEffect(() => {
+    const connection = connectionRef.current;
+    if (!connection || hubStatus !== "connected" || !selectedCampaignId) {
+      return;
+    }
+    if (joinedCampaignId === selectedCampaignId) {
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      if (joinedCampaignId) {
+        await connection.invoke("LeaveCampaign", joinedCampaignId);
+      }
+      try {
+        await connection.invoke("JoinCampaign", selectedCampaignId);
+        if (!cancelled) {
+          setJoinedCampaignId(selectedCampaignId);
+          appendLog(`join group ของแคมเปญ ${selectedCampaignId} สำเร็จ`);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          appendLog(`join group ไม่สำเร็จ: ${String(err)}`);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- appendLog/setJoinedCampaignId เป็น zustand action อ้างอิงคงที่
+  }, [hubStatus, selectedCampaignId, joinedCampaignId]);
+
+  const campaigns = campaignsQuery.data ?? [];
+  const sessions = sessionsQuery.data ?? [];
+
+  return (
+    <main className="flex-1 p-6 space-y-6 max-w-3xl mx-auto w-full">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold">DnDEz — DM console (proof of concept)</h1>
+          <p className="text-sm opacity-70">user: {userId}</p>
+        </div>
+        <button
+          onClick={logout}
+          className="text-sm underline opacity-70 hover:opacity-100"
+        >
+          ออกจากระบบ
+        </button>
+      </div>
+
+      <section className="rounded border border-black/10 dark:border-white/10 p-4 space-y-3">
+        <h2 className="font-medium">
+          SignalR:{" "}
+          <span
+            className={
+              hubStatus === "connected" ? "text-green-500" : "text-yellow-500"
+            }
+          >
+            {hubStatus}
+          </span>
+          {joinedCampaignId && (
+            <span className="opacity-70"> · joined {joinedCampaignId}</span>
+          )}
+        </h2>
+      </section>
+
+      {campaignsQuery.isError && (
+        <p className="text-sm text-red-500">โหลดรายชื่อแคมเปญไม่สำเร็จ</p>
+      )}
+
+      <section className="rounded border border-black/10 dark:border-white/10 p-4 space-y-3">
+        <h2 className="font-medium">แคมเปญ</h2>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            const form = e.currentTarget;
+            const input = form.elements.namedItem(
+              "campaignName",
+            ) as HTMLInputElement;
+            if (input.value.trim()) {
+              createCampaign.mutate(input.value.trim());
+              input.value = "";
+            }
+          }}
+          className="flex gap-2"
+        >
+          <input
+            name="campaignName"
+            placeholder="ชื่อแคมเปญใหม่"
+            className="flex-1 rounded border border-black/20 dark:border-white/20 bg-transparent px-3 py-1.5"
+          />
+          <button
+            type="submit"
+            disabled={createCampaign.isPending}
+            className="rounded bg-indigo-600 px-3 py-1.5 text-white disabled:opacity-50"
+          >
+            สร้าง
+          </button>
+        </form>
+        <ul className="space-y-1">
+          {campaigns.map((c) => (
+            <li key={c.id}>
+              <button
+                onClick={() => setSelectedCampaignId(c.id)}
+                className={`w-full text-left rounded px-3 py-1.5 ${
+                  selectedCampaignId === c.id
+                    ? "bg-indigo-600/20"
+                    : "hover:bg-black/5 dark:hover:bg-white/5"
+                }`}
+              >
+                {c.name} <span className="opacity-50 text-xs">({c.mode})</span>
+              </button>
+            </li>
+          ))}
+          {campaigns.length === 0 && (
+            <li className="opacity-50 text-sm">ยังไม่มีแคมเปญ</li>
+          )}
+        </ul>
+      </section>
+
+      {selectedCampaignId && (
+        <section className="rounded border border-black/10 dark:border-white/10 p-4 space-y-3">
+          <h2 className="font-medium">เซสชัน</h2>
+          <button
+            onClick={() => createSession.mutate()}
+            disabled={createSession.isPending}
+            className="rounded bg-indigo-600 px-3 py-1.5 text-white disabled:opacity-50"
+          >
+            สร้างเซสชันใหม่ (Online)
+          </button>
+          <ul className="space-y-1">
+            {sessions.map((s) => (
+              <li key={s.id}>
+                <button
+                  onClick={() => setSelectedSessionId(s.id)}
+                  className={`w-full text-left rounded px-3 py-1.5 ${
+                    selectedSessionId === s.id
+                      ? "bg-indigo-600/20"
+                      : "hover:bg-black/5 dark:hover:bg-white/5"
+                  }`}
+                >
+                  {s.id.slice(0, 8)} — {s.mode} / {s.status}
+                </button>
+              </li>
+            ))}
+            {sessions.length === 0 && (
+              <li className="opacity-50 text-sm">ยังไม่มีเซสชัน</li>
+            )}
+          </ul>
+        </section>
+      )}
+
+      {selectedSessionId && (
+        <section className="rounded border border-black/10 dark:border-white/10 p-4 space-y-3">
+          <h2 className="font-medium">
+            ทอยลูกเต๋า (proof: REST → rules engine → SignalR broadcast)
+          </h2>
+          <div className="flex gap-2">
+            <input
+              value={rollExpression}
+              onChange={(e) => setRollExpression(e.target.value)}
+              className="flex-1 rounded border border-black/20 dark:border-white/20 bg-transparent px-3 py-1.5"
+            />
+            <button
+              onClick={() => rollDice.mutate()}
+              disabled={rollDice.isPending}
+              className="rounded bg-indigo-600 px-3 py-1.5 text-white disabled:opacity-50"
+            >
+              ทอย
+            </button>
+          </div>
+        </section>
+      )}
+
+      <section className="rounded border border-black/10 dark:border-white/10 p-4 space-y-1">
+        <h2 className="font-medium mb-2">Log</h2>
+        <ul className="space-y-1 text-sm font-mono max-h-64 overflow-y-auto">
+          {log.map((entry, i) => (
+            <li key={i} className="opacity-80">
+              <span className="opacity-50">{entry.at}</span> {entry.text}
+            </li>
+          ))}
+        </ul>
+      </section>
+    </main>
+  );
+}

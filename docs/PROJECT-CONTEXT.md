@@ -709,9 +709,52 @@ Part 2/3 เพราะ Part 3 rewrite `IAnthropicClient` ของ Part 2 ท�
   ซับซ้อนที่ต้องใช้ผู้เชี่ยวชาญระดับสูงกว่าตัดสิน) — ทดสอบจริง 395/395 ผ่าน (221 Rules + 174 API,
   2 เทสต์ใหม่จากรอบรีวิวนี้) เสถียร 3 รอบติดกัน
 
-**Sprint E — Frontend MVP**
-11. Next.js scaffold + PWA config
-12. หน้าบาง ๆ ที่คุยกับ API/SignalR จริงจาก Sprint A-D (DM console + player action input แบบง่ายสุด)
+**Sprint E — Frontend MVP** (2026-08-27) แบ่ง 3 part: Part 1 scaffold+auth/SignalR proof →
+Part 2 DM console → Part 3 player action input
+
+- **Part 1** ✅ **เสร็จ 2026-08-27** — Next.js 16 (App Router, TS, Tailwind v4, Turbopack) scaffold
+  ที่ `frontend/` (root-level ไม่ใช่ `src/` เพราะ `src/*` ทั้งหมดเป็น .csproj ใน `DnDEz.sln`) + PWA
+  config (manifest.json + icon 192/512/apple-touch-icon, ไม่มี service worker เพราะโปรเจกต์ล็อกไว้
+  "ไม่ทำ offline mode" — PWA scope นี้ = installability เท่านั้น ไม่ใช่ offline caching) + auth
+  (login/register ต่อ `/auth/*` จริง) + SignalR connection proof (join `CampaignHub` group จริง)
+  — ทำเองตรง ๆ ไม่ dispatch แม้มี `<tier>` (decision framework exception, บันทึกเหตุผลเต็มใน
+  `.claude/logs/routing.md`): ตำแหน่ง frontend ในโครงสร้าง repo, เปิด CORS ฝั่ง API (ไม่เคยมีมาก่อน
+  เลย — backend ทดสอบผ่าน `WebApplicationFactory` ตรงมาตลอดไม่เคยผ่าน browser), JWT storage
+  ฝั่ง frontend
+  - **CORS**: เพิ่ม policy ใน `Program.cs` (`WithOrigins` จาก env `DNDEZ_FRONTEND_ORIGIN` default
+    `http://localhost:3001`) — ไม่เปิด `AllowCredentials` เพราะ auth ทั้งระบบใช้ Bearer token
+    (Authorization header / query string เฉพาะ SignalR hub) ไม่ใช่ cookie เลย — 174/174 API เทสต์
+    เดิมยังผ่านหลังเพิ่ม (CORS middleware ไม่กระทบ request ที่ไม่มี `Origin` header เหมือนที่
+    `WebApplicationFactory` ส่ง)
+  - **JWT storage**: เลือก `localStorage` (ผ่าน `zustand/middleware persist`) ไม่ใช่ in-memory-only
+    เพราะ backend ยังไม่มี refresh-token mechanism เลย (Sprint A Part 2 บันทึก backlog ไว้แล้ว) การ
+    persist ข้าม page refresh จำเป็นต่อการใช้งานจริงตอนนี้ — ยอมรับความเสี่ยง XSS-exfiltration เป็น
+    known tradeoff เดียวกับที่ backend ยอมรับเรื่อง JWT ไม่มี revocation อยู่แล้ว (backlog ก่อน
+    production เหมือนจุดอื่น)
+  - **frontend state stack ตาม PROJECT-CONTEXT §3 ที่ล็อกไว้**: TanStack Query สำหรับ server state
+    (campaigns/sessions list + mutations) + Zustand สำหรับ UI state (selected campaign/session, hub
+    status, event log) + `@microsoft/signalr` ตรงเป๊ะ — **เจอเหตุผลเพิ่มเติมที่ยืนยันว่าตัวเลือกนี้ถูก
+    จริง ไม่ใช่แค่ตามสเปก**: raw `useState`+`useEffect` fetch pattern ชน ESLint rule ใหม่ของ
+    `eslint-plugin-react-hooks` (`react-hooks/set-state-in-effect`, มากับ Next.js 16/React 19.2) ที่
+    ตรวจจับ dataflow ของ setState ที่ถูกเรียกผ่าน effect แม้ทางอ้อม (ผ่าน `useCallback` ที่ถูกเรียกใน
+    effect) — ย้ายไป TanStack Query/Zustand แก้ปัญหานี้ได้ตรง ๆ เพราะ setState เกิดใน library internals
+    ไม่ใช่ effect ของ component เอง (`npx tsc --noEmit` + `npm run lint` ผ่านสะอาดหลังย้าย)
+  - **SignalR + React StrictMode (dev only)**: StrictMode รัน effect mount→cleanup→mount ทันที ทำให้
+    connection ตัวแรกถูก `stop()` กลางอากาศตอน negotiate — เพิ่ม `cancelled` flag guard ใน effect กัน
+    callback ของ connection ที่ถูก supersede แล้วมาเขียนทับ state ของ connection ตัวที่สองที่เชื่อมสำเร็จ
+    จริง (คลาสเดียวกับ pattern ที่ใช้ใน join-group effect อยู่แล้ว) — เหลือ console.error ของไลบรารี
+    เองที่ไม่กระทบ state (เห็นเฉพาะ dev, StrictMode ไม่ทำงานใน production build) ยอมรับเป็น cosmetic
+    noise ไม่ fix เพิ่มเพราะไม่คุ้มความซับซ้อนของการเขียน custom logger มา filter สาย log เดียว
+  - **ทดสอบจริงผ่าน browser จริง** (Next.js dev server :3001 + API :5080 + Postgres/Redis จริงผ่าน
+    docker compose ของ worktree `dndez-continuation-26872c` ที่รันอยู่แล้ว — พอร์ตมาตรฐาน 5432/6379
+    ใช้ร่วมกันได้เพราะเป็น physical DB เดียวกัน ไม่ต้องแยก stack ต่อ worktree): สมัคร/login →
+    สร้างแคมเปญ (`app_create_campaign()` ผ่าน CORS) → สร้างเซสชัน → join SignalR group จริง → ทอย
+    ลูกเต๋าจริงผ่าน `DiceEngine` → เห็นทั้ง REST response และ realtime `DiceRolled` broadcast
+    ยืนยันผลตรงกัน (proof ครบ auth+REST+rules engine+DB+SignalR ในรอบเดียว) → logout เคลียร์ state
+    + redirect ถูกต้อง
+  - sonnet-worker ping diagnostic สำเร็จก่อนเริ่ม (tier agent พร้อมใช้งานตลอด Part นี้)
+- **Part 2** — DM console แบบเต็ม (proposal queue/resolve, approval gate UI) — ยังไม่เริ่ม
+- **Part 3** — player action input แบบ hybrid + HP realtime — ยังไม่เริ่ม
 
 **ทำคู่ขนานได้ตลอด ไม่บล็อกอะไร**: ตั้ง GitHub Actions CI ตั้งแต่ Sprint A เริ่ม (ต้นทุนแทบศูนย์)
 
