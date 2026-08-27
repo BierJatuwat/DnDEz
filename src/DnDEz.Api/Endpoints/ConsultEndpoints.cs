@@ -271,23 +271,52 @@ public static class ConsultEndpoints
 
             if (proposal.Status != ProposalStatus.Pending)
             {
+                // fast-path เฉย ๆ — ตัวที่บังคับจริงคือ ExecuteUpdateAsync ด้านล่าง (ดูเหตุผลเต็ม)
                 return Results.Conflict();
             }
 
             if (request.Action == "reject")
             {
-                proposal.Status = ProposalStatus.Rejected;
-                proposal.ResolvedByUserId = callerUserId.Value;
-                proposal.ResolvedAt = DateTimeOffset.UtcNow;
-                await db.SaveChangesAsync();
+                // พบระหว่าง retroactive review (Sprint D Part 3) — เดิม read-then-write (เช็ค
+                // proposal.Status ที่ tracked entity แล้ว mutate + SaveChangesAsync) ไม่ atomic เลย
+                // สอง resolve พร้อมกันอาจเห็น Pending พร้อมกันทั้งคู่แล้วทำงานซ้ำสองรอบ — เปลี่ยนเป็น
+                // ExecuteUpdateAsync แบบมี WHERE Status=Pending ในตัว (single atomic UPDATE ที่ Postgres
+                // lock แถวให้เอง) แค่ตัวเดียวใน request ที่แข่งกันจะได้ affected row = 1 ตัวที่เหลือได้ 0
+                var claimedRows = await db.Proposals
+                    .Where(p => p.Id == proposalId && p.Status == ProposalStatus.Pending)
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(p => p.Status, ProposalStatus.Rejected)
+                        .SetProperty(p => p.ResolvedByUserId, callerUserId.Value)
+                        .SetProperty(p => p.ResolvedAt, DateTimeOffset.UtcNow));
+
+                if (claimedRows == 0)
+                {
+                    return Results.Conflict();
+                }
+
                 return Results.Ok(new ProposalResolutionResponse(
-                    proposal.Id, proposal.Status.ToString(), MessageId: null, Content: null, ToolCall: null));
+                    proposal.Id, ProposalStatus.Rejected.ToString(), MessageId: null, Content: null, ToolCall: null));
             }
 
             var apiKey = await GetActiveDmApiKeyAsync(db, callerUserId.Value);
             if (apiKey is null)
             {
+                // ยังไม่แตะ Status เลย — คงเป็น Pending ต่อไป ให้ DM ตั้ง key แล้วมา resolve ใหม่ได้
                 return Results.BadRequest(new ConsultErrorResponse("dm_api_key_not_set"));
+            }
+
+            // claim ก่อน execute อะไรเลย (ดูเหตุผลเต็มที่ reject ด้านบน) — ถ้า claim ไม่ติด (แพ้ race
+            // หรือถูก reject ไปแล้ว) ต้องหยุดตรงนี้เลย ห้าม roll ลูกเต๋า/เรียก Anthropic ต่อเด็ดขาด
+            var approveClaimedRows = await db.Proposals
+                .Where(p => p.Id == proposalId && p.Status == ProposalStatus.Pending)
+                .ExecuteUpdateAsync(setters => setters
+                    .SetProperty(p => p.Status, ProposalStatus.Approved)
+                    .SetProperty(p => p.ResolvedByUserId, callerUserId.Value)
+                    .SetProperty(p => p.ResolvedAt, DateTimeOffset.UtcNow));
+
+            if (approveClaimedRows == 0)
+            {
+                return Results.Conflict();
             }
 
             var protector = dataProtectionProvider.CreateProtector(ProtectorPurpose);
@@ -296,6 +325,9 @@ public static class ConsultEndpoints
             var payload = JsonSerializer.Deserialize<PendingProposalPayload>(proposal.ToolCallJson)
                 ?? throw new InvalidOperationException("Proposal.ToolCallJson parse ไม่ได้ — ข้อมูลเสียหาย");
 
+            // ถ้าอะไรพังตั้งแต่บรรทัดนี้ลงไป (เช่น Anthropic เรียกไม่สำเร็จ) exception จะลอยขึ้นไปโดน
+            // catch-all ของ RLS middleware ที่ rollback ทั้ง transaction — claim ข้างบนจะถูก undo ไป
+            // ด้วยเลย ทำให้ proposal กลับไปเป็น Pending ให้ retry ใหม่ได้จริง ไม่ค้างสถานะครึ่ง ๆ กลาง ๆ
             var toolResult = ExecuteRollDice(db, proposal.SessionId, payload.ToolInput);
             var secondTurn = await anthropicClient.ContinueWithToolResultAsync(
                 rawApiKey, payload.History, RollDiceTool, payload.RawAssistantContent,
@@ -309,15 +341,10 @@ public static class ConsultEndpoints
 
             var aiMessage = BuildAiMessage(proposal.SessionId, secondTurn.Text, toolCallsJson);
             db.Messages.Add(aiMessage);
-
-            proposal.Status = ProposalStatus.Approved;
-            proposal.ResolvedByUserId = callerUserId.Value;
-            proposal.ResolvedAt = DateTimeOffset.UtcNow;
-
             await db.SaveChangesAsync();
 
             return Results.Ok(new ProposalResolutionResponse(
-                proposal.Id, proposal.Status.ToString(), aiMessage.Id, aiMessage.Content, toolCallResponse));
+                proposal.Id, ProposalStatus.Approved.ToString(), aiMessage.Id, aiMessage.Content, toolCallResponse));
         }).RequireAuthorization();
     }
 

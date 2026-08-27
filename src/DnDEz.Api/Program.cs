@@ -16,9 +16,11 @@ using DnDEz.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using StackExchange.Redis;
+using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -69,6 +71,31 @@ builder.Services.AddHttpClient<IAnthropicClient, AnthropicClient>(client =>
 {
     client.BaseAddress = new Uri("https://api.anthropic.com/");
     client.Timeout = TimeSpan.FromSeconds(30);
+});
+
+// ── Rate limiting ────────────────────────────────────────────────────────
+// พบระหว่าง retroactive review (Sprint D Part 2) — PUT /users/me/api-keys/{provider} เรียก
+// IAnthropicClient.ValidateKeyAsync จริงทุกครั้ง (live call ไปหา Anthropic) โดยไม่มี rate limit
+// เลย ทั้งที่ security review ของ Part 1 ล็อกไว้แล้วว่าต้องมีก่อน Part 2 เพิ่ม live validation —
+// ไม่งั้น endpoint นี้กลายเป็น oracle ให้ผู้ใช้ที่ authenticate แล้วเช็คได้ว่า string ใด ๆ ที่ตัวเอง
+// พิมพ์เข้ามาเป็น Anthropic API key ของคนอื่นที่ขโมยมาใช้ได้จริงไหม — partition ตาม user id (ไม่ใช่
+// IP) เพราะ endpoint นี้ต้อง [Authorize] อยู่แล้ว ทุก request มี user id เสมอ
+builder.Services.AddRateLimiter(options =>
+{
+    // default ของ ASP.NET Core คือ 503 Service Unavailable ตอนโดน reject — เปลี่ยนเป็น 429 Too Many
+    // Requests ตาม HTTP semantic ที่ถูกต้องจริง (503 สื่อว่า server ล่ม ไม่ใช่ client ยิงถี่เกิน)
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    options.AddPolicy(ApiKeyEndpoints.RateLimitPolicyName, context =>
+    {
+        var userId = context.User.GetUserId()?.ToString() ?? "anonymous";
+        return RateLimitPartition.GetFixedWindowLimiter(userId, _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 5,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+        });
+    });
 });
 
 // ── Auth wiring ───────────────────────────────────────────────────────────
@@ -149,6 +176,11 @@ static IResult InvalidCredentials() =>
 
 app.UseAuthentication();
 app.UseAuthorization();
+
+// วางหลัง UseAuthentication เพราะ policy ข้างบน partition ตาม context.User (ต้อง authenticate
+// เสร็จก่อนถึงจะมี user id ให้ partition ได้) — วางก่อน RLS middleware เพื่อปฏิเสธ request ที่ชน
+// rate limit ตั้งแต่ก่อนเปิด transaction/แตะ DB เลย ไม่เปลืองคอนเนกชันเปล่า ๆ
+app.UseRateLimiter();
 
 // ── RLS session-context middleware ────────────────────────────────────────
 // วางหลัง UseAuthentication/UseAuthorization โดยเจตนา 2 เหตุผล:

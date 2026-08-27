@@ -562,6 +562,37 @@ public class ConsultEndpointsTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
     }
 
+    /// <summary>พบระหว่าง retroactive review (Sprint D Part 3) — เดิม read-then-write เช็ค
+    /// proposal.Status ไม่ atomic เลย สอง resolve พร้อมกันอาจ execute tool ซ้ำสองรอบ (double dice
+    /// roll + double Anthropic call ที่ควรเกิดครั้งเดียว) — เทสต์นี้ยิงสอง approve พร้อมกันจริงผ่าน
+    /// Task.WhenAll ยืนยันว่ามีแค่ผู้ชนะรายเดียวที่ execute จริง</summary>
+    [Fact]
+    public async Task Resolve_proposal_two_concurrent_approves_only_one_executes_tool()
+    {
+        var consultResponse = await AuthedClient(_dmToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignSuggestId}/sessions/{_sessionSuggestId}/consult",
+            new { Content = "Concurrent-resolve-test: roll for initiative." });
+        var consultBody = await consultResponse.Content.ReadFromJsonAsync<ConsultResponse>(JsonOptions);
+        var proposalId = consultBody!.Pending!.ProposalId;
+
+        var beforeDiceRolls = await CountDiceRollsAsync(_sessionSuggestId);
+
+        var task1 = AuthedClient(_dmToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignSuggestId}/proposals/{proposalId}/resolve", new { Action = "approve" });
+        var task2 = AuthedClient(_dmToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignSuggestId}/proposals/{proposalId}/resolve", new { Action = "approve" });
+
+        var responses = await Task.WhenAll(task1, task2);
+
+        // ต้องมีผู้ชนะเป๊ะ ๆ 1 ราย (200 OK) อีกรายแพ้ race ได้ 409 Conflict — ไม่มีทางทั้งคู่ 200
+        Assert.Equal(1, responses.Count(r => r.StatusCode == HttpStatusCode.OK));
+        Assert.Equal(1, responses.Count(r => r.StatusCode == HttpStatusCode.Conflict));
+
+        // execute tool ครั้งเดียวเท่านั้น — ไม่ใช่สองครั้ง
+        Assert.Equal(beforeDiceRolls + 1, await CountDiceRollsAsync(_sessionSuggestId));
+        Assert.Equal("Approved", await ReadProposalStatusAsync(proposalId));
+    }
+
     [Fact]
     public async Task Resolve_proposal_by_member_who_is_not_dm_returns_403()
     {

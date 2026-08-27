@@ -604,12 +604,10 @@ Part 2 tool-calling loop skeleton (ไม่มี approval gate) → Part 3 app
   tool เดียว (`roll_dice`) พิสูจน์ narration → tool_use → tool_result → narration จบ loop ได้จริง
   ยังไม่มี approval gate (auto-allow เสมอ) + เติม "validate ด้วย test call" ที่เลื่อนมาจาก Part 1
   กลับเข้า `PUT /users/me/api-keys/{provider}` แล้ว
-  - **⚠️ งานนี้ทำเองทั้งหมดโดย main ไม่ผ่านการรีวิวอิสระเลยทั้ง code review และ security review** —
-    ไม่ใช่การตัดสินใจข้าม แต่เพราะ**agent type ของ tier ระบบทั้งหมด (sonnet/opus/fable/haiku-worker,
-    code-reviewer, security-reviewer) ใช้งานไม่ได้ในเซสชันนี้** (ระบบแจ้ง unavailable ก่อนเริ่มงาน) —
-    ชดเชยด้วยการอ่านโค้ดตัวเองซ้ำละเอียดกว่าปกติหลัง build ผ่าน เจอช่องโหว่จริง 1 จุดเอง (ดูด้านล่าง)
-    **ควรส่งย้อนหลังเข้ารีวิวจริงทันทีที่ tier agent กลับมาใช้งานได้ ก่อนต่อยอด Part 3** เพราะ Part 3
-    (approval gate) จะพึ่งพา endpoint นี้โดยตรง
+  - ⚠️ ~~งานนี้ทำเองทั้งหมดโดย main ไม่ผ่านการรีวิวอิสระ~~ **แก้แล้ว — ผ่าน retroactive review
+    ครบแล้ว 2026-08-27** (tier agent unavailable ตอนพัฒนาเริ่มแรก ตอนนั้น main ทำเองพร้อม
+    self-review ละเอียดกว่าปกติ พอ agent กลับมาใช้งานได้จริง ผู้ใช้สั่งให้ส่งย้อนหลังทันที — ดูผล
+    retroactive review รวม Part 2+3 ที่ท้าย Part 3 ด้านล่าง)
   - สถาปัตยกรรมหลัก: `IAnthropicClient` แยก interface ออกจาก implementation จริง (`AnthropicClient`
     เรียก Messages API ตรงผ่าน `HttpClient` ไม่ใช้ SDK) — เพราะเป็น external paid API เรียกจริงใน
     เทสต์อัตโนมัติไม่ได้เลย (ไม่มี key จริง/ไม่ deterministic/มีต้นทุนจริง) ทุกเทสต์สลับเป็น
@@ -646,11 +644,10 @@ Part 2 tool-calling loop skeleton (ไม่มี approval gate) → Part 3 app
   `Suggest` (default เมื่อไม่มีแถวตั้งค่า — ทุกแคมเปญตอนนี้) = สร้าง `Proposal` (Pending) รอ DM
   resolve เอง ไม่ execute ทันที, `Autonomous` = execute ทันทีเหมือน Part 2 เดิม — เพิ่ม
   `POST /campaigns/{id}/proposals/{id}/resolve` ให้ DM approve/reject
-  - **⚠️ งานนี้ทำเองทั้งหมดโดย main ไม่ผ่านการรีวิวอิสระเลยเหมือน Part 2** — tier agent ทั้งหมดยัง
-    unavailable ต่อเนื่อง (ทดสอบซ้ำด้วย diagnostic ping ก่อนเริ่มงาน ยืนยันสถานะเดิม) ผู้ใช้สั่งให้ทำ
-    ต่อและ "ใช้คุณสมบัติของ tier เท่าที่ทำได้" — ตีความเป็นการยึดวินัยของระบบ tier (decision
-    framework, TDD-first, self-review แทน reviewer, บันทึก log ทุกจุดตัดสินใจ) โดยไม่มี dispatch
-    จริง **ควรส่งย้อนหลังเข้ารีวิวจริงทันทีที่ tier agent กลับมาใช้งานได้** (รวมกับ Part 2 ที่ค้างอยู่)
+  - ⚠️ ~~งานนี้ทำเองทั้งหมดโดย main ไม่ผ่านการรีวิวอิสระเหมือน Part 2~~ — tier agent unavailable
+    ตอนพัฒนา (ทดสอบ diagnostic ping ยืนยันแล้วตอนนั้น) ใช้วินัยของ tier เท่าที่ทำเองได้แทน (decision
+    framework, TDD-first, self-review, log ทุกจุดตัดสินใจ) **แก้แล้ว — ผ่าน retroactive review
+    ครบแล้ว 2026-08-27** ทันทีที่ tier agent กลับมาใช้งานได้ (ดูผลด้านล่าง)
   - **ต้องปรับ `IAnthropicClient` interface ใหม่ทั้งหมด** — Part 2 เดิมมี `SendWithSingleToolRoundTripAsync`
     ตัวเดียวที่ auto-execute tool ในตัว (ผ่าน callback) ใช้กับ `Suggest` ไม่ได้เลยเพราะต้อง**หยุดรอ
     ระหว่าง** "รู้ว่า Claude อยากเรียก tool" กับ "tool ถูก execute จริง" (อาจข้าม HTTP request เป็นนาที/
@@ -675,6 +672,42 @@ Part 2 tool-calling loop skeleton (ไม่มี approval gate) → Part 3 app
   - ทดสอบจริง 172/172 ผ่าน (162 เดิม + 10 ใหม่ใน `ConsultEndpointsTests.cs` ครอบ Manual/Suggest/
     Autonomous/resolve-approve/resolve-reject/409-conflict/403-vs-404/malformed-input-ผ่าน-resolve/
     SignalR broadcast) รวม **393 เทสต์ทั้ง repo** — ยืนยันเสถียร 2 รอบติดกัน
+
+**Retroactive review — Sprint D Part 2+3 (2026-08-27)** ทันทีที่ tier agent กลับมาใช้งานได้
+(หลังปิด-เปิด desktop app ใหม่) ผู้ใช้สั่งให้ส่งงานที่ทำไปตอน agent unavailable เข้ารีวิวย้อนหลัง —
+dispatch code-reviewer + security-reviewer พร้อมกันตรวจ current state ของโค้ดทั้งก้อน (ไม่แยก
+Part 2/3 เพราะ Part 3 rewrite `IAnthropicClient` ของ Part 2 ทับเกือบหมดแล้ว)
+
+- **Critical เจอจริง 1 จุด (ยืนยันอิสระโดยทั้งสอง reviewer)**: `PUT /users/me/api-keys/{provider}`
+  เรียก live validation ไปหา Anthropic จริงทุกครั้งโดยไม่มี rate limit เลย ทั้งที่ security review
+  ของ **Part 1 เองล็อกไว้แล้วว่าต้องมี rate limit ก่อน Part 2 เพิ่ม live validation** — Part 2
+  shipped ไปโดยไม่ทำตามเงื่อนไขนั้น กลายเป็น oracle ให้ผู้ใช้ที่ authenticate แล้วเช็คได้ว่า string
+  ใด ๆ เป็น Anthropic API key ของคนอื่นที่ขโมยมาใช้ได้จริงไหม — **แก้แล้ว**: เพิ่ม rate limiting
+  (ASP.NET Core built-in `Microsoft.AspNetCore.RateLimiting` ไม่ต้องเพิ่ม NuGet) partition ตาม
+  user id, 5 request/นาที, `RejectionStatusCode=429`, วาง `UseRateLimiter()` ก่อน RLS middleware
+  (กัน request ที่โดน limit ไปเปลืองคอนเนกชัน DB) ยืนยันด้วยเทสต์จริง (6 request ต่อเนื่อง ตัวที่ 6
+  ได้ 429)
+- **Warning เจอเพิ่มโดย code-reviewer**: TOCTOU race บน `POST /campaigns/{id}/proposals/{id}/resolve`
+  — เดิม read-then-write เช็ค `proposal.Status` ไม่ atomic เลย สอง concurrent resolve อาจ execute
+  tool ซ้ำสองรอบ (double dice roll + double Anthropic call) — **แก้แล้ว**: เปลี่ยนเป็น
+  `db.Proposals.Where(p => p.Id == id && p.Status == Pending).ExecuteUpdateAsync(...)` (EF Core
+  bulk update, atomic ที่ระดับ Postgres row lock จริง) claim ก่อน execute อะไรเลยทั้ง
+  approve/reject branch ยืนยันด้วยเทสต์ concurrent จริงผ่าน `Task.WhenAll` (ผู้ชนะ 1 ราย 200, แพ้
+  1 ราย 409, tool execute ครั้งเดียว) — เสถียร 3 รอบติดกัน (deterministic เพราะพึ่ง DB lock จริง
+  ไม่ใช่ race แบบสุ่ม)
+- **ยืนยันถูกต้องแล้ว (ไม่ต้องแก้)**: IDOR บน resolve endpoint เป็นไปไม่ได้ (RLS + explicit
+  cross-campaign check), Suggest mode ไม่ roll ลูกเต๋าล่วงหน้าจริง (ยืนยันจากอ่าน code path ไม่ใช่
+  แค่เชื่อเทสต์), `Proposal.ToolCallJson` ที่เก็บ conversation history ระหว่างรอ approve ได้รับ RLS
+  คุ้มครองเท่าตารางอื่นในกลุ่มเดียวกัน (`messages`/`dice_rolls`)
+- **Warning ที่เหลือเป็น backlog** (ไม่ใช่ regression เหมือน 2 ข้อบน — เป็นข้อสังเกตใหม่ที่ต้อง
+  ออกแบบเพิ่ม ไม่ใช่แค่แพตช์): ไม่มี cost-throttle บน `/consult` เอง (ส่ง history ทั้งก้อนทุกครั้ง
+  ไม่มี window/cap, ไม่มี token-counting UI ตามที่ PROJECT-CONTEXT §3 วางแผนไว้ — stolen DM JWT
+  ทำให้เกิดความเสียหายทางการเงินจริงกับบัญชี Anthropic ของ DM ได้ไม่จำกัด) — รอออกแบบร่วมกับ
+  Sprint E ตอนมี UI จริงให้โชว์ค่าใช้จ่าย
+- ผ่าน code review 2 รอบ (รอบ 2 ตรวจเฉพาะ diff ของ fix ทั้งสอง approve ไม่มีปัญหาใหม่) และ
+  security review 1 รอบ (ไม่ escalate opus-worker ทั้งคู่ — evidence ครบ ไม่ใช่ปัญหา crypto/session
+  ซับซ้อนที่ต้องใช้ผู้เชี่ยวชาญระดับสูงกว่าตัดสิน) — ทดสอบจริง 395/395 ผ่าน (221 Rules + 174 API,
+  2 เทสต์ใหม่จากรอบรีวิวนี้) เสถียร 3 รอบติดกัน
 
 **Sprint E — Frontend MVP**
 11. Next.js scaffold + PWA config

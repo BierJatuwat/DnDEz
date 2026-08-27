@@ -40,6 +40,12 @@ namespace DnDEz.Api.Endpoints;
 /// </summary>
 public static class ApiKeyEndpoints
 {
+    /// <summary>ชื่อ policy ที่ Program.cs ต้องลงทะเบียนไว้ก่อน (AddRateLimiter) — พบระหว่าง
+    /// retroactive review ของ Sprint D Part 2 ว่า live validation call ที่เพิ่มเข้ามาไม่มี rate
+    /// limit เลย ทั้งที่ security review ของ Part 1 ล็อกไว้แล้วว่าต้องมีก่อน (ไม่งั้นกลายเป็น oracle
+    /// เช็ค stolen Anthropic key ได้) — ดู PROJECT-CONTEXT §4 Sprint D Part 2</summary>
+    public const string RateLimitPolicyName = "api-key-validation";
+
     private const string ProtectorPurpose = "DnDEz.ApiKeys.v1";
     private const int MinApiKeyLength = 20;
     // real Anthropic key format ไม่เกินนี้แน่ ๆ (มีระยะเผื่อเยอะ) — พบตอน security review ว่าเดิม
@@ -168,7 +174,7 @@ public static class ApiKeyEndpoints
             }
 
             return Results.Ok(ToResponse(apiKey));
-        }).RequireAuthorization();
+        }).RequireAuthorization().RequireRateLimiting(RateLimitPolicyName);
 
         app.MapGet("/users/me/api-keys", async (
             ClaimsPrincipal principal,

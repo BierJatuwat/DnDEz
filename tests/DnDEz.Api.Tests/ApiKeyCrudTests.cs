@@ -308,6 +308,28 @@ public class ApiKeyCrudTests : IAsyncLifetime
         Assert.Equal(1, await CountApiKeyRowsAsync(_userId, "anthropic"));
     }
 
+    /// <summary>พบระหว่าง retroactive review (Sprint D Part 2) — live validation call ไม่มี rate
+    /// limit เลย ทั้งที่ security review ของ Part 1 ล็อกไว้แล้วว่าต้องมีก่อน ไม่งั้น endpoint นี้
+    /// กลายเป็น oracle เช็ค stolen Anthropic key ได้ — เทสต์นี้ยืนยันว่า rate limit (5 ครั้ง/นาที
+    /// ต่อ user) ทำงานจริง</summary>
+    [Fact]
+    public async Task Put_api_key_beyond_rate_limit_returns_429()
+    {
+        var client = AuthedClient(_token);
+
+        for (var i = 0; i < 5; i++)
+        {
+            var response = await client.PutAsJsonAsync(
+                "/users/me/api-keys/anthropic", new { ApiKey = $"sk-ant-api03-rate-limit-test-{i}-0000000" });
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+
+        var sixthResponse = await client.PutAsJsonAsync(
+            "/users/me/api-keys/anthropic", new { ApiKey = "sk-ant-api03-rate-limit-test-6th-0000000" });
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, sixthResponse.StatusCode);
+    }
+
     [Fact]
     public async Task Put_api_key_with_different_case_provider_returns_400()
     {
