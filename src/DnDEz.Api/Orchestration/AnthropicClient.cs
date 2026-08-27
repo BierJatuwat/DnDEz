@@ -6,16 +6,19 @@ using System.Text.Json.Nodes;
 namespace DnDEz.Api.Orchestration;
 
 /// <summary>
-/// Sprint D Part 2 — implementation จริงของ <see cref="IAnthropicClient"/> เรียก Messages API ตรง ๆ
+/// Sprint D Part 2/3 — implementation จริงของ <see cref="IAnthropicClient"/> เรียก Messages API ตรง ๆ
 /// ผ่าน HttpClient (ไม่ใช้ SDK ของ Anthropic — โปรเจกต์นี้เก็บ dependency ให้น้อยที่สุดเท่าที่จำเป็น
 /// และ wire format ของ Messages API เสถียร/นิ่งพอที่จะเรียกตรงได้โดยไม่ต้องพึ่ง SDK)
 ///
 /// ⚠️ จุดที่ห้ามพลาด:
 ///  • ห้าม log ค่า apiKey หรือ raw request/response body ที่อาจมีเนื้อหา user-generated เต็ม ๆ
 ///    (เนื้อหาแคมเปญอาจมี secret ของ DM เอง) — โยน exception ธรรมดา ไม่ log เนื้อหาเข้าไปในข้อความ error
-///  • content array ของ assistant message รอบแรก (ที่มี tool_use block) ต้องส่งกลับไปแบบ **เป๊ะเดิม
-///    ทุก byte** ในรอบสอง (Anthropic ต้องการ echo กลับตรง ๆ ไม่ใช่แค่สร้าง tool_use block ใหม่เอง)
-///    ถึงต้องเก็บเป็น JsonNode ดิบจาก response ตรง ๆ ไม่ใช่ deserialize แล้ว reserialize ผ่าน DTO ของเรา
+///  • content array ของ assistant message ต้องส่งกลับไปแบบ **เป๊ะเดิมทุก byte** ตอน
+///    `ContinueWithToolResultAsync` (Anthropic ต้องการ echo กลับตรง ๆ ไม่ใช่แค่สร้าง tool_use block
+///    ใหม่เอง) ถึงต้องคืนเป็น `JsonElement` ดิบจาก response ตรง ๆ ไม่ใช่ deserialize แล้ว reserialize
+///    ผ่าน DTO ของเรา — และต้อง**คงได้แม้ข้าม HTTP request** (persist ลง `Proposal.ToolCallJson` ระหว่าง
+///    รอ DM approve) จึงเลือก `JsonElement` (serializable ตรงไปตรงมา) แทน `JsonNode`/`JsonObject`
+///    (mutable, ไม่เหมาะเก็บเป็น persisted state)
 /// </summary>
 public sealed class AnthropicClient(HttpClient httpClient) : IAnthropicClient
 {
@@ -56,44 +59,35 @@ public sealed class AnthropicClient(HttpClient httpClient) : IAnthropicClient
         }
     }
 
-    public async Task<AnthropicConversationResult> SendWithSingleToolRoundTripAsync(
+    public async Task<AnthropicTurnResult> SendTurnAsync(
+        string apiKey,
+        IReadOnlyList<AnthropicHistoryMessage> history,
+        AnthropicToolDefinition? tool,
+        CancellationToken cancellationToken)
+    {
+        var messages = BuildMessagesArray(history);
+        var tools = tool is null ? null : BuildToolsArray(tool);
+
+        var response = await SendMessagesRequestAsync(apiKey, messages, tools, cancellationToken);
+        return ExtractTurnResult(response);
+    }
+
+    public async Task<AnthropicTurnResult> ContinueWithToolResultAsync(
         string apiKey,
         IReadOnlyList<AnthropicHistoryMessage> history,
         AnthropicToolDefinition tool,
-        Func<JsonElement, CancellationToken, Task<string>> executeTool,
+        JsonElement rawAssistantContent,
+        string toolUseId,
+        string toolResultText,
         CancellationToken cancellationToken)
     {
-        var messages = new JsonArray();
-        foreach (var message in history)
-        {
-            messages.Add(new JsonObject { ["role"] = message.Role, ["content"] = message.Text });
-        }
+        var messages = BuildMessagesArray(history);
 
-        var tools = new JsonArray(new JsonObject
-        {
-            ["name"] = tool.Name,
-            ["description"] = tool.Description,
-            ["input_schema"] = JsonSerializer.SerializeToNode(tool.InputSchema),
-        });
-
-        var firstResponse = await SendMessagesRequestAsync(apiKey, messages, tools, cancellationToken);
-        var (text, toolUse) = ExtractTextAndToolUse(firstResponse);
-
-        if (toolUse is null)
-        {
-            return new AnthropicConversationResult(text, ToolCall: null);
-        }
-
-        var toolUseId = toolUse["id"]!.GetValue<string>();
-        var toolName = toolUse["name"]!.GetValue<string>();
-        var toolInputNode = toolUse["input"]!;
-        var toolInputElement = JsonSerializer.Deserialize<JsonElement>(toolInputNode.ToJsonString());
-
-        var toolResultText = await executeTool(toolInputElement, cancellationToken);
-
-        // assistant message ต้อง echo content array ของรอบแรกกลับไปเป๊ะ ๆ (ดู doc comment ของคลาส)
-        var assistantContent = firstResponse["content"]!.DeepClone();
-        messages.Add(new JsonObject { ["role"] = "assistant", ["content"] = assistantContent });
+        // echo content array ของรอบแรกกลับไปเป๊ะ ๆ (ดู doc comment ของคลาส) — แปลง JsonElement เป็น
+        // JsonNode ผ่าน string round-trip เพื่อกัน "JsonElement ผูกกับ JsonDocument เดิมที่อาจถูก
+        // dispose ไปแล้ว" (เช่นกรณีที่ rawAssistantContent เดินทางผ่าน DB round-trip มา)
+        var assistantContentNode = JsonNode.Parse(rawAssistantContent.GetRawText());
+        messages.Add(new JsonObject { ["role"] = "assistant", ["content"] = assistantContentNode });
         messages.Add(new JsonObject
         {
             ["role"] = "user",
@@ -105,24 +99,42 @@ public sealed class AnthropicClient(HttpClient httpClient) : IAnthropicClient
             }),
         });
 
-        var secondResponse = await SendMessagesRequestAsync(apiKey, messages, tools, cancellationToken);
-        var (finalText, _) = ExtractTextAndToolUse(secondResponse); // จำกัด 1 รอบตามขอบเขต skeleton
-
-        return new AnthropicConversationResult(
-            finalText,
-            new AnthropicToolCallRecord(toolName, toolInputElement, toolResultText));
+        var tools = BuildToolsArray(tool);
+        var response = await SendMessagesRequestAsync(apiKey, messages, tools, cancellationToken);
+        return ExtractTurnResult(response);
     }
 
+    private static JsonArray BuildMessagesArray(IReadOnlyList<AnthropicHistoryMessage> history)
+    {
+        var messages = new JsonArray();
+        foreach (var message in history)
+        {
+            messages.Add(new JsonObject { ["role"] = message.Role, ["content"] = message.Text });
+        }
+
+        return messages;
+    }
+
+    private static JsonArray BuildToolsArray(AnthropicToolDefinition tool) => new(new JsonObject
+    {
+        ["name"] = tool.Name,
+        ["description"] = tool.Description,
+        ["input_schema"] = JsonSerializer.SerializeToNode(tool.InputSchema),
+    });
+
     private async Task<JsonObject> SendMessagesRequestAsync(
-        string apiKey, JsonArray messages, JsonArray tools, CancellationToken cancellationToken)
+        string apiKey, JsonArray messages, JsonArray? tools, CancellationToken cancellationToken)
     {
         var body = new JsonObject
         {
             ["model"] = Model,
             ["max_tokens"] = MaxTokens,
             ["messages"] = messages,
-            ["tools"] = tools,
         };
+        if (tools is not null)
+        {
+            body["tools"] = tools;
+        }
 
         using var request = BuildRequest(apiKey, body);
         using var response = await httpClient.SendAsync(request, cancellationToken);
@@ -139,13 +151,14 @@ public sealed class AnthropicClient(HttpClient httpClient) : IAnthropicClient
             ?? throw new AnthropicApiException("Anthropic API คืน response ที่ parse เป็น JSON object ไม่ได้");
     }
 
-    private static (string Text, JsonObject? ToolUse) ExtractTextAndToolUse(JsonObject response)
+    private static AnthropicTurnResult ExtractTurnResult(JsonObject response)
     {
-        var contentArray = response["content"]?.AsArray()
+        var contentNode = response["content"]
             ?? throw new AnthropicApiException("Anthropic response ไม่มี content array");
+        var contentArray = contentNode.AsArray();
 
         var textParts = new List<string>();
-        JsonObject? toolUse = null;
+        JsonObject? toolUseBlock = null;
 
         foreach (var blockNode in contentArray)
         {
@@ -159,13 +172,26 @@ public sealed class AnthropicClient(HttpClient httpClient) : IAnthropicClient
             {
                 textParts.Add(block["text"]?.GetValue<string>() ?? string.Empty);
             }
-            else if (type == "tool_use")
+            else if (type == "tool_use" && toolUseBlock is null)
             {
-                toolUse = block;
+                toolUseBlock = block; // จำกัด 1 tool call ต่อเทิร์นตามขอบเขต skeleton
             }
         }
 
-        return (string.Join("\n", textParts), toolUse);
+        // JsonNode -> JsonElement ผ่าน string round-trip (contentNode จะถูก reuse/dispose ไม่ได้
+        // ถ้า caller เก็บ reference ไว้ข้าม request — JsonElement ที่ parse จาก string ใหม่ปลอดภัยกว่า)
+        var rawAssistantContent = JsonSerializer.Deserialize<JsonElement>(contentNode.ToJsonString());
+
+        AnthropicPendingToolUse? toolUse = null;
+        if (toolUseBlock is not null)
+        {
+            var id = toolUseBlock["id"]!.GetValue<string>();
+            var name = toolUseBlock["name"]!.GetValue<string>();
+            var input = JsonSerializer.Deserialize<JsonElement>(toolUseBlock["input"]!.ToJsonString());
+            toolUse = new AnthropicPendingToolUse(id, name, input);
+        }
+
+        return new AnthropicTurnResult(string.Join("\n", textParts), toolUse, rawAssistantContent);
     }
 
     private static HttpRequestMessage BuildRequest(string apiKey, JsonObject body)

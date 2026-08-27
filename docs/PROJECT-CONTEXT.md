@@ -634,15 +634,47 @@ Part 2 tool-calling loop skeleton (ไม่มี approval gate) → Part 3 app
     "expression" ไม่ใช่ string) — tool input ผิดรูปแบบแบบหลังจะ throw ขึ้นไปจน request ทั้งก้อนล้ม
     500 แทนที่จะกลายเป็น tool_result error ตามที่ตั้งใจ แก้แล้ว + เพิ่มเทสต์ยืนยัน
   - **backlog ที่รู้ตัวแต่ไม่แก้ตอนนี้** (ตรงกับ pattern "skeleton ไม่ต้องมี resilience เต็มรูป"):
-    ถ้า Anthropic API คืน error (5xx/429/network) ระหว่าง `SendWithSingleToolRoundTripAsync` จะ
-    throw `AnthropicApiException` ที่ไม่มีใครจับ กลายเป็น 500 ดิบ — ยังไม่มี retry/circuit-breaker
-    pattern ไหนในระบบนี้เลยตอนนี้ (สอดคล้องกับที่ยังไม่ต้องมี pattern แบบนั้นที่จุดอื่นเช่นกัน)
+    ถ้า Anthropic API คืน error (5xx/429/network) ระหว่าง `SendTurnAsync`/`ContinueWithToolResultAsync`
+    (เปลี่ยนชื่อจาก `SendWithSingleToolRoundTripAsync` เดิมตอน Part 3 — ดูด้านล่าง) จะ throw
+    `AnthropicApiException` ที่ไม่มีใครจับ กลายเป็น 500 ดิบ — ยังไม่มี retry/circuit-breaker pattern
+    ไหนในระบบนี้เลยตอนนี้ (สอดคล้องกับที่ยังไม่ต้องมี pattern แบบนั้นที่จุดอื่นเช่นกัน)
   - ทดสอบจริง 162/162 ผ่าน (148 เดิม + 4 ใหม่ใน `ApiKeyCrudTests.cs` ครอบ validation-outcome
     ทั้งสามกรณี + 10 ใหม่ใน `ConsultEndpointsTests.cs`) รวม **383 เทสต์ทั้ง repo** — ยืนยันเสถียร
     2 รอบติดกัน (concurrent-race test ของ Part 1 รวมอยู่ด้วย)
-- **Part 3** ⏳ — Approval gate ผูกกับ `AutonomySetting` (dial ที่มีอยู่แล้วในสคีมา) ตัดสินว่าเมื่อไหร่
-  ต้องรอ approve เมื่อไหร่ auto-execute ได้เลย — sync รอ approve ตรง ๆ vs async ยิง pending state
-  แล้วแจ้งผ่าน SignalR hub (Sprint C) เป็นการตัดสินใจสถาปัตยกรรมที่ยังไม่ได้ทำ
+- **Part 3** ✅ **เสร็จ 2026-08-27 — 🎉 Sprint D ครบ 3 part แล้ว** — Approval gate ผูกกับ
+  `AutonomySetting.Subsystem=RulesCombat` ของแคมเปญ: `Manual` = ไม่เสนอ tool ให้ Claude เลย,
+  `Suggest` (default เมื่อไม่มีแถวตั้งค่า — ทุกแคมเปญตอนนี้) = สร้าง `Proposal` (Pending) รอ DM
+  resolve เอง ไม่ execute ทันที, `Autonomous` = execute ทันทีเหมือน Part 2 เดิม — เพิ่ม
+  `POST /campaigns/{id}/proposals/{id}/resolve` ให้ DM approve/reject
+  - **⚠️ งานนี้ทำเองทั้งหมดโดย main ไม่ผ่านการรีวิวอิสระเลยเหมือน Part 2** — tier agent ทั้งหมดยัง
+    unavailable ต่อเนื่อง (ทดสอบซ้ำด้วย diagnostic ping ก่อนเริ่มงาน ยืนยันสถานะเดิม) ผู้ใช้สั่งให้ทำ
+    ต่อและ "ใช้คุณสมบัติของ tier เท่าที่ทำได้" — ตีความเป็นการยึดวินัยของระบบ tier (decision
+    framework, TDD-first, self-review แทน reviewer, บันทึก log ทุกจุดตัดสินใจ) โดยไม่มี dispatch
+    จริง **ควรส่งย้อนหลังเข้ารีวิวจริงทันทีที่ tier agent กลับมาใช้งานได้** (รวมกับ Part 2 ที่ค้างอยู่)
+  - **ต้องปรับ `IAnthropicClient` interface ใหม่ทั้งหมด** — Part 2 เดิมมี `SendWithSingleToolRoundTripAsync`
+    ตัวเดียวที่ auto-execute tool ในตัว (ผ่าน callback) ใช้กับ `Suggest` ไม่ได้เลยเพราะต้อง**หยุดรอ
+    ระหว่าง** "รู้ว่า Claude อยากเรียก tool" กับ "tool ถูก execute จริง" (อาจข้าม HTTP request เป็นนาที/
+    ชั่วโมงจนกว่า DM จะกด approve) — แยกเป็น `SendTurnAsync` (ไม่ execute อะไรเองเลย) กับ
+    `ContinueWithToolResultAsync` (ส่งต่อหลัง execute แล้วจริง) แทน ทั้งสองใช้ `JsonElement` ธรรมดา
+    (ไม่ใช่ `JsonNode`/object ทึบ) สำหรับ raw assistant content เพราะต้อง**persist ข้าม HTTP request
+    ได้จริง** (เก็บใน `Proposal.ToolCallJson` ระหว่างรอ approve)
+  - **ห้ามทอยดักไว้ล่วงหน้าตอนสร้าง Proposal เด็ดขาด** — `Suggest` path เก็บแค่ tool call ที่ Claude
+    "อยากทำ" (name+input+raw content+history ทั้งหมด) ไม่เรียก `DiceEngine` เลยจนกว่า DM จะ approve
+    จริง ไม่งั้นผลจะรั่วให้เห็นก่อน approve ซึ่งขัดกับความหมายทั้งหมดของการ "รอ approve" — ยืนยันด้วย
+    เทสต์ตรง ๆ ว่าไม่มี `DiceRoll` แถวใหม่เกิดขึ้นเลยตอนสร้าง Proposal
+  - `Proposal.ToolCallJson` เก็บ payload ที่ self-contained ครบ (tool name/input/id, raw assistant
+    content, **ประวัติบทสนทนาทั้งหมด ณ ตอนสร้าง**) แทนที่จะพึ่งการ query `messages` ใหม่ตอน resolve —
+    กัน correctness drift ถ้ามีข้อความอื่นแทรกเข้ามาระหว่างรอ DM ตัดสินใจ
+  - broadcast `ProposalCreated` เข้า SignalR group ของแคมเปญ (Sprint C) แจ้ง DM console — wrap
+    try/catch log-and-swallow ตั้งแต่ต้น (ใช้ pattern ที่แก้ไว้แล้วใน Sprint C Part 3 ไม่ต้องรอเจอ
+    บั๊กซ้ำ)
+  - **เก็บไว้นอกขอบเขตตั้งใจ**: ยังไม่มี endpoint ให้ DM ตั้งค่า/แก้ไข `AutonomySetting` เอง (Part 3
+    ทำแค่ฝั่ง**อ่าน/บังคับใช้** dial ไม่ใช่ฝั่งจัดการ) — ตอนนี้ทุกแคมเปญจริงในระบบยังเปลี่ยนจาก
+    default `Suggest` ไม่ได้เลยนอกจากแก้ตรง DB (เทสต์ seed ผ่าน raw SQL) การจัดการ dial ผ่าน DM
+    console เป็นงานแยกที่ยังไม่ได้ทำ
+  - ทดสอบจริง 172/172 ผ่าน (162 เดิม + 10 ใหม่ใน `ConsultEndpointsTests.cs` ครอบ Manual/Suggest/
+    Autonomous/resolve-approve/resolve-reject/409-conflict/403-vs-404/malformed-input-ผ่าน-resolve/
+    SignalR broadcast) รวม **393 เทสต์ทั้ง repo** — ยืนยันเสถียร 2 รอบติดกัน
 
 **Sprint E — Frontend MVP**
 11. Next.js scaffold + PWA config

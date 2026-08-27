@@ -4,22 +4,22 @@ using DnDEz.Api.Orchestration;
 namespace DnDEz.Api.Tests.Fakes;
 
 /// <summary>
-/// Sprint D Part 2 — ห้ามเรียก Anthropic API จริงในเทสต์อัตโนมัติเด็ดขาด (ไม่มี key จริง, ไม่
+/// Sprint D Part 2/3 — ห้ามเรียก Anthropic API จริงในเทสต์อัตโนมัติเด็ดขาด (ไม่มี key จริง, ไม่
 /// deterministic, มีต้นทุนจริงเป็นเงิน) — fake ตัวนี้แทนที่ `IAnthropicClient` จริงผ่าน
 /// `WebApplicationFactory.ConfigureServices` ในทุกเทสต์ที่แตะ endpoint ที่ inject มัน
 ///
 /// พฤติกรรมกำหนดจากเนื้อหา input เอง ให้เทสต์ควบคุมผลลัพธ์ได้ตรง ๆ โดยไม่ต้อง mock framework ใด ๆ:
 ///  • `ValidateKeyAsync`: key ที่มีคำว่า "invalid" → Invalid, "unknown-outcome" → Unknown, อื่น ๆ → Valid
-///  • `SendWithSingleToolRoundTripAsync`: ข้อความสุดท้ายมีคำว่า "roll" (ไม่สนตัวพิมพ์) → เรียก
-///    tool `roll_dice` จริงผ่าน callback ที่รับมา (พิสูจน์ tool round-trip ทำงานจริง) ไม่งั้นตอบ
-///    narration เฉย ๆ ไม่เรียก tool — ถ้ามีคำว่า "malformed-tool-input" ด้วย จะส่ง input ที่ไม่มี
-///    field "expression" เลย (จำลอง input ผิดรูปแบบ) เพื่อพิสูจน์ endpoint executor จับ error
-///    แล้วตอบกลับเป็น tool_result ข้อความ ไม่ใช่โยน exception จน request ทั้งก้อนล้ม
+///  • `SendTurnAsync`: ข้อความสุดท้ายมีคำว่า "roll" (ไม่สนตัวพิมพ์) **และ** มี tool ให้เสนอ (ไม่ null —
+///    จำลอง Manual level ที่ไม่เสนอ tool เลย) → ตอบเป็น tool_use พร้อม input `{expression:"1d20+5"}`
+///    (หรือ `{}` ถ้ามีคำว่า "malformed-tool-input" ด้วย จำลอง input ผิดรูปแบบ) ไม่งั้นตอบ narration
+///    เฉย ๆ — **ไม่ execute อะไรเองเลย** ตรงตาม contract ใหม่ของ interface
+///  • `ContinueWithToolResultAsync`: ตอบ narration ที่อ้างอิงผล tool_result ที่ส่งมา (พิสูจน์ round-trip
+///    ทำงานจริง)
 /// </summary>
 public sealed class FakeAnthropicClient : IAnthropicClient
 {
-    /// <summary>เทสต์ inspect ได้ว่า history ที่ endpoint ส่งมาจริงมีอะไรบ้าง (สร้าง message
-    /// history จาก DB ถูกต้องไหม) — เก็บของ call ล่าสุดเท่านั้น</summary>
+    /// <summary>เทสต์ inspect ได้ว่า history ที่ endpoint ส่งมาจริงมีอะไรบ้าง — เก็บของ call ล่าสุด</summary>
     public IReadOnlyList<AnthropicHistoryMessage>? LastHistoryReceived { get; private set; }
 
     public Task<ApiKeyValidationOutcome> ValidateKeyAsync(string apiKey, CancellationToken cancellationToken)
@@ -35,29 +35,57 @@ public sealed class FakeAnthropicClient : IAnthropicClient
         return Task.FromResult(outcome);
     }
 
-    public async Task<AnthropicConversationResult> SendWithSingleToolRoundTripAsync(
+    public Task<AnthropicTurnResult> SendTurnAsync(
         string apiKey,
         IReadOnlyList<AnthropicHistoryMessage> history,
-        AnthropicToolDefinition tool,
-        Func<JsonElement, CancellationToken, Task<string>> executeTool,
+        AnthropicToolDefinition? tool,
         CancellationToken cancellationToken)
     {
         LastHistoryReceived = history;
         var lastText = history.Count > 0 ? history[^1].Text : string.Empty;
 
-        if (!lastText.Contains("roll", StringComparison.OrdinalIgnoreCase))
+        var emptyContent = JsonSerializer.Deserialize<JsonElement>("[]");
+
+        if (tool is null || !lastText.Contains("roll", StringComparison.OrdinalIgnoreCase))
         {
-            return new AnthropicConversationResult($"The AI narrates: {lastText}", ToolCall: null);
+            return Task.FromResult(new AnthropicTurnResult($"The AI narrates: {lastText}", ToolUse: null, emptyContent));
         }
 
         var inputJson = lastText.Contains("malformed-tool-input", StringComparison.OrdinalIgnoreCase)
             ? JsonSerializer.Serialize(new { })
             : JsonSerializer.Serialize(new { expression = "1d20+5" });
         var input = JsonSerializer.Deserialize<JsonElement>(inputJson);
-        var toolResult = await executeTool(input, cancellationToken);
+        var toolUseId = $"toolu_{Guid.NewGuid():N}";
 
-        return new AnthropicConversationResult(
-            $"You roll the dice... {toolResult}. The outcome is decided!",
-            new AnthropicToolCallRecord(tool.Name, input, toolResult));
+        // จำลอง raw content array ของ Anthropic จริง (text block + tool_use block) — เก็บเป็น
+        // JsonElement ตรง ๆ เพื่อให้ ContinueWithToolResultAsync echo กลับได้เหมือนของจริง
+        var rawContentJson = JsonSerializer.Serialize(new object[]
+        {
+            new { type = "text", text = "Let me roll for that." },
+            new { type = "tool_use", id = toolUseId, name = tool.Name, input },
+        });
+        var rawContent = JsonSerializer.Deserialize<JsonElement>(rawContentJson);
+
+        return Task.FromResult(new AnthropicTurnResult(
+            "Let me roll for that.",
+            new AnthropicPendingToolUse(toolUseId, tool.Name, input),
+            rawContent));
+    }
+
+    public Task<AnthropicTurnResult> ContinueWithToolResultAsync(
+        string apiKey,
+        IReadOnlyList<AnthropicHistoryMessage> history,
+        AnthropicToolDefinition tool,
+        JsonElement rawAssistantContent,
+        string toolUseId,
+        string toolResultText,
+        CancellationToken cancellationToken)
+    {
+        LastHistoryReceived = history;
+        var emptyContent = JsonSerializer.Deserialize<JsonElement>("[]");
+        return Task.FromResult(new AnthropicTurnResult(
+            $"You roll the dice... {toolResultText}. The outcome is decided!",
+            ToolUse: null,
+            emptyContent));
     }
 }

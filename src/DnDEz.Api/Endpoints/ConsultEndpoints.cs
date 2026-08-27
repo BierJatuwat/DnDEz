@@ -2,43 +2,55 @@ using System.Security.Claims;
 using System.Text.Json;
 using DnDEz.Api.Auth;
 using DnDEz.Api.Orchestration;
+using DnDEz.Api.Realtime;
 using DnDEz.Domain.Entities;
 using DnDEz.Domain.Enums;
 using DnDEz.Infrastructure.Persistence;
 using DnDEz.Rules;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 
 namespace DnDEz.Api.Endpoints;
 
 /// <summary>
-/// Sprint D Part 2 — tool-calling loop skeleton: narration → tool_use (roll_dice) → tool_result →
-/// narration จบ loop ได้จริง โดยใช้คีย์ BYOK ของ DM (Part 1) **ยังไม่มี approval gate เลย — tool call
-/// auto-allow เสมอ (gate จริงเป็นของ Part 3 ที่จะผูกกับ `AutonomySetting`)**
+/// Sprint D Part 2/3 — tool-calling loop + approval gate: narration → tool_use (roll_dice) → (ตัดสิน
+/// จาก `AutonomySetting` ว่า auto-execute ทันทีหรือรอ DM approve ก่อน) → tool_result → narration
 ///
 /// contract เต็มอยู่ใน <c>tests/DnDEz.Api.Tests/ConsultEndpointsTests.cs</c> — ห้ามแก้เทสต์เพื่อให้ผ่าน
 ///
-/// ขอบเขตที่ตั้งใจแคบ (skeleton เท่านั้น — ดู PROJECT-CONTEXT §4 "Sprint D" Part 2):
-///  • **จำกัดผู้เรียกไว้แค่ DM (campaign owner) เท่านั้น** — เหตุผลไม่ใช่แค่ product design
-///    ("quick play ใช้ key ของ DM เท่านั้น" ตาม dm-side-design.md §7) แต่เป็นเหตุผลทาง RLS ล้วน ๆ:
-///    RLS ของ `api_keys` (`own_rows_only`) กรองด้วย `app.user_id` ของ**ผู้เรียก** เท่านั้น ถ้าเปิดให้
-///    player ทั่วไปเรียก endpoint นี้แล้วให้ระบบไปอ่าน "key ของ DM" (คนละ user_id) query จะโดน RLS
-///    กรองจนว่างเปล่าเสมอไม่ว่า WHERE จะเขียนถูกแค่ไหน (เว้นแต่จะทำ SECURITY DEFINER function แบบ
-///    `app_create_campaign()` ซึ่งเกินขอบเขต skeleton — ถ้าจะเปิดให้ player เรียกได้ในอนาคตต้องออกแบบ
-///    เรื่องนี้ก่อน ไม่ใช่แค่ลบเงื่อนไข caller==owner ทิ้ง)
-///  • **จำกัด 1 รอบ tool round-trip เท่านั้น** (`IAnthropicClient.SendWithSingleToolRoundTripAsync`) —
-///    ยังไม่ใช่ agentic loop เต็มรูปที่ Claude เรียก tool ต่อเนื่องได้หลายครั้งในเทิร์นเดียว
-///  • เรียก Anthropic จริงไม่ได้ในเทสต์อัตโนมัติ (ไม่มี key จริง/ไม่ deterministic/มีต้นทุนจริง) —
-///    เทสต์ทั้งหมดสลับ `IAnthropicClient` เป็น fake ผ่าน `WebApplicationFactory` (ดู
-///    tests/DnDEz.Api.Tests/Fakes/FakeAnthropicClient.cs) ไม่มีการยิง HTTP ออกไปจริงในเทสต์เลย
+/// ขอบเขต (ดู PROJECT-CONTEXT §4 "Sprint D" Part 2/3):
+///  • **จำกัดผู้เรียกไว้แค่ DM (campaign owner) เท่านั้น** ทั้ง consult และ resolve-proposal —
+///    เหตุผลไม่ใช่แค่ product design ("quick play ใช้ key ของ DM เท่านั้น" ตาม dm-side-design.md §7)
+///    แต่เป็นเหตุผลทาง RLS ล้วน ๆ: RLS ของ `api_keys` (`own_rows_only`) กรองด้วย `app.user_id` ของ
+///    **ผู้เรียก** เท่านั้น ถ้าเปิดให้ player เรียกได้ query หา "key ของ DM" จะโดน RLS กรองว่างเปล่า
+///    เสมอ (เว้นแต่ทำ `SECURITY DEFINER` function แบบ `app_create_campaign()` ซึ่งเกินขอบเขต skeleton)
+///  • **จำกัด 1 รอบ tool round-trip เท่านั้น** ต่อการ resolve หนึ่งครั้ง — ยังไม่ใช่ agentic loop
+///    เต็มรูปที่ Claude เรียก tool ต่อเนื่องได้หลายครั้งในเทิร์นเดียว
+///  • เรียก Anthropic จริงไม่ได้ในเทสต์อัตโนมัติ — เทสต์ทั้งหมดสลับ `IAnthropicClient` เป็น fake
+///    (ดู tests/DnDEz.Api.Tests/Fakes/FakeAnthropicClient.cs) ไม่มีการยิง HTTP ออกไปจริงในเทสต์เลย
+///
+/// **Approval gate (Part 3)** — ผูกกับ `AutonomySetting.Subsystem = RulesCombat` ของแคมเปญ:
+///  • ไม่มีแถว `AutonomySetting` เลย (ยังไม่เคยตั้งค่า) → ถือว่าเป็น `Suggest` (default เดียวกับที่
+///    entity ประกาศไว้เอง — campaign ใหม่ทุกอันยังไม่ seed แถวนี้ให้ตั้งแต่ Sprint A จึงเป็น default
+///    จริงของทุกแคมเปญตอนนี้)
+///  • `Manual` → ไม่เสนอ tool `roll_dice` ให้ Claude เห็นเลย (Claude ตอบ narration ล้วน ๆ ไม่มีทาง
+///    เรียก tool ได้แม้จะอยากทำ)
+///  • `Suggest` → ถ้า Claude อยากเรียก tool จะ**ไม่ execute ทันที** สร้างเป็น `Proposal` (Pending)
+///    แทน + broadcast แจ้ง DM console ผ่าน SignalR (`ProposalCreated`) DM ต้องเรียก
+///    `POST .../proposals/{id}/resolve` เองถึงจะ execute จริง — narration ที่ Claude พูดก่อนจะ
+///    เรียก tool (ถ้ามี) เก็บไว้เป็น `Proposal.Reason` ให้ DM เห็นบริบท
+///  • `Autonomous` → execute ทันทีเหมือน Part 2 เดิม ไม่ต้องรอใคร confirm
 ///
 /// จุดที่ห้ามพลาด:
 ///  • roll_dice ที่ AI เรียกต้อง persist เป็นแถว `dice_rolls` จริงเหมือนทุกการทอยในระบบนี้ (PROJECT-
 ///    CONTEXT §3 ข้อบังคับสถาปัตยกรรม "RNG อยู่ฝั่ง server + เก็บ seed") — ห้ามข้าม DiceEngine ไปคำนวณ
-///    เองแบบ ad-hoc และห้าม seed หลุดเข้า tool_result/ToolCalls jsonb/response เด็ดขาด
-///  • expression ที่ AI ส่งมาผิดรูปแบบ (`DiceExpressionException`) ต้องกลายเป็น tool_result ข้อความ
-///    error ส่งกลับให้ Claude เห็นเอง (ให้ตอบสนอง/ขอโทษ narration ต่อได้) ไม่ใช่โยน exception จน
-///    request ทั้งก้อนล้ม 500 — ตรงกับพฤติกรรม tool-use จริงที่ tool อาจ fail แล้ว model ต้องรับมือเอง
+///    เองแบบ ad-hoc และห้าม seed หลุดเข้า tool_result/ToolCalls jsonb/response เด็ดขาด **รวมถึงตอน
+///    Suggest ด้วย — ห้ามทอยดักไว้ล่วงหน้าตอนสร้าง Proposal เด็ดขาด (ยังไม่รู้ผลจนกว่า DM จะ approve
+///    จริง ไม่งั้นผลจะรั่วให้ AI/DM เห็นก่อน approve ซึ่งขัดกับความหมายของการ "รอ approve")**
+///  • expression ที่ AI ส่งมาผิดรูปแบบต้องกลายเป็น tool_result ข้อความ error ไม่ใช่โยน exception
+///  • broadcast (`ProposalCreated`) wrap ด้วย try/catch log-and-swallow เหมือนที่แก้ไว้ใน Sprint C
+///    Part 3 — broadcast fail ต้องไม่ทำให้ Proposal ที่ persist สำเร็จไปแล้วถูก rollback
 /// </summary>
 public static class ConsultEndpoints
 {
@@ -74,8 +86,14 @@ public static class ConsultEndpoints
             ClaimsPrincipal principal,
             DnDEzDbContext db,
             IDataProtectionProvider dataProtectionProvider,
-            IAnthropicClient anthropicClient) =>
+            IAnthropicClient anthropicClient,
+            IHubContext<CampaignHub> hubContext,
+            ILoggerFactory loggerFactory) =>
         {
+            // ConsultEndpoints เป็น static class จึงใช้เป็น type argument ของ ILogger<T> ไม่ได้
+            // (CS0718) — สร้าง logger ผ่าน ILoggerFactory.CreateLogger(Type) แทน (เหมือน CombatEndpoints)
+            var logger = loggerFactory.CreateLogger(typeof(ConsultEndpoints));
+
             if (string.IsNullOrWhiteSpace(request.Content))
             {
                 return Results.BadRequest();
@@ -99,8 +117,6 @@ public static class ConsultEndpoints
                 return Results.NotFound();
             }
 
-            // เฉพาะ DM (campaign owner) เท่านั้นที่เรียกได้ — ดู doc comment ของคลาสสำหรับเหตุผลเต็ม
-            // (ผูกกับ RLS ของ api_keys ไม่ใช่แค่ product design)
             if (campaign.OwnerUserId != callerUserId.Value)
             {
                 return Results.Forbid();
@@ -112,10 +128,7 @@ public static class ConsultEndpoints
                 return Results.NotFound();
             }
 
-            // RLS own_rows_only ยอมให้ query นี้ผ่านได้เพราะ caller ยืนยันแล้วว่า == campaign owner
-            // (app.user_id ของ caller เท่ากับ user_id ของแถวที่ query หา)
-            var apiKey = await db.ApiKeys.SingleOrDefaultAsync(
-                k => k.UserId == callerUserId.Value && k.Provider == AnthropicProvider && k.Status == ApiKeyStatus.Active);
+            var apiKey = await GetActiveDmApiKeyAsync(db, callerUserId.Value);
             if (apiKey is null)
             {
                 return Results.BadRequest(new ConsultErrorResponse("dm_api_key_not_set"));
@@ -124,15 +137,10 @@ public static class ConsultEndpoints
             var protector = dataProtectionProvider.CreateProtector(ProtectorPurpose);
             var rawApiKey = protector.Unprotect(apiKey.EncryptedKey);
 
-            var existingMessages = await db.Messages
-                .Where(m => m.SessionId == sessionId)
-                .OrderBy(m => m.CreatedAt)
-                .Select(m => new { m.AuthorType, m.Content })
-                .ToListAsync();
+            var autonomyLevel = await GetEffectiveAutonomyLevelAsync(db, campaignId, AutonomySubsystem.RulesCombat);
+            var toolToOffer = autonomyLevel == AutonomyLevel.Manual ? null : RollDiceTool;
 
-            var history = existingMessages
-                .Select(m => new AnthropicHistoryMessage(m.AuthorType == MessageAuthorType.Ai ? "assistant" : "user", m.Content))
-                .ToList();
+            var history = await BuildHistoryAsync(db, sessionId);
             history.Add(new AnthropicHistoryMessage("user", content));
 
             var incomingMessage = new Message
@@ -149,44 +157,212 @@ public static class ConsultEndpoints
             };
             db.Messages.Add(incomingMessage);
 
-            var conversationResult = await anthropicClient.SendWithSingleToolRoundTripAsync(
-                rawApiKey,
-                history,
-                RollDiceTool,
-                (input, _) => Task.FromResult(ExecuteRollDice(db, sessionId, input)),
-                CancellationToken.None);
+            var firstTurn = await anthropicClient.SendTurnAsync(rawApiKey, history, toolToOffer, CancellationToken.None);
 
-            string? toolCallsJson = null;
-            ConsultToolCallResponse? toolCallResponse = null;
-            if (conversationResult.ToolCall is not null)
+            if (firstTurn.ToolUse is null)
             {
-                var toolCall = conversationResult.ToolCall;
-                toolCallsJson = JsonSerializer.Serialize(new[]
-                {
-                    new { name = toolCall.Name, input = toolCall.Input, result = toolCall.Result },
-                });
-                toolCallResponse = new ConsultToolCallResponse(toolCall.Name, toolCall.Input, toolCall.Result);
+                // Claude ตอบ narration จบเลย ไม่มี tool ให้ต้องตัดสินใจ auto/gate เลย — เหมือนกันทุก level
+                var narrationMessage = BuildAiMessage(sessionId, firstTurn.Text, toolCallsJson: null);
+                db.Messages.Add(narrationMessage);
+                await db.SaveChangesAsync();
+                return Results.Ok(new ConsultResponse(narrationMessage.Id, narrationMessage.Content, ToolCall: null, Pending: null));
             }
 
-            var aiMessage = new Message
+            if (autonomyLevel == AutonomyLevel.Suggest)
             {
-                Id = Guid.NewGuid(),
-                SessionId = sessionId,
-                AuthorType = MessageAuthorType.Ai,
-                AuthorUserId = null,
-                CharacterId = null,
-                Content = conversationResult.FinalText,
-                ToolCalls = toolCallsJson,
-                Source = ActionSource.Ai,
-                CreatedAt = DateTimeOffset.UtcNow,
-            };
+                var proposal = new Proposal
+                {
+                    Id = Guid.NewGuid(),
+                    SessionId = sessionId,
+                    Subsystem = AutonomySubsystem.RulesCombat,
+                    ToolCallJson = JsonSerializer.Serialize(new PendingProposalPayload(
+                        firstTurn.ToolUse.Name,
+                        firstTurn.ToolUse.Input,
+                        firstTurn.ToolUse.Id,
+                        firstTurn.RawAssistantContent,
+                        history)),
+                    Reason = string.IsNullOrWhiteSpace(firstTurn.Text) ? null : firstTurn.Text,
+                    Status = ProposalStatus.Pending,
+                    CreatedAt = DateTimeOffset.UtcNow,
+                };
+                db.Proposals.Add(proposal);
+                await db.SaveChangesAsync();
+
+                try
+                {
+                    await hubContext.Clients.Group(CampaignHub.GroupName(campaignId)).SendAsync(
+                        "ProposalCreated",
+                        new ProposalCreatedBroadcast(
+                            proposal.Id, sessionId, proposal.Subsystem.ToString(),
+                            firstTurn.ToolUse.Name, firstTurn.ToolUse.Input, proposal.Reason));
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Failed to broadcast ProposalCreated for proposal {ProposalId}", proposal.Id);
+                }
+
+                return Results.Ok(new ConsultResponse(
+                    MessageId: null, Content: firstTurn.Text, ToolCall: null,
+                    Pending: new ConsultPendingResponse(proposal.Id, firstTurn.ToolUse.Name, firstTurn.ToolUse.Input)));
+            }
+
+            // Autonomous — execute ทันที (Manual ไม่มีทางมาถึงบรรทัดนี้ได้เลยเพราะไม่เสนอ tool ให้ตั้งแต่ต้น)
+            var toolResult = ExecuteRollDice(db, sessionId, firstTurn.ToolUse.Input);
+            var secondTurn = await anthropicClient.ContinueWithToolResultAsync(
+                rawApiKey, history, RollDiceTool, firstTurn.RawAssistantContent,
+                firstTurn.ToolUse.Id, toolResult, CancellationToken.None);
+
+            var toolCallResponse = new ConsultToolCallResponse(firstTurn.ToolUse.Name, firstTurn.ToolUse.Input, toolResult);
+            var toolCallsJson = JsonSerializer.Serialize(new[]
+            {
+                new { name = toolCallResponse.Name, input = toolCallResponse.Input, result = toolCallResponse.Result },
+            });
+
+            var aiMessage = BuildAiMessage(sessionId, secondTurn.Text, toolCallsJson);
             db.Messages.Add(aiMessage);
+            await db.SaveChangesAsync();
+
+            return Results.Ok(new ConsultResponse(aiMessage.Id, aiMessage.Content, toolCallResponse, Pending: null));
+        }).RequireAuthorization();
+
+        app.MapPost("/campaigns/{campaignId:guid}/proposals/{proposalId:guid}/resolve", async (
+            Guid campaignId,
+            Guid proposalId,
+            ResolveProposalRequest request,
+            ClaimsPrincipal principal,
+            DnDEzDbContext db,
+            IDataProtectionProvider dataProtectionProvider,
+            IAnthropicClient anthropicClient) =>
+        {
+            if (request.Action != "approve" && request.Action != "reject")
+            {
+                return Results.BadRequest();
+            }
+
+            var callerUserId = principal.GetUserId();
+            if (callerUserId is null)
+            {
+                return Results.Unauthorized();
+            }
+
+            var campaign = await db.Campaigns.SingleOrDefaultAsync(c => c.Id == campaignId);
+            if (campaign is null)
+            {
+                return Results.NotFound();
+            }
+
+            if (campaign.OwnerUserId != callerUserId.Value)
+            {
+                return Results.Forbid();
+            }
+
+            var proposal = await db.Proposals.SingleOrDefaultAsync(p => p.Id == proposalId);
+            if (proposal is null)
+            {
+                return Results.NotFound();
+            }
+
+            var proposalBelongsToCampaign = await db.Sessions
+                .AnyAsync(s => s.Id == proposal.SessionId && s.CampaignId == campaignId);
+            if (!proposalBelongsToCampaign)
+            {
+                return Results.NotFound();
+            }
+
+            if (proposal.Status != ProposalStatus.Pending)
+            {
+                return Results.Conflict();
+            }
+
+            if (request.Action == "reject")
+            {
+                proposal.Status = ProposalStatus.Rejected;
+                proposal.ResolvedByUserId = callerUserId.Value;
+                proposal.ResolvedAt = DateTimeOffset.UtcNow;
+                await db.SaveChangesAsync();
+                return Results.Ok(new ProposalResolutionResponse(
+                    proposal.Id, proposal.Status.ToString(), MessageId: null, Content: null, ToolCall: null));
+            }
+
+            var apiKey = await GetActiveDmApiKeyAsync(db, callerUserId.Value);
+            if (apiKey is null)
+            {
+                return Results.BadRequest(new ConsultErrorResponse("dm_api_key_not_set"));
+            }
+
+            var protector = dataProtectionProvider.CreateProtector(ProtectorPurpose);
+            var rawApiKey = protector.Unprotect(apiKey.EncryptedKey);
+
+            var payload = JsonSerializer.Deserialize<PendingProposalPayload>(proposal.ToolCallJson)
+                ?? throw new InvalidOperationException("Proposal.ToolCallJson parse ไม่ได้ — ข้อมูลเสียหาย");
+
+            var toolResult = ExecuteRollDice(db, proposal.SessionId, payload.ToolInput);
+            var secondTurn = await anthropicClient.ContinueWithToolResultAsync(
+                rawApiKey, payload.History, RollDiceTool, payload.RawAssistantContent,
+                payload.ToolUseId, toolResult, CancellationToken.None);
+
+            var toolCallResponse = new ConsultToolCallResponse(payload.ToolName, payload.ToolInput, toolResult);
+            var toolCallsJson = JsonSerializer.Serialize(new[]
+            {
+                new { name = toolCallResponse.Name, input = toolCallResponse.Input, result = toolCallResponse.Result },
+            });
+
+            var aiMessage = BuildAiMessage(proposal.SessionId, secondTurn.Text, toolCallsJson);
+            db.Messages.Add(aiMessage);
+
+            proposal.Status = ProposalStatus.Approved;
+            proposal.ResolvedByUserId = callerUserId.Value;
+            proposal.ResolvedAt = DateTimeOffset.UtcNow;
 
             await db.SaveChangesAsync();
 
-            return Results.Ok(new ConsultResponse(aiMessage.Id, aiMessage.Content, toolCallResponse));
+            return Results.Ok(new ProposalResolutionResponse(
+                proposal.Id, proposal.Status.ToString(), aiMessage.Id, aiMessage.Content, toolCallResponse));
         }).RequireAuthorization();
     }
+
+    private static async Task<ApiKey?> GetActiveDmApiKeyAsync(DnDEzDbContext db, Guid dmUserId) =>
+        // RLS own_rows_only ยอมให้ query นี้ผ่านได้ก็ต่อเมื่อ caller (app.user_id) == dmUserId เท่านั้น
+        // — caller ที่เรียกมาถึงจุดนี้ต้องเป็น campaign owner ที่ verify แล้วเสมอ (ดู doc comment คลาส)
+        await db.ApiKeys.SingleOrDefaultAsync(
+            k => k.UserId == dmUserId && k.Provider == AnthropicProvider && k.Status == ApiKeyStatus.Active);
+
+    private static async Task<AutonomyLevel> GetEffectiveAutonomyLevelAsync(
+        DnDEzDbContext db, Guid campaignId, AutonomySubsystem subsystem)
+    {
+        var setting = await db.AutonomySettings
+            .Where(a => a.CampaignId == campaignId && a.Subsystem == subsystem)
+            .Select(a => (AutonomyLevel?)a.Level)
+            .SingleOrDefaultAsync();
+        // ไม่มีแถว = ยังไม่เคยตั้งค่า — default เดียวกับที่ entity ประกาศไว้เอง (ดู doc comment คลาส)
+        return setting ?? AutonomyLevel.Suggest;
+    }
+
+    private static async Task<List<AnthropicHistoryMessage>> BuildHistoryAsync(DnDEzDbContext db, Guid sessionId)
+    {
+        var existingMessages = await db.Messages
+            .Where(m => m.SessionId == sessionId)
+            .OrderBy(m => m.CreatedAt)
+            .Select(m => new { m.AuthorType, m.Content })
+            .ToListAsync();
+
+        return existingMessages
+            .Select(m => new AnthropicHistoryMessage(m.AuthorType == MessageAuthorType.Ai ? "assistant" : "user", m.Content))
+            .ToList();
+    }
+
+    private static Message BuildAiMessage(Guid sessionId, string content, string? toolCallsJson) => new()
+    {
+        Id = Guid.NewGuid(),
+        SessionId = sessionId,
+        AuthorType = MessageAuthorType.Ai,
+        AuthorUserId = null,
+        CharacterId = null,
+        Content = content,
+        ToolCalls = toolCallsJson,
+        Source = ActionSource.Ai,
+        CreatedAt = DateTimeOffset.UtcNow,
+    };
 
     /// <summary>
     /// executor ของ tool `roll_dice` — persist เป็น DiceRoll จริงเสมอ (ไม่มีทาง skip ได้ตาม
@@ -205,8 +381,6 @@ public static class ConsultEndpoints
             // KeyNotFoundException = ไม่มี field "expression" เลย, InvalidOperationException =
             // input ไม่ใช่ JSON object หรือ "expression" ไม่ใช่ string — ทั้งคู่ต้องกลายเป็น
             // tool_result ข้อความ error ธรรมดา ไม่ใช่โยนขึ้นไปจน request ทั้งก้อนล้ม 500
-            // (ปกติ Anthropic validate ตาม input_schema ก่อนเรียก tool เสมออยู่แล้ว แต่ไม่ควรพึ่ง
-            // สัญญานั้นอย่างเดียวสำหรับ input จากภายนอก)
             return "Error: missing or malformed required \"expression\" field.";
         }
 
@@ -253,5 +427,25 @@ internal record ConsultErrorResponse(string Error);
 
 internal record ConsultToolCallResponse(string Name, JsonElement Input, string Result);
 
-/// <summary>ไม่มี Seed หรือ raw API key ในนี้เด็ดขาด</summary>
-internal record ConsultResponse(Guid MessageId, string Content, ConsultToolCallResponse? ToolCall);
+internal record ConsultPendingResponse(Guid ProposalId, string ToolName, JsonElement ToolInput);
+
+/// <summary>ไม่มี Seed หรือ raw API key ในนี้เด็ดขาด — MessageId/ToolCall เป็น null ตอน Pending
+/// (ยังไม่มี narration สุดท้ายจนกว่า DM จะ resolve)</summary>
+internal record ConsultResponse(Guid? MessageId, string Content, ConsultToolCallResponse? ToolCall, ConsultPendingResponse? Pending);
+
+internal record ResolveProposalRequest(string? Action);
+
+internal record ProposalResolutionResponse(
+    Guid ProposalId, string Status, Guid? MessageId, string? Content, ConsultToolCallResponse? ToolCall);
+
+/// <summary>เก็บใน Proposal.ToolCallJson ระหว่างรอ DM approve — ต้องมีครบทุกอย่างที่ต้องใช้ resume
+/// บทสนทนาต่อได้โดยไม่ต้องพึ่ง state อื่นที่อาจเปลี่ยนไปแล้วระหว่างรอ (เช่น messages ใหม่ที่เพิ่มมาคั่น)</summary>
+internal record PendingProposalPayload(
+    string ToolName,
+    JsonElement ToolInput,
+    string ToolUseId,
+    JsonElement RawAssistantContent,
+    List<AnthropicHistoryMessage> History);
+
+internal record ProposalCreatedBroadcast(
+    Guid ProposalId, Guid SessionId, string Subsystem, string ToolName, JsonElement ToolInput, string? Reason);
