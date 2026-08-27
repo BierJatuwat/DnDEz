@@ -138,9 +138,19 @@ export function CampaignConsole() {
       );
     });
 
-    connection.onreconnecting(() => setHubStatus("connecting"));
+    connection.onreconnecting(() => {
+      // reconnect ของ @microsoft/signalr เปิด connection ใหม่ (ConnectionId ใหม่) — group
+      // membership ฝั่ง server (Groups.AddToGroupAsync ผูกกับ ConnectionId เดิม) หายไปด้วย
+      // เคลียร์ joinedCampaignId ให้ join effect ด้านล่างเห็นว่ายังไม่ได้ join แล้ว rejoin ให้เอง
+      // หลัง reconnect สำเร็จ (ไม่งั้น broadcast จะเงียบหายไปเฉย ๆ โดยที่ hubStatus ยังโชว์ connected)
+      setJoinedCampaignId(null);
+      setHubStatus("connecting");
+    });
     connection.onreconnected(() => setHubStatus("connected"));
-    connection.onclose(() => setHubStatus("disconnected"));
+    connection.onclose(() => {
+      setJoinedCampaignId(null);
+      setHubStatus("disconnected");
+    });
 
     setHubStatus("connecting");
     connection
