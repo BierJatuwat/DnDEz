@@ -190,7 +190,14 @@ public static class ConsultEndpoints
 
                 try
                 {
-                    await hubContext.Clients.Group(CampaignHub.GroupName(campaignId)).SendAsync(
+                    // security review (Sprint E Part 2): เดิมยิงเข้า Clients.Group(CampaignHub.GroupName)
+                    // ซึ่งทุกสมาชิกแคมเปญ (ไม่ใช่แค่ DM) join ได้ผ่าน JoinCampaign — ทำให้ player เห็น
+                    // proposal เต็ม (tool input + reason) ผ่าน realtime ทั้งที่ REST (GET/consult/resolve)
+                    // ทุกตัวบังคับ DM-only แล้ว ขัดกับ locked decision "ผู้เล่นไม่เห็นคิว proposal" ตรง ๆ —
+                    // เปลี่ยนเป็น Clients.User(dmUserId) ยิงตรงเฉพาะ connection ของ DM เท่านั้น ใช้ได้ทันที
+                    // เพราะ JwtTokenIssuer ใส่ ClaimTypes.NameIdentifier ไว้แล้วและไม่มี custom
+                    // IUserIdProvider ลงทะเบียน — SignalR default IUserIdProvider จึงอ่าน user id ได้ตรง
+                    await hubContext.Clients.User(campaign.OwnerUserId.ToString()).SendAsync(
                         "ProposalCreated",
                         new ProposalCreatedBroadcast(
                             proposal.Id, sessionId, proposal.Subsystem.ToString(),

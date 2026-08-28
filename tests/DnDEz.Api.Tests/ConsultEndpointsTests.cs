@@ -461,6 +461,43 @@ public class ConsultEndpointsTests : IAsyncLifetime
         await connection.StopAsync();
     }
 
+    [Fact]
+    public async Task Consult_pending_proposal_broadcasts_only_to_dm_not_other_campaign_members()
+    {
+        // security review (Sprint E Part 2): ProposalCreated เดิมยิงเข้าทั้ง campaign group ทำให้
+        // player เห็น proposal เต็ม (tool input + reason) ได้ผ่าน realtime ขัดกับ locked decision
+        // "ผู้เล่นไม่เห็นคิว proposal" ตรง ๆ — เทสต์นี้ยืนยันว่า DM ยังได้ broadcast จริง (พิสูจน์ว่า
+        // round-trip ทำงานจริง ไม่ใช่แค่ connection หลุด) ในขณะที่ player ที่ join group เดียวกัน
+        // (ผ่าน CampaignHub ตามปกติ) ไม่ได้รับเลยแม้รอเวลาให้พอ
+        await using var dmConnection = BuildConnection(_dmToken);
+        await using var playerConnection = BuildConnection(_playerToken);
+
+        var dmReceived = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        dmConnection.On<JsonElement>("ProposalCreated", payload => dmReceived.TrySetResult(payload));
+        var playerReceivedAnything = false;
+        playerConnection.On<JsonElement>("ProposalCreated", _ => playerReceivedAnything = true);
+
+        await dmConnection.StartAsync();
+        await playerConnection.StartAsync();
+        await dmConnection.InvokeAsync("JoinCampaign", _campaignSuggestId);
+        await playerConnection.InvokeAsync("JoinCampaign", _campaignSuggestId);
+
+        var response = await AuthedClient(_dmToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignSuggestId}/sessions/{_sessionSuggestId}/consult",
+            new { Content = "Time to roll — only the DM should see this proposal come in live." });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var completed = await Task.WhenAny(dmReceived.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+        Assert.Same(dmReceived.Task, completed); // พิสูจน์ว่า broadcast pipe ทำงานจริง ไม่ใช่แค่เงียบทั้งคู่
+
+        // ให้เวลา player connection พอจะรับได้ถ้าจะรับจริง กัน false negative จาก timing
+        await Task.Delay(TimeSpan.FromSeconds(1));
+        Assert.False(playerReceivedAnything);
+
+        await dmConnection.StopAsync();
+        await playerConnection.StopAsync();
+    }
+
     // ── resolve proposal ─────────────────────────────────────────────────
 
     [Fact]
