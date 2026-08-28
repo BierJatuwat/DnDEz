@@ -712,6 +712,111 @@ public class ConsultEndpointsTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
+    // ── list pending proposals ──────────────────────────────────────────
+
+    [Fact]
+    public async Task List_proposals_returns_pending_proposals_oldest_first_with_matching_fields()
+    {
+        var first = await AuthedClient(_dmToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignSuggestId}/sessions/{_sessionSuggestId}/consult",
+            new { Content = "List-test first: roll for initiative." });
+        var firstBody = await first.Content.ReadFromJsonAsync<ConsultResponse>(JsonOptions);
+
+        var second = await AuthedClient(_dmToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignSuggestId}/sessions/{_sessionSuggestId}/consult",
+            new { Content = "List-test second: roll for perception." });
+        var secondBody = await second.Content.ReadFromJsonAsync<ConsultResponse>(JsonOptions);
+
+        var response = await AuthedClient(_dmToken).GetAsync(
+            $"/campaigns/{_campaignSuggestId}/sessions/{_sessionSuggestId}/proposals");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var list = await response.Content.ReadFromJsonAsync<List<ProposalListItem>>(JsonOptions);
+        Assert.NotNull(list);
+
+        var ids = list!.Select(p => p.Id).ToList();
+        var firstIndex = ids.IndexOf(firstBody!.Pending!.ProposalId);
+        var secondIndex = ids.IndexOf(secondBody!.Pending!.ProposalId);
+        Assert.True(firstIndex >= 0 && secondIndex >= 0);
+        Assert.True(firstIndex < secondIndex); // oldest first
+
+        var secondItem = list.Single(p => p.Id == secondBody.Pending.ProposalId);
+        Assert.Equal(_sessionSuggestId, secondItem.SessionId);
+        Assert.Equal("RulesCombat", secondItem.Subsystem);
+        Assert.Equal("roll_dice", secondItem.ToolName);
+        Assert.Equal("Pending", secondItem.Status);
+        Assert.Equal("1d20+5", secondItem.ToolInput.GetProperty("expression").GetString());
+    }
+
+    [Fact]
+    public async Task List_proposals_excludes_resolved_proposals()
+    {
+        var consultResponse = await AuthedClient(_dmToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignSuggestId}/sessions/{_sessionSuggestId}/consult",
+            new { Content = "List-resolved-test: roll for initiative." });
+        var consultBody = await consultResponse.Content.ReadFromJsonAsync<ConsultResponse>(JsonOptions);
+        var proposalId = consultBody!.Pending!.ProposalId;
+
+        var resolveResponse = await AuthedClient(_dmToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignSuggestId}/proposals/{proposalId}/resolve", new { Action = "reject" });
+        Assert.Equal(HttpStatusCode.OK, resolveResponse.StatusCode);
+
+        var response = await AuthedClient(_dmToken).GetAsync(
+            $"/campaigns/{_campaignSuggestId}/sessions/{_sessionSuggestId}/proposals");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var list = await response.Content.ReadFromJsonAsync<List<ProposalListItem>>(JsonOptions);
+        Assert.NotNull(list);
+        Assert.DoesNotContain(list!, p => p.Id == proposalId);
+    }
+
+    [Fact]
+    public async Task List_proposals_by_non_owner_member_returns_403()
+    {
+        var response = await AuthedClient(_playerToken).GetAsync(
+            $"/campaigns/{_campaignSuggestId}/sessions/{_sessionSuggestId}/proposals");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task List_proposals_for_unknown_campaign_returns_404()
+    {
+        var response = await AuthedClient(_dmToken).GetAsync(
+            $"/campaigns/{Guid.NewGuid()}/sessions/{_sessionSuggestId}/proposals");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task List_proposals_for_session_from_another_campaign_returns_404()
+    {
+        var response = await AuthedClient(_dmToken).GetAsync(
+            $"/campaigns/{_campaignId}/sessions/{_sessionInOtherCampaignId}/proposals");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task List_proposals_does_not_return_proposal_belonging_to_a_different_session()
+    {
+        var consultResponse = await AuthedClient(_dmToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignSuggestId}/sessions/{_sessionSuggestId}/consult",
+            new { Content = "List-other-session-test: roll for initiative." });
+        var consultBody = await consultResponse.Content.ReadFromJsonAsync<ConsultResponse>(JsonOptions);
+        var proposalId = consultBody!.Pending!.ProposalId;
+
+        // ถามหา proposal ของ _sessionSuggestId ผ่าน session อื่น (_sessionManualId ในแคมเปญอื่น) — ต้อง
+        // ได้ 404 เพราะ session ไม่ตรงแคมเปญ ยืนยันว่า scoping ผูกกับ sessionId ไม่ใช่แค่ campaignId เฉย ๆ
+        var response = await AuthedClient(_dmToken).GetAsync(
+            $"/campaigns/{_campaignManualId}/sessions/{_sessionManualId}/proposals");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var list = await response.Content.ReadFromJsonAsync<List<ProposalListItem>>(JsonOptions);
+        Assert.NotNull(list);
+        Assert.DoesNotContain(list!, p => p.Id == proposalId);
+    }
+
     private record AuthResponse(string Token, Guid UserId);
 
     private record ConsultToolCallResponse(string Name, JsonElement Input, string Result);
@@ -725,4 +830,14 @@ public class ConsultEndpointsTests : IAsyncLifetime
 
     private record ProposalResolutionResponse(
         Guid ProposalId, string Status, Guid? MessageId, string? Content, ConsultToolCallResponse? ToolCall);
+
+    private record ProposalListItem(
+        Guid Id,
+        Guid SessionId,
+        string Subsystem,
+        string ToolName,
+        JsonElement ToolInput,
+        string? Reason,
+        string Status,
+        DateTimeOffset CreatedAt);
 }

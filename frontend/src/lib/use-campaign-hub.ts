@@ -18,6 +18,7 @@ export function useCampaignHub({
   onJoinedChange,
   onLog,
   onDiceRolled,
+  onProposalCreated,
 }: UseCampaignHubOptions) {
   const managerRef = useRef<CampaignHubManager | null>(null);
 
@@ -30,6 +31,7 @@ export function useCampaignHub({
       onJoinedChange,
       onLog,
       onDiceRolled,
+      onProposalCreated,
     });
     managerRef.current = manager;
     void manager.start();
@@ -38,7 +40,7 @@ export function useCampaignHub({
       void manager.stop();
       managerRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- onStatusChange/onJoinedChange/onLog/onDiceRolled เป็น zustand action/closure อ้างอิงคงที่พอในทางปฏิบัติ ไม่ต้องใส่
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onStatusChange/onJoinedChange/onLog/onDiceRolled/onProposalCreated เป็น zustand action/closure อ้างอิงคงที่พอในทางปฏิบัติ ไม่ต้องใส่
   }, [token]);
 
   useEffect(() => {

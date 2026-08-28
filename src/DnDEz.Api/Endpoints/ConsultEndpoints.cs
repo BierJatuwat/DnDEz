@@ -346,6 +346,54 @@ public static class ConsultEndpoints
             return Results.Ok(new ProposalResolutionResponse(
                 proposal.Id, ProposalStatus.Approved.ToString(), aiMessage.Id, aiMessage.Content, toolCallResponse));
         }).RequireAuthorization();
+
+        app.MapGet("/campaigns/{campaignId:guid}/sessions/{sessionId:guid}/proposals", async (
+            Guid campaignId,
+            Guid sessionId,
+            ClaimsPrincipal principal,
+            DnDEzDbContext db) =>
+        {
+            var callerUserId = principal.GetUserId();
+            if (callerUserId is null)
+            {
+                return Results.Unauthorized();
+            }
+
+            var campaign = await db.Campaigns.SingleOrDefaultAsync(c => c.Id == campaignId);
+            if (campaign is null)
+            {
+                return Results.NotFound();
+            }
+
+            // DM-only เหมือน consult/resolve ในไฟล์นี้ — ผู้เล่นห้ามเห็นคิว proposal แม้แต่ empty list
+            // ที่แยกแยะได้จาก "ไม่มี proposal" (locked design decision — ดู doc comment คลาส)
+            if (campaign.OwnerUserId != callerUserId.Value)
+            {
+                return Results.Forbid();
+            }
+
+            var sessionExists = await db.Sessions.AnyAsync(s => s.Id == sessionId && s.CampaignId == campaignId);
+            if (!sessionExists)
+            {
+                return Results.NotFound();
+            }
+
+            var pendingProposals = await db.Proposals
+                .Where(p => p.SessionId == sessionId && p.Status == ProposalStatus.Pending)
+                .OrderBy(p => p.CreatedAt)
+                .ToListAsync();
+
+            var list = pendingProposals.Select(p =>
+            {
+                var payload = JsonSerializer.Deserialize<PendingProposalPayload>(p.ToolCallJson)
+                    ?? throw new InvalidOperationException("Proposal.ToolCallJson parse ไม่ได้ — ข้อมูลเสียหาย");
+                return new ProposalListItem(
+                    p.Id, p.SessionId, p.Subsystem.ToString(), payload.ToolName, payload.ToolInput,
+                    p.Reason, p.Status.ToString(), p.CreatedAt);
+            }).ToList();
+
+            return Results.Ok(list);
+        }).RequireAuthorization();
     }
 
     private static async Task<ApiKey?> GetActiveDmApiKeyAsync(DnDEzDbContext db, Guid dmUserId) =>
@@ -476,3 +524,16 @@ internal record PendingProposalPayload(
 
 internal record ProposalCreatedBroadcast(
     Guid ProposalId, Guid SessionId, string Subsystem, string ToolName, JsonElement ToolInput, string? Reason);
+
+/// <summary>รายการ item ของ GET .../proposals — shape ใกล้เคียง <see cref="ProposalCreatedBroadcast"/>
+/// โดยตั้งใจ (ให้ live broadcast กับ list ตอน reload เห็นข้อมูลหน้าตาเดียวกัน) แต่เพิ่ม Status/CreatedAt
+/// เข้ามาเพราะเป็น list ของหลายแถวที่ต้องเรียงลำดับ/แสดงสถานะได้</summary>
+internal record ProposalListItem(
+    Guid Id,
+    Guid SessionId,
+    string Subsystem,
+    string ToolName,
+    JsonElement ToolInput,
+    string? Reason,
+    string Status,
+    DateTimeOffset CreatedAt);

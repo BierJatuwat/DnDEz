@@ -782,7 +782,65 @@ Part 2 DM console → Part 3 player action input
     - เพิ่มเทสต์ `console-store.test.ts` คู่กัน (log cap ที่ 50 แถว, เลือกแคมเปญใหม่ล้าง session)
     - 9/9 เทสต์ผ่าน + `tsc --noEmit`/`lint`/`build` สะอาด + ทดสอบซ้ำผ่าน browser จริงยืนยันพฤติกรรม
       ไม่เปลี่ยนหลัง refactor (join/roll dice ยังทำงานถูกต้อง)
-- **Part 2** — DM console แบบเต็ม (proposal queue/resolve, approval gate UI) — ยังไม่เริ่ม
+- **Part 2** ✅ **เสร็จ 2026-08-28** — character list/create + consult AI panel + proposal queue
+  (approve/reject) ผ่าน decision framework ว่าแตกเป็นส่วนอิสระได้จริง (ไม่เหมือน Part 1 ที่ต้องทำเอง)
+  → เข้า routing ปกติ: dispatch `sonnet-worker` สำหรับ backend endpoint ใหม่ (แก้ไฟล์เดิม) คู่ขนานกับ
+  `opus-worker` สำหรับ frontend (ต้องสร้างไฟล์ใหม่หลายไฟล์ — ตามบทเรียน Sprint A Part 2 ข้าม
+  sonnet-worker ไปเลยสำหรับงานสร้างไฟล์)
+  - **backend เพิ่ม `GET /campaigns/{id}/sessions/{id}/proposals`** (DM-only, กรอง `Status=Pending`,
+    เรียง `CreatedAt`) — ช่องโหว่ scope ที่ owner เจอเองระหว่างอ่าน contract ก่อน dispatch: เดิมไม่มี
+    endpoint list proposal เลย มีแค่ broadcast `ProposalCreated` ทีเดียวตอนสร้าง ถ้า DM reload หน้าจะ
+    มองไม่เห็น queue ที่ยังค้าง Pending จริงใน DB — response ดึง `ToolName`/`ToolInput` จาก
+    `Proposal.ToolCallJson` (deserialize `PendingProposalPayload`) ให้ shape ตรงกับ
+    `ProposalCreatedBroadcast` เพื่อความสอดคล้องระหว่าง REST list กับ realtime broadcast — ทดสอบจริง
+    180/180 ผ่าน (174 เดิม + 6 ใหม่ครอบ DM-only/404/exclude-resolved/session-scoping)
+  - **frontend**: character panel (list/create, TanStack Query ตาม pattern เดิม) · consult panel
+    (ส่งข้อความคุยกับ AI, แสดง narration/tool-call/pending ตามสามแบบที่ response คืนได้) · proposal
+    queue panel (fetch เริ่มต้นผ่าน GET ข้างบน + merge ของที่มาทาง `ProposalCreated` broadcast แบบ
+    realtime, approve/reject ผ่าน mutation เดิม)
+  - **แตก `src/lib/proposal-queue.ts`** (plain TS, ไม่มี React dependency) ออกจาก component ตาม
+    pattern เดียวกับ `campaign-hub-manager.ts` — `normalizeProposalCreated` narrow runtime shape ของ
+    broadcast ที่ไว้ใจไม่ได้ (มาจาก wire), `mergeProposal`/`removeProposal` dedupe + คืน reference
+    เดิมเมื่อไม่มีอะไรเปลี่ยนกัน re-render เปล่า — มี edge case จริงที่เอกสารไว้ในโค้ด: broadcast
+    กระจายทั้ง**แคมเปญ** (ไม่ใช่แค่เซสชันที่เลือกอยู่) และ handler ถูกสมัครครั้งเดียวต่อ `[token]` จึง
+    ห้ามอ่าน `selectedSessionId` จาก closure ตรง ๆ (stale) ต้องใช้ `proposal.sessionId` จาก payload
+    เป็น key แทนเสมอ
+  - **ขยาย `campaign-hub-manager.ts`**: เพิ่ม `onProposalCreated` มิเรอร์ pattern `onDiceRolled` เป๊ะ
+  - **เทสต์**: `proposal-queue.test.ts` (15 เคส ครอบ normalize/merge/remove รวม malformed-payload
+    guard), `campaign-hub-manager.test.ts` เพิ่มเทสต์ `ProposalCreated` forwarding, `console-store.ts`
+    เพิ่ม `consultInput`/`consultMessages` + เทสต์คู่กัน (log cap, ล้าง transcript ตอนเปลี่ยน session/
+    campaign)
+  - **ช่องโหว่ scope ที่แก้ไปด้วยระหว่างสร้าง**: rapid campaign-switch race ที่ code-reviewer ตั้ง
+    ข้อสังเกตไว้ตอน Part 1 round 1 (ไม่บล็อกตอนนั้น) — แก้ไปในตัวเพราะ manager ใหม่ re-read state
+    ล่าสุดทุกครั้งก่อน sync แทนที่จะพึ่ง `cancelled` flag ต่อ effect
+  - **⚠️ บทเรียนกระบวนการ (agent orchestration)**: opus-worker ที่ dispatch ไปทำ frontend ใช้เวลานาน
+    ผิดปกติ (หลายชั่วโมง, หลาย resume ติด 8-12 turn limit ซ้ำ ๆ) เพราะพยายาม self-verify ด้วยการติดตั้ง
+    Playwright เอง (ไม่มี browser tool ในตัวเอง) แทนที่จะรายงานกลับให้ owner ตรวจ — owner สั่งหยุดและ
+    ถอน Playwright ออก (ยืนยันแล้วว่า `frontend/package.json`/`node_modules` สะอาด ไม่มีร่องรอย) แล้ว
+    owner เข้าไปตรวจ/ทดสอบเองต่อจนจบ — **บทเรียน**: worker ที่ไม่มี browser tool ควรรายงานกลับทันทีที่
+    งานเขียนโค้ดเสร็จแทนที่จะพยายามหาทางอ้อมมาเทสต์เอง โดยเฉพาะการติดตั้ง dependency ใหม่เพื่อ
+    self-verify ซึ่งเกินขอบเขตงานที่สั่ง
+  - **⚠️ บทเรียนกระบวนการ (infra)**: เจอ transient failure วันนี้ 3 ชั้นซ้อนกันจากเครื่องแชร์กับ
+    worktree/session อื่นพร้อมกันหลายตัว (`git status` หมดเวลาเฉพาะตอน scope ครอบ `frontend/` เพราะ
+    I/O contention, `next dev`/`next build` ค้างเป็นนาทีต้องล้าง `.next` cache แล้ว restart ถึงจะหาย,
+    `dotnet test` fail 6 เคสรอบแรกจาก Redis connection ชั่วคราวแล้วผ่าน 180/180 รอบถัดมาทันที)
+    **ยกเว้น Vitest**: `npx vitest run` (ทั้ง `--pool=forks` และ `--pool=threads`) fail คงที่ด้วย
+    `Timeout waiting for worker to respond` ที่ ~60s พอดีทุกรอบ **ไม่ว่า load จะต่ำแค่ไหนก็ตาม**
+    (ทดสอบซ้ำ 6 รอบ รวมตอนที่ระบบอื่นทั้งหมดกลับมาเขียว) — สรุปว่าเป็นข้อจำกัดของ sandbox เฉพาะกลไก
+    fork/thread IPC ของ Vitest ไม่ใช่ load ทั่วไป (คลาสเดียวกับที่ security-reviewer เคยเจอ SDK 8
+    ไม่มีใน sandbox ตอน Sprint C — เครื่องมือบางตัวใช้ไม่ได้ใน sandbox นี้เฉพาะเจาะจง ไม่ใช่ทุกอย่าง)
+    **ผลคือเทสต์ 24 เคสใหม่ (15 proposal-queue + 6 hub-manager ProposalCreated/regression เดิม + 3
+    console-store) ไม่เคยรันจริงในเซสชันนี้ได้เลย** — ยืนยันความถูกต้องด้วยการอ่านโค้ดละเอียดแทน
+    (`tsc --noEmit`/`eslint`/production `build` ทั้งสามผ่านสะอาด ซึ่ง `build` มี TypeScript check
+    ในตัวอยู่แล้ว) **ต้องรัน `npm run test` ยืนยันจริงในเซสชันถัดไปก่อนเชื่อว่าเขียวจริง**
+  - **ทดสอบจริงผ่าน browser จริง** (หลังพบว่า API process ที่รันค้างไว้ตั้งแต่ต้น session เป็นเวอร์ชัน
+    เก่าก่อนมี endpoint ใหม่ — restart แล้วถึงทำงานถูก ไม่ใช่บั๊กจริงในโค้ด): login เป็น DM ที่มีข้อมูล
+    seed ไว้แล้ว (แคมเปญ/เซสชัน/ตัวละคร/proposal 2 รายการ) → ตัวละคร "อารากอร์น" ขึ้น list ถูกต้อง →
+    คิว proposal โหลดผ่าน GET ใหม่แสดงครบทั้ง 2 รายการ field ตรงกับ DB → กด **ปฏิเสธ** proposal ที่ไม่มี
+    reason → หายจาก UI ทันที + ยืนยันด้วย query ตรง DB ว่า `status=Rejected`,
+    `resolved_by_user_id`/`resolved_at` ถูกต้อง — **ยังไม่ได้ทดสอบ**: happy path ของ `/consult`
+    กับ approve (ต้องมี Anthropic API key จริงที่ยังไม่มีใครตั้งใน dev environment นี้ — ตรงกับที่คาด
+    ไว้ตั้งแต่ต้น ไม่ใช่สิ่งที่ต้องแก้)
 - **Part 3** — player action input แบบ hybrid + HP realtime — ยังไม่เริ่ม
 
 **ทำคู่ขนานได้ตลอด ไม่บล็อกอะไร**: ตั้ง GitHub Actions CI ตั้งแต่ Sprint A เริ่ม (ต้นทุนแทบศูนย์)

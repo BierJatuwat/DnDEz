@@ -26,4 +26,46 @@ describe("useConsoleStore", () => {
     expect(log[0].text).toBe("entry 54");
     expect(log[49].text).toBe("entry 5");
   });
+
+  describe("consult transcript", () => {
+    it("appends consult messages oldest-first with their role", () => {
+      useConsoleStore.getState().appendConsultMessage("dm", "ผู้เล่นพยายามงัดประตู");
+      useConsoleStore.getState().appendConsultMessage("ai", "ประตูดูจะล็อกด้วยกลไก");
+
+      const messages = useConsoleStore.getState().consultMessages;
+      expect(messages.map((m) => [m.role, m.text])).toEqual([
+        ["dm", "ผู้เล่นพยายามงัดประตู"],
+        ["ai", "ประตูดูจะล็อกด้วยกลไก"],
+      ]);
+    });
+
+    it("caps the consult transcript at 50 entries, keeping the newest", () => {
+      for (let i = 0; i < 55; i++) {
+        useConsoleStore.getState().appendConsultMessage("dm", `msg ${i}`);
+      }
+
+      const messages = useConsoleStore.getState().consultMessages;
+      expect(messages).toHaveLength(50);
+      expect(messages[0].text).toBe("msg 5");
+      expect(messages[49].text).toBe("msg 54");
+    });
+
+    it("clears the transcript and the draft input when another session is selected (transcript ผูกกับเซสชัน)", () => {
+      useConsoleStore.getState().appendConsultMessage("dm", "ของเซสชันเก่า");
+      useConsoleStore.getState().setConsultInput("ร่างที่ยังไม่ได้ส่ง");
+
+      useConsoleStore.getState().setSelectedSessionId("session-2");
+
+      expect(useConsoleStore.getState().consultMessages).toEqual([]);
+      expect(useConsoleStore.getState().consultInput).toBe("");
+    });
+
+    it("clears the transcript when another campaign is selected (เซสชันถูกล้างไปด้วยอยู่แล้ว)", () => {
+      useConsoleStore.getState().appendConsultMessage("ai", "ของแคมเปญเก่า");
+
+      useConsoleStore.getState().setSelectedCampaignId("campaign-2");
+
+      expect(useConsoleStore.getState().consultMessages).toEqual([]);
+    });
+  });
 });

@@ -43,6 +43,7 @@ function makeEvents() {
     onJoinedChange: vi.fn(),
     onLog: vi.fn(),
     onDiceRolled: vi.fn(),
+    onProposalCreated: vi.fn(),
   };
 }
 
@@ -96,6 +97,24 @@ describe("CampaignHubManager", () => {
     connection.emit("DiceRolled", { total: 9, expression: "1d20" });
 
     expect(events.onDiceRolled).toHaveBeenCalledWith({ total: 9, expression: "1d20" });
+  });
+
+  it("forwards ProposalCreated events to onProposalCreated", async () => {
+    await manager.start();
+    const payload = {
+      proposalId: "p-1",
+      sessionId: "s-1",
+      subsystem: "Dice",
+      toolName: "roll_dice",
+      toolInput: { expression: "1d20" },
+      reason: "ต้องทอยเช็ค",
+    };
+
+    connection.emit("ProposalCreated", payload);
+
+    expect(events.onProposalCreated).toHaveBeenCalledWith(payload);
+    // คนละ handler กัน — ProposalCreated ต้องไม่ไปโผล่ที่ onDiceRolled
+    expect(events.onDiceRolled).not.toHaveBeenCalled();
   });
 
   it(
