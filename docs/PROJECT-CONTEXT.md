@@ -841,6 +841,25 @@ Part 2 DM console → Part 3 player action input
     `resolved_by_user_id`/`resolved_at` ถูกต้อง — **ยังไม่ได้ทดสอบ**: happy path ของ `/consult`
     กับ approve (ต้องมี Anthropic API key จริงที่ยังไม่มีใครตั้งใน dev environment นี้ — ตรงกับที่คาด
     ไว้ตั้งแต่ต้น ไม่ใช่สิ่งที่ต้องแก้)
+  - ผ่าน **code review** — approve ไม่มี blocker (ยืนยัน GET endpoint authorization order ถูก,
+    `proposal-queue.ts` narrow runtime shape ปลอดภัยจริง, closure-staleness ของ `onProposalCreated`
+    แก้ถูกจุด) ยืนยันปัญหา Vitest ซ้ำด้วยตัวเอง (รัน `npx vitest run` เจอ hang เหมือนกัน)
+  - ผ่าน **security review** — **🔴 เจอ Critical จริง**: `ProposalCreated` broadcast เดิมยิงเข้า
+    `Clients.Group(CampaignHub.GroupName(campaignId))` ซึ่งทุกสมาชิกแคมเปญ (ไม่ใช่แค่ DM) join ได้
+    ผ่าน `JoinCampaign` ปกติ — ทำให้ player เห็น proposal เต็ม (tool input + reason) แบบ realtime
+    ทั้งที่ REST ทุกเส้นทาง (GET/consult/resolve) บังคับ DM-only ถูกต้องแล้ว ขัดกับ locked decision
+    "ผู้เล่นไม่เห็นคิว proposal" ตรง ๆ **แก้แล้ว** (commit `c0d60ae`) — เปลี่ยนเป็น
+    `Clients.User(campaign.OwnerUserId.ToString())` ยิงตรงเฉพาะ connection ของ DM เท่านั้น ใช้ได้ทันที
+    เพราะ JWT มี `ClaimTypes.NameIdentifier` อยู่แล้วและไม่มี custom `IUserIdProvider` ลงทะเบียน (SignalR
+    default provider อ่านตรงได้เลย) เพิ่ม regression test เชื่อมต่อทั้ง DM+player พิสูจน์ DM ได้
+    broadcast จริง (round-trip ทำงาน) แต่ player ไม่ได้เลย — ยืนยัน 181/181 ผ่าน round 2 approve
+    ไม่มี finding ใหม่ ปิดรอบ — Warning เพิ่ม (malformed `ToolCallJson` ทำให้ list 500 ทั้งก้อนแทนที่จะ
+    skip แค่แถวเสีย) เก็บเป็น backlog เพราะไม่ใช่ attacker-triggerable วันนี้ (เขียนโดย backend เองจุด
+    เดียว)
+  - **บทเรียนกระบวนการ**: บั๊กนี้เป็นตัวอย่างจริงว่าทำไม security review แยกจาก code review — REST
+    surface ถูก DM-only ทุกจุดตั้งแต่ต้น (code-reviewer approve ไปแล้วรอบแรกโดยไม่เจอจุดนี้) แต่ realtime
+    broadcast เป็นคนละ code path ที่ไม่มีใครนึกถึงตอน implement — mindset "โค้ดนี้ถูกใช้ผิดทางได้ยังไง"
+    ของ security-reviewer เป็นคนละมุมกับ "โค้ดนี้เขียนถูกไหม" ของ code-reviewer จริง ๆ
 - **Part 3** — player action input แบบ hybrid + HP realtime — ยังไม่เริ่ม
 
 **ทำคู่ขนานได้ตลอด ไม่บล็อกอะไร**: ตั้ง GitHub Actions CI ตั้งแต่ Sprint A เริ่ม (ต้นทุนแทบศูนย์)
