@@ -1007,6 +1007,40 @@ Part 1 ข้อ 3): SignalR group membership ไม่ re-verify หลัง j
 ช่องโหว่นี้ exploitable ทันที ต้อง re-check membership ก่อน broadcast หรือ evict group ตอน
 membership เปลี่ยน
 
+**งานที่ 1 (join campaign flow)** ✅ **เสร็จ 2026-08-30** — เจอจุดขัดกับ task doc ตอนเริ่มทำ:
+`GameSession.JoinCode` (varchar(6), unique, ยังไม่เคยต่อ endpoint) มีอยู่แล้วในสคีมาตั้งแต่
+`InitialSchema` ตรงกับ `player-side-design.md` §17 ("รหัสสั้น 6 หลัก" ต่อ **session**) แต่ผู้ใช้
+ยืนยันให้ทำคนละแบบ: **โค้ด join ผูกกับ campaign (ไม่ใช่ session), DM เป็นคนกำหนดเอง (ไม่ใช่ระบบสุ่ม
+ด้วย CSPRNG), ใช้โค้ดเดียวกันได้ทั้ง join แคมเปญและทุก session ในนั้น** — `GameSession.JoinCode`
+เดิมยังคงอยู่เฉย ๆ ไม่ได้ลบ (เผื่ออนาคตอยากทำ per-session code แยกต่างหากจริง ๆ ค่อยมาต่อ)
+
+- **Migration `AddCampaignJoinCode`**: เพิ่มคอลัมน์ `campaigns.join_code` (unique filtered index
+  แบบเดียวกับ `sessions.join_code`) + สอง RLS artifact ใหม่:
+  1. **`campaign_owner_update` policy (FOR UPDATE)** — `FixCampaignListRlsPolicy` (2026-08-25)
+     ทิ้ง `campaigns` ไว้ไม่มี UPDATE policy เลยพร้อมคอมเมนต์ว่า "เพิ่มทีหลังเมื่อมี use case จริง
+     (เช่น DM แก้ชื่อแคมเปญ)" — นี่คือ use case นั้น ไม่ใช่ circular bootstrap (DM เป็น owner อยู่แล้ว
+     ตอนจะแก้) จึงใช้ policy ธรรมดาได้ ไม่ต้อง SECURITY DEFINER
+  2. **`app_join_campaign(code, membershipId)` (SECURITY DEFINER)** — เป็น circular bootstrap
+     แบบเดียวกับตอนสร้างแคมเปญทุกประการ (INSERT `campaign_members` ใหม่โดน `WITH CHECK
+     (... AND app_is_member())` บล็อกเสมอเพราะยังไม่ใช่สมาชิก) แก้ด้วยรูปแบบเดียวกับ
+     `app_create_campaign()` เป๊ะ — `user_id` มาจาก `app_current_user_id()` เท่านั้น · code ไม่พบ
+     คืน NULL (endpoint แปลงเป็น 404) · join ซ้ำเป็น no-op คืน campaign_id เดิมไม่ throw (กัน DM
+     กด join code ของตัวเองแล้วเจอ 500 จาก unique constraint)
+- **Endpoints** (`CampaignMembershipEndpoints.cs`): `PUT /campaigns/{id}/join-code` (DM เท่านั้น,
+  normalize เป็นตัวพิมพ์ใหญ่, regex `[A-Za-z0-9_-]{4,32}`, 409 ถ้าโค้ดชนกับแคมเปญอื่น) ·
+  `POST /campaigns/join` (rate limit 10/min ต่อ user แบบเดียวกับ `ApiKeyEndpoints` — enumeration
+  surface ตรง ๆ ตามที่ task doc เตือนไว้, code ไม่พบ = 404 เสมอไม่แยกเคส) ·
+  `GET /campaigns/{id}/members` (สมาชิกเท่านั้น, DisplayName + Role + JoinedAt)
+- **`CampaignListItem` ไม่ได้แก้เพิ่ม** — `OwnerUserId` มีอยู่แล้วจาก Sprint E Part 3
+- ทดสอบจริง 14 เคสใหม่ (`CampaignMembershipEndpointsTests.cs`) ผ่าน HTTP จริงกับ Postgres จริง
+  รวม DoD ตรงตามที่ task doc กำหนด (user ที่ไม่เคยเกี่ยวข้องเลย สมัคร → login → join ด้วย code →
+  GET /campaigns เห็นแคมเปญนั้น) + idempotent join + rate-limit exhaustion (429 ที่ครั้ง 11) +
+  409 code ชนกัน + role enforcement (non-DM ตั้ง join-code ไม่ได้) — รวม repo ทั้งหมด 205 เทสต์
+  (204 ผ่าน, 1 fail เป็น flaky test เดิมเรื่อง timestamp precision ไม่เกี่ยวกับงานนี้)
+- **ยังไม่ทำ** (รอ role-enforcement ตอนงานที่ 3): SignalR group re-verify หลัง membership เปลี่ยน —
+  ยังไม่ exploitable จริงในตอนนี้เพราะยังไม่มี endpoint ถอนสมาชิก (leave/kick) แต่ต้องแก้คู่กับ
+  งานที่ 3 ตามที่บันทึกไว้ด้านบน
+
 **ห้ามทำในรอบนี้** (scope creep — ถ้าเริ่มทำให้หยุดทันที): DmEntered dice mode, quick play,
 companion mode, rest (short/long — ต้องมี resolver ใหม่ slice S6 ที่ยังไม่ทำ), reaction timeout,
 recap สองเวอร์ชัน, fog of war/grid map, spellcasting เต็มรูป, condition effects, XP leveling,
