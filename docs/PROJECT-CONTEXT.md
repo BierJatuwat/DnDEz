@@ -860,7 +860,45 @@ Part 2 DM console → Part 3 player action input
     surface ถูก DM-only ทุกจุดตั้งแต่ต้น (code-reviewer approve ไปแล้วรอบแรกโดยไม่เจอจุดนี้) แต่ realtime
     broadcast เป็นคนละ code path ที่ไม่มีใครนึกถึงตอน implement — mindset "โค้ดนี้ถูกใช้ผิดทางได้ยังไง"
     ของ security-reviewer เป็นคนละมุมกับ "โค้ดนี้เขียนถูกไหม" ของ code-reviewer จริง ๆ
-- **Part 3** — player action input แบบ hybrid + HP realtime — ยังไม่เริ่ม
+- **Part 3** ✅ **เสร็จ 2026-08-28** — player action input แบบ hybrid (ปุ่ม+free text) + HP realtime
+  - **backend**: extract shared orchestrator-turn logic ออกจาก `ConsultEndpoints` เป็น
+    `OrchestratorTurnRunner` ใช้ร่วมกันทั้ง `/consult` (DM) และ endpoint ใหม่
+    `POST .../actions` (player) — เหมือนกันทุกจุดยกเว้น auth (เจ้าของตัวละคร ไม่ใช่ DM-only)
+    และ broadcast (`/actions` เท่านั้นที่ยิง `ActionMessageCreated` เข้ากลุ่มแคมเปญทั้งกลุ่ม — `/consult`
+    **ไม่** broadcast เพราะอาจมีคำถาม/สปอยล์ส่วนตัวของ DM ปนอยู่ ไม่มีทางแยกจาก API shape เดียวกันได้
+    ให้เหมือนบั๊กที่ security review เจอกับ ProposalCreated ใน Part 2)
+  - **ช่องโหว่ RLS ที่พบระหว่างออกแบบ (ไม่ใช่บั๊กจากโค้ดเดิม)**: `api_keys` มี RLS `own_rows_only`
+    กรองด้วย `app.user_id` ของผู้เรียกจริงเสมอ — player เรียก endpoint ใหม่แล้ว query หา "key ของ DM"
+    ตรง ๆ จะได้ NULL เสมอไม่ว่า C# WHERE จะเขียนถูกแค่ไหน (เหตุผลเดิมที่ `/consult` เคยจำกัดไว้แค่ DM
+    เท่านั้น) แก้ด้วย migration `AddDmApiKeyLookupFunction` — SECURITY DEFINER function
+    `app_get_dm_api_key(campaignId, provider)` รูปแบบเดียวกับ `app_create_campaign()`/
+    `app_is_member_of()` เดิม เช็คสมาชิกภาพเองข้างในฟังก์ชันด้วย (defense-in-depth ชั้นที่สอง ไม่ใช่
+    พึ่ง C# authorization ก่อนเรียกอย่างเดียว) คืนแค่ ciphertext เท่านั้น
+  - **HP realtime ฝั่ง backend มีอยู่แล้วตั้งแต่ Sprint C Part 3** (`HpUpdated` broadcast จาก
+    `CombatEndpoints`) — Part 3 นี้แค่เพิ่ม listener ฝั่ง frontend เป็นครั้งแรก
+  - **frontend**: `campaign-hub-manager.ts` เพิ่ม `onHpUpdated`/`onActionMessageCreated` · `action-feed.ts`
+    ใหม่ (normalize/append มิเรอร์ `proposal-queue.ts`) · `console-store.ts` เพิ่ม `actionInput`/`actionFeed`
+    · `CampaignConsole.tsx` เพิ่ม panel "Action ของคุณ" (แสดงเมื่อ caller ไม่ใช่ DM ของแคมเปญที่เลือก —
+    ยังไม่มี route/role system แยก DM/player เป็นของตัวเอง ใช้ reuse single-page app เดิมไปก่อน) +
+    HP badge ในรายการตัวละคร แพตช์ผ่าน `queryClient.setQueriesData({queryKey:["characters"]}, ...)`
+    (ไม่เจาะจง campaignId เดียวเพราะ `HpUpdatedBroadcast` ไม่มี campaignId มาด้วย และ callback สมัคร
+    ครั้งเดียวต่อ token เท่านั้น อ่าน selectedCampaignId จาก closure ตรง ๆ จะ stale — บทเรียนเดียวกับ
+    onProposalCreated ใน Part 2)
+  - **DTO เพิ่มเข้า list endpoint เดิม 2 จุด** (ไม่ใช่ authz surface ใหม่ — ข้อมูลเดิมที่สมาชิกเห็นผ่าน
+    detail endpoint ได้อยู่แล้ว): `CampaignListItem` เพิ่ม `OwnerUserId` (frontend ต้องรู้ว่า caller
+    เป็น DM ไหม) · `CharacterListItem` เพิ่ม HP fields (โชว์ HP badge ใน list โดยไม่ต้อง fetch detail
+    ทีละตัว)
+  - **ขอบเขตที่ตัดออกตั้งใจ** (ไม่ใช่ scope creep — roadmap เดิมเขียนแค่ "hybrid action input + HP
+    realtime" เท่านั้น): Turn UI/action economy persistence (`ActionEconomyResolver` ยังไม่มี DB/API
+    wiring เลย — ไม่มีตาราง Turn ในระบบ), reaction timeout, death save UI เต็มรูป — เหล่านี้เป็น
+    Part 4 ในอนาคต
+  - ทดสอบจริง: backend 190/191 ผ่าน (1 fail เป็น flaky test เดิมเรื่อง timestamp precision ไม่เกี่ยวกับ
+    งานนี้) รวม `PlayerActionEndpointsTests.cs` ใหม่ 8 เคส (auth, validation, DM-key lookup ข้าม user
+    boundary, broadcast scoping ทั้งสองทาง) + regression test ใหม่ใน `ConsultEndpointsTests.cs` ยืนยันว่า
+    `/consult` ไม่ broadcast · frontend 47/47 ผ่าน + `tsc`/`eslint`/`next build` สะอาดทั้งสาม · ทดสอบจริง
+    ผ่าน browser จริงสองแท็บ (DM + player คนละ user จริง): player โพสต์ action เห็น error
+    `dm_api_key_not_set` ถูกต้อง (dev env นี้ยังไม่มี Anthropic key จริง ตรงกับที่คาดไว้), DM ยิง attack
+    ผ่าน API แล้ว **ทั้งสองแท็บเห็น HP เปลี่ยนจาก 20→8 แบบ realtime พร้อมกันโดยไม่ต้อง refresh**
 
 **ทำคู่ขนานได้ตลอด ไม่บล็อกอะไร**: ตั้ง GitHub Actions CI ตั้งแต่ Sprint A เริ่ม (ต้นทุนแทบศูนย์)
 

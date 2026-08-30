@@ -18,9 +18,9 @@
 - ✅ ฝั่ง Player — ออกแบบรอบแรกเสร็จ
 - 🚧 โค้ด — DB schema + RLS เสร็จแล้ว (30 ตาราง) · rules engine ครบ 3 phase เสร็จแล้ว ·
   **Sprint A-D ครบทั้งหมดแล้ว** (API foundation, rules engine ต่อ API, realtime SignalR,
-  BYOK+AI orchestrator) · **Sprint E Part 1 เสร็จแล้ว** (Next.js scaffold + PWA config +
-  auth/SignalR connection proof ที่ `frontend/`) — Part 2/3 (DM console เต็ม, player action input)
-  ยังไม่เริ่ม
+  BYOK+AI orchestrator) · **Sprint E ครบทั้ง 3 part แล้ว** (Next.js scaffold + PWA + auth/SignalR
+  proof · character panel + consult AI + proposal queue · player action input hybrid + HP realtime)
+  — ดูรายละเอียดเต็มใน [`docs/PROJECT-CONTEXT.md`](./docs/PROJECT-CONTEXT.md) §4 "Sprint E"
 
 ## เริ่มต้นใช้งาน (local dev)
 
