@@ -6,6 +6,7 @@ export type CampaignHubEvents = {
   onLog: (text: string) => void;
   onDiceRolled: (payload: unknown) => void;
   onProposalCreated: (payload: unknown) => void;
+  onHpUpdated: (payload: unknown) => void;
 };
 
 /**
@@ -47,6 +48,7 @@ export class CampaignHubManager {
   ) {
     connection.on("DiceRolled", (payload) => this.events.onDiceRolled(payload));
     connection.on("ProposalCreated", (payload) => this.events.onProposalCreated(payload));
+    connection.on("HpUpdated", (payload) => this.events.onHpUpdated(payload));
 
     connection.onreconnecting(() => {
       this.joinedCampaignId = null;

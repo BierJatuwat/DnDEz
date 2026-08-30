@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/lib/auth-store";
 import { useConsoleStore } from "@/lib/console-store";
@@ -301,6 +302,9 @@ export function CampaignConsole() {
         `📡 realtime ProposalCreated: ${proposal.toolName} (session ${proposal.sessionId.slice(0, 8)})`,
       );
     },
+    // DM console ยังไม่ได้ใช้ HpUpdated ในสปรินต์นี้ (โฟกัสอยู่ที่ player console — ดู PlayerConsole.tsx)
+    // แต่ CampaignHubEvents บังคับให้มี handler ครบทุก event จึงใส่ no-op ไว้อย่างตั้งใจ ไม่ใช่ลืม
+    onHpUpdated: () => {},
   });
 
   const campaigns = campaignsQuery.data ?? [];
@@ -315,12 +319,21 @@ export function CampaignConsole() {
           <h1 className="text-xl font-semibold">DnDEz — DM console (proof of concept)</h1>
           <p className="text-sm opacity-70">user: {userId}</p>
         </div>
-        <button
-          onClick={logout}
-          className="text-sm underline opacity-70 hover:opacity-100"
-        >
-          ออกจากระบบ
-        </button>
+        <div className="flex items-center gap-3">
+          {/* คนละหน้ากันจริง ๆ ไม่ใช่สลับ view ในหน้าเดียว — ดู PlayerConsole.tsx ว่าทำไมถึงแยก */}
+          <Link
+            href="/play"
+            className="text-sm underline opacity-70 hover:opacity-100"
+          >
+            เข้าสู่มุมมองผู้เล่น
+          </Link>
+          <button
+            onClick={logout}
+            className="text-sm underline opacity-70 hover:opacity-100"
+          >
+            ออกจากระบบ
+          </button>
+        </div>
       </div>
 
       <section className="rounded border border-black/10 dark:border-white/10 p-4 space-y-3">

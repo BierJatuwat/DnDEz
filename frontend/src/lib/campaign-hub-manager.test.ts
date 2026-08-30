@@ -44,6 +44,7 @@ function makeEvents() {
     onLog: vi.fn(),
     onDiceRolled: vi.fn(),
     onProposalCreated: vi.fn(),
+    onHpUpdated: vi.fn(),
   };
 }
 
@@ -115,6 +116,26 @@ describe("CampaignHubManager", () => {
     expect(events.onProposalCreated).toHaveBeenCalledWith(payload);
     // คนละ handler กัน — ProposalCreated ต้องไม่ไปโผล่ที่ onDiceRolled
     expect(events.onDiceRolled).not.toHaveBeenCalled();
+  });
+
+  it("forwards HpUpdated events to onHpUpdated", async () => {
+    await manager.start();
+    const payload = {
+      characterId: "c-1",
+      previousHp: 12,
+      newHp: 5,
+      previousTempHp: 0,
+      newTempHp: 0,
+      droppedToZero: false,
+      isInstantDeath: false,
+    };
+
+    connection.emit("HpUpdated", payload);
+
+    expect(events.onHpUpdated).toHaveBeenCalledWith(payload);
+    // คนละ handler กัน — HpUpdated ต้องไม่รั่วไปโผล่ที่ handler ของ event อื่น
+    expect(events.onDiceRolled).not.toHaveBeenCalled();
+    expect(events.onProposalCreated).not.toHaveBeenCalled();
   });
 
   it(
