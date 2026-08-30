@@ -429,6 +429,9 @@ app.MapCharacterEndpoints();
 // ── Sprint F งานที่ 1: join campaign flow ───────────────────────────────────
 app.MapCampaignMembershipEndpoints();
 
+// ── Sprint F งานที่ 2a: dial autonomy ต่อ subsystem (DM ตั้ง / สมาชิกอ่าน) ────
+app.MapAutonomySettingEndpoints();
+
 // ── Sprint B Part 1: ต่อ DnDEz.Rules (rules engine) เข้า API จริงเป็นครั้งแรก ─
 app.MapDiceRollEndpoints();
 
