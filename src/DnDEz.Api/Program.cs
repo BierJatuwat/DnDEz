@@ -96,6 +96,19 @@ builder.Services.AddRateLimiter(options =>
             QueueLimit = 0,
         });
     });
+
+    // Sprint F งานที่ 1 — POST /campaigns/join เป็น enumeration surface ตรง ๆ (พิมพ์โค้ดสุ่มไปเรื่อย ๆ
+    // เพื่อหาแคมเปญที่มีอยู่จริง) partition ตาม user id เหมือนกัน (endpoint นี้ [Authorize] เสมอ)
+    options.AddPolicy(CampaignMembershipEndpoints.JoinRateLimitPolicyName, context =>
+    {
+        var userId = context.User.GetUserId()?.ToString() ?? "anonymous";
+        return RateLimitPartition.GetFixedWindowLimiter(userId, _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 10,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+        });
+    });
 });
 
 // ── Auth wiring ───────────────────────────────────────────────────────────
@@ -412,6 +425,9 @@ if (app.Environment.IsDevelopment())
 app.MapCampaignEndpoints();
 app.MapSessionEndpoints();
 app.MapCharacterEndpoints();
+
+// ── Sprint F งานที่ 1: join campaign flow ───────────────────────────────────
+app.MapCampaignMembershipEndpoints();
 
 // ── Sprint B Part 1: ต่อ DnDEz.Rules (rules engine) เข้า API จริงเป็นครั้งแรก ─
 app.MapDiceRollEndpoints();

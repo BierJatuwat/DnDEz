@@ -18,6 +18,11 @@ public class Campaign
     public CampaignMode Mode { get; set; } = CampaignMode.Guided;
     public string RulesSystem { get; set; } = "srd2024";
 
+    /// <summary>Sprint F — โค้ด join แคมเปญ ผู้เล่นใช้ code นี้ join ทั้งแคมเปญและทุก session ในนั้น
+    /// (ไม่ใช่ per-session แบบ GameSession.JoinCode เดิมที่ยังไม่เคยต่อ endpoint จริง) —
+    /// DM เป็นคนกำหนดเอง ไม่ใช่ระบบสุ่มให้ (ตัดสิน 2026-08-30) null = ยังไม่เปิดให้ join</summary>
+    public string? JoinCode { get; set; }
+
     // ── Settings ต่อแคมเปญ (player-side-design §23) ────────────────────────
     /// <summary>ผู้เล่นกรอกผลเต๋าเองไม่ได้ — มีแค่ระบบทอย หรือ DM กรอก</summary>
     public DiceMode DiceMode { get; set; } = DiceMode.SystemRoll;

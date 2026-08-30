@@ -146,6 +146,11 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                         .HasColumnType("text")
                         .HasColumnName("dice_mode");
 
+                    b.Property<string>("JoinCode")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("join_code");
+
                     b.Property<string>("Mode")
                         .IsRequired()
                         .HasColumnType("text")
@@ -188,6 +193,11 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_campaigns");
+
+                    b.HasIndex("JoinCode")
+                        .IsUnique()
+                        .HasDatabaseName("ix_campaigns_join_code")
+                        .HasFilter("join_code IS NOT NULL");
 
                     b.HasIndex("OwnerUserId")
                         .HasDatabaseName("ix_campaigns_owner_user_id");

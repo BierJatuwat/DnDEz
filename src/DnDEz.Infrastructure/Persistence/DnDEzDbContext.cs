@@ -120,6 +120,9 @@ public class DnDEzDbContext(DbContextOptions<DnDEzDbContext> options) : DbContex
         {
             e.Property(x => x.Name).HasMaxLength(200);
             e.Property(x => x.RulesSystem).HasMaxLength(32);
+            e.Property(x => x.JoinCode).HasMaxLength(32);
+            // DM กำหนดเอง (ไม่ใช่ CSPRNG) แต่ยังบังคับไม่ให้ซ้ำข้ามแคมเปญ — เหมือน GameSession.JoinCode
+            e.HasIndex(x => x.JoinCode).IsUnique().HasFilter("join_code IS NOT NULL");
             e.Property(x => x.WorldState).HasColumnType(Jsonb).HasDefaultValueSql("'{}'::jsonb");
             e.Property(x => x.ReactionTimeoutSeconds).HasDefaultValue(30);
             e.Property(x => x.CharacterReviewRequired).HasDefaultValue(true);
