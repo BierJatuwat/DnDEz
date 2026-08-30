@@ -976,6 +976,42 @@ allowlist จึงเป็นตัวกันบั๊กความปล�
 ที่ทำให้ allowlist กลายเป็นแค่ config แทนที่จะเป็นตัวกันบั๊ก หลังจากนั้นการเพิ่มเจ้าใหม่จะเป็น
 "งานเพิ่ม" ไม่ใช่ "งานรื้อ"
 
+### 🔜 Sprint F — เล่น online ได้จริง (เสนอ 2026-08-30 · commit อ้างอิง `5ee1fb0`)
+
+เป้าหมายเดียว: DM 1 คน + ผู้เล่น 3 คน คนละเครื่อง เล่นจบ 1 session ได้ ไม่ต้องแตะ DB/curl เอง
+ลำดับที่วางไว้: **1) join campaign flow → 2) หน้าตั้งค่า DM API key + AutonomySetting →
+3) role enforcement → 4) encounter/initiative/turn order → 5) death save →
+7) NPC/monster ให้ DM คุม → 6) แยกหน้า DM/Player** (backend ให้ครบก่อน แล้ว UI ทีเดียวตอนท้าย)
+
+**3 คำถามที่เคยบล็อกไว้ — ตอบแล้ว (2026-08-30):**
+
+1. **HP ถึง 0 → เข้า dying/death-save state อัตโนมัติ หรือ DM ต้องยืนยันก่อน?**
+   → **DM ต้องกดยืนยันก่อน** — ไม่เข้า death-save state ทันทีที่ HP=0 ต้องรอ DM confirm ก่อนเสมอ
+   (ให้ DM คุมจังหวะการเล่าเรื่องได้ เช่น narrate ก่อนว่า monster ตัดสินใจไม่ฆ่า) — งานที่ 5 (death
+   save) ต้องมี endpoint แยกสำหรับ "DM ยืนยันว่าตัวละครเข้าสู่ dying state" ก่อนถึงจะเริ่มทอย death
+   save ได้ ห้าม auto-transition จาก `HitPointResolver.ApplyDamageResult.DroppedToZero=true` ตรง ๆ
+2. **Encounter เป็น entity แยกจาก session ไหม?** → **แยก** — ตารางใหม่ `encounters` ผูกกับ
+   `session_id` (1 session มีได้หลาย encounter) ต้องมี `campaign_id` + RLS policy ตามแบบแผนเดิมของ
+   ระบบนี้ (ทดสอบ cross-campaign isolation ด้วย raw SQL ผ่าน role `dndez_app` ก่อนเขียนโค้ด C#
+   เหมือนที่ Sprint B Part 2 ทำไว้)
+3. **Turn state เก็บ Redis (ตามที่ §3 ล็อกไว้แล้ว) — ถ้า Redis หายกลางเกมจะกู้ยังไง?** →
+   **รีเซ็ตเทิร์นปัจจุบัน** — ถ้า Redis หาย ให้เริ่มเทิร์นที่กำลังเดินอยู่ใหม่ (action/bonus/
+   reaction/movement คืนเต็มทั้งหมด) ไม่ทำ dual-write ไป Postgres เพราะ HP/dice rolls/proposals
+   ซึ่งเป็นข้อมูลที่สำคัญจริงอยู่ใน Postgres อยู่แล้วเสมอไม่ว่า Redis จะเป็นอย่างไร — สิ่งเดียวที่เสีย
+   คือ "ใช้ action ไปหรือยังในเทิร์นนี้" ซึ่งกระทบแค่ความสะดวก ไม่ใช่ความถูกต้องของเกม รีสตาร์ท
+   Redis แล้ว turn state ต้อง fail closed เป็น "เทิร์นใหม่เต็มทรัพยากร" ไม่ใช่ throw/500
+
+**ช่องโหว่ที่ต้องแก้พร้อมกับงานที่ 3** (ไม่ใช่ของใหม่ — ค้างมาจาก security review Sprint C
+Part 1 ข้อ 3): SignalR group membership ไม่ re-verify หลัง join สำเร็จ — ตอนนั้น exploit ไม่ได้
+เพราะไม่มี endpoint ถอนสมาชิก พอมี join-campaign flow (งานที่ 1) + members endpoint จริงแล้ว
+ช่องโหว่นี้ exploitable ทันที ต้อง re-check membership ก่อน broadcast หรือ evict group ตอน
+membership เปลี่ยน
+
+**ห้ามทำในรอบนี้** (scope creep — ถ้าเริ่มทำให้หยุดทันที): DmEntered dice mode, quick play,
+companion mode, rest (short/long — ต้องมี resolver ใหม่ slice S6 ที่ยังไม่ทำ), reaction timeout,
+recap สองเวอร์ชัน, fog of war/grid map, spellcasting เต็มรูป, condition effects, XP leveling,
+source import, image generation, refresh token/HTTPS redirect/CI-CD/staging (เก็บไว้ตอนจะให้คนนอกใช้)
+
 **เก็บไว้ phase ถัดไป**
 - **Image generation — ตัดออกจาก phase แรกแล้ว (ตัดสิน 2026-08-21)**
   `dm-side-design.md` §2.1 มี tool `generate_scene_image` และ §4.2 บอกว่ากด generate แผนที่ด้วย AI ได้
