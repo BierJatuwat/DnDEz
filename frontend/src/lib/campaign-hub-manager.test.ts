@@ -44,6 +44,8 @@ function makeEvents() {
     onLog: vi.fn(),
     onDiceRolled: vi.fn(),
     onProposalCreated: vi.fn(),
+    onHpUpdated: vi.fn(),
+    onActionMessageCreated: vi.fn(),
   };
 }
 
@@ -115,6 +117,33 @@ describe("CampaignHubManager", () => {
     expect(events.onProposalCreated).toHaveBeenCalledWith(payload);
     // คนละ handler กัน — ProposalCreated ต้องไม่ไปโผล่ที่ onDiceRolled
     expect(events.onDiceRolled).not.toHaveBeenCalled();
+  });
+
+  it("forwards HpUpdated events to onHpUpdated (Sprint E Part 3 — backend broadcast already existed since Sprint C Part 3, this is the first listener)", async () => {
+    await manager.start();
+    const payload = { characterId: "c-1", newHp: 7, previousHp: 12 };
+
+    connection.emit("HpUpdated", payload);
+
+    expect(events.onHpUpdated).toHaveBeenCalledWith(payload);
+    expect(events.onDiceRolled).not.toHaveBeenCalled();
+  });
+
+  it("forwards ActionMessageCreated events to onActionMessageCreated", async () => {
+    await manager.start();
+    const payload = {
+      messageId: "m-1",
+      sessionId: "s-1",
+      authorType: "Player",
+      characterId: "c-1",
+      content: "I search the room for traps.",
+      createdAt: "2026-08-28T00:00:00Z",
+    };
+
+    connection.emit("ActionMessageCreated", payload);
+
+    expect(events.onActionMessageCreated).toHaveBeenCalledWith(payload);
+    expect(events.onProposalCreated).not.toHaveBeenCalled();
   });
 
   it(

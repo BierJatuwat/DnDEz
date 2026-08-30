@@ -428,6 +428,10 @@ app.MapApiKeyEndpoints();
 // ── Sprint D Part 2: tool-calling loop skeleton (narration + roll_dice, ไม่มี approval gate) ──
 app.MapConsultEndpoints();
 
+// ── Sprint E Part 3: player action input — ไหลเข้า orchestrator เดียวกับ /consult (ดู
+// OrchestratorTurnRunner) แต่ auth เป็น "เจ้าของตัวละคร" ไม่ใช่ DM-only ──────────────────────
+app.MapPlayerActionEndpoints();
+
 app.Run();
 
 // ให้ WebApplicationFactory<Program> ใน integration test มองเห็นคลาสนี้ได้

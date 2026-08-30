@@ -6,6 +6,8 @@ export type CampaignHubEvents = {
   onLog: (text: string) => void;
   onDiceRolled: (payload: unknown) => void;
   onProposalCreated: (payload: unknown) => void;
+  onHpUpdated: (payload: unknown) => void;
+  onActionMessageCreated: (payload: unknown) => void;
 };
 
 /**
@@ -47,6 +49,10 @@ export class CampaignHubManager {
   ) {
     connection.on("DiceRolled", (payload) => this.events.onDiceRolled(payload));
     connection.on("ProposalCreated", (payload) => this.events.onProposalCreated(payload));
+    // Sprint E Part 3 — HP realtime (backend broadcast มีอยู่แล้วตั้งแต่ Sprint C Part 3, ฝั่งนี้
+    // แค่ไม่เคยฟังมาก่อน) + player action feed ใหม่ (ดู OrchestratorTurnRunner ฝั่ง API)
+    connection.on("HpUpdated", (payload) => this.events.onHpUpdated(payload));
+    connection.on("ActionMessageCreated", (payload) => this.events.onActionMessageCreated(payload));
 
     connection.onreconnecting(() => {
       this.joinedCampaignId = null;

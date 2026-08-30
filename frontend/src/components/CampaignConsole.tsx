@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/lib/auth-store";
 import { useConsoleStore } from "@/lib/console-store";
@@ -11,8 +12,15 @@ import {
   removeProposal,
   type Proposal,
 } from "@/lib/proposal-queue";
+import { normalizeActionMessageCreated } from "@/lib/action-feed";
 
-type Campaign = { id: string; name: string; mode: string; createdAt: string };
+type Campaign = {
+  id: string;
+  name: string;
+  mode: string;
+  createdAt: string;
+  ownerUserId: string;
+};
 type GameSession = {
   id: string;
   mode: string;
@@ -34,13 +42,26 @@ type DiceRolledEvent = {
   total: number;
   source: string;
 };
-// รายการตัวละครจาก GET เบากว่า response ตอน POST (ไม่มี HP/AC) — แยก type ตามจริง ไม่ปนกัน
+// รายการตัวละครจาก GET เบากว่า response ตอน POST (ไม่มี AC/sheet เต็ม) — แยก type ตามจริง ไม่ปนกัน
+// HP fields เพิ่มเข้ามา Sprint E Part 3 เพื่อแสดง HP realtime โดยไม่ต้อง fetch detail ทีละตัว
 type CharacterSummary = {
   id: string;
   name: string;
   level: number;
-  ownerUserId: string;
+  ownerUserId: string | null;
   controlledByDm: boolean;
+  currentHp: number;
+  maxHp: number;
+  currentTempHp: number;
+};
+type HpUpdatedEvent = {
+  characterId: string;
+  previousHp: number;
+  newHp: number;
+  previousTempHp: number;
+  newTempHp: number;
+  droppedToZero: boolean;
+  isInstantDeath: boolean;
 };
 type ToolCallResult = { name: string; input: unknown; result: unknown };
 type ConsultResponse = {
@@ -80,6 +101,8 @@ export function CampaignConsole() {
   const rollExpression = useConsoleStore((s) => s.rollExpression);
   const consultInput = useConsoleStore((s) => s.consultInput);
   const consultMessages = useConsoleStore((s) => s.consultMessages);
+  const actionInput = useConsoleStore((s) => s.actionInput);
+  const actionFeed = useConsoleStore((s) => s.actionFeed);
   const setSelectedCampaignId = useConsoleStore((s) => s.setSelectedCampaignId);
   const setSelectedSessionId = useConsoleStore((s) => s.setSelectedSessionId);
   const setJoinedCampaignId = useConsoleStore((s) => s.setJoinedCampaignId);
@@ -88,6 +111,12 @@ export function CampaignConsole() {
   const setConsultInput = useConsoleStore((s) => s.setConsultInput);
   const appendConsultMessage = useConsoleStore((s) => s.appendConsultMessage);
   const appendLog = useConsoleStore((s) => s.appendLog);
+  const setActionInput = useConsoleStore((s) => s.setActionInput);
+  const appendActionFeedMessage = useConsoleStore((s) => s.appendActionFeedMessage);
+
+  // ตัวละครที่กำลังโพสต์ action แทน — เลือกใหม่ทุกครั้งที่แคมเปญเปลี่ยน (ไม่ผูก store เพราะเป็น
+  // UI state ล้วน ๆ ของ panel นี้เท่านั้น ไม่มีใครอื่นต้องใช้)
+  const [selectedActingCharacterId, setSelectedActingCharacterId] = useState<string | null>(null);
 
   const campaignsQuery = useQuery({
     queryKey: ["campaigns"],
@@ -229,6 +258,28 @@ export function CampaignConsole() {
     },
   });
 
+  // Sprint E Part 3 — player action input: ปุ่ม/free text ทั้งสองทางส่ง content เดียวกันมาที่นี่
+  // (ดู player-side-design.md §2 — ปุ่มเป็นแค่ template ข้อความ ไม่ใช่เส้นทางแยก) ไหลเข้า
+  // orchestrator เดียวกับ /consult ฝั่ง API (OrchestratorTurnRunner) แต่ auth เป็นเจ้าของตัวละคร
+  const postAction = useMutation({
+    mutationFn: ({ characterId, content }: { characterId: string; content: string }) =>
+      apiFetch<ConsultResponse>(
+        `/campaigns/${selectedCampaignId}/sessions/${selectedSessionId}/actions`,
+        { method: "POST", token, body: { characterId, content } },
+      ),
+    onError: (err) => {
+      if (err instanceof ApiError) {
+        if (err.status === 403) {
+          appendLog("ส่ง action ไม่สำเร็จ: ไม่ใช่เจ้าของตัวละครนี้");
+        } else if (err.status === 400) {
+          appendLog("ส่ง action ไม่สำเร็จ: DM ยังไม่ได้ตั้งค่า BYOK key");
+        } else {
+          appendLog(`ส่ง action ไม่สำเร็จ: HTTP ${err.status}`);
+        }
+      }
+    },
+  });
+
   const resolveProposal = useMutation({
     mutationFn: ({
       proposalId,
@@ -283,6 +334,36 @@ export function CampaignConsole() {
         `📡 realtime DiceRolled: ${event.expression} = ${event.total} (source=${event.source})`,
       );
     },
+    onHpUpdated: (payload) => {
+      // backend broadcast มีมาตั้งแต่ Sprint C Part 3 — นี่เป็นครั้งแรกที่ frontend ฟัง แพตช์เข้า
+      // cache ตรง ๆ แทน invalidate เพื่อไม่ต้อง round-trip fetch ใหม่ (เหมือน pattern ของ
+      // onProposalCreated ด้านล่าง) — payload ไม่มี campaignId มาด้วย (ดู HpUpdatedBroadcast ฝั่ง API)
+      // และ callback นี้ถูกสมัครครั้งเดียวต่อ token เท่านั้น (ห้ามอ่าน selectedCampaignId จาก closure
+      // ตรง ๆ เพราะจะ stale ตาม dep array [token] ใน use-campaign-hub.ts — บทเรียนเดียวกับ
+      // onProposalCreated) จึงใช้ setQueriesData แพตช์ทุก cache ที่ queryKey ขึ้นต้นด้วย "characters"
+      // แทนการเจาะจง campaignId ตัวเดียว — ปลอดภัยเพราะแค่ patch ตัวละครที่ id ตรงกัน ไม่ตรงก็ไม่ทำอะไร
+      const event = payload as HpUpdatedEvent;
+      if (typeof event?.characterId !== "string") return;
+      queryClient.setQueriesData<CharacterSummary[]>({ queryKey: ["characters"] }, (old) =>
+        old?.map((c) =>
+          c.id === event.characterId
+            ? { ...c, currentHp: event.newHp, currentTempHp: event.newTempHp }
+            : c,
+        ),
+      );
+      appendLog(
+        `📡 realtime HpUpdated: ${event.previousHp} → ${event.newHp} HP` +
+          (event.isInstantDeath ? " (instant death!)" : event.droppedToZero ? " (0 HP)" : ""),
+      );
+    },
+    onActionMessageCreated: (payload) => {
+      const message = normalizeActionMessageCreated(payload);
+      if (!message) {
+        appendLog("ได้รับ ActionMessageCreated broadcast ที่ข้อมูลไม่ครบ ข้ามไป");
+        return;
+      }
+      appendActionFeedMessage(message);
+    },
     onProposalCreated: (payload) => {
       const proposal = normalizeProposalCreated(payload);
       if (!proposal) {
@@ -307,6 +388,12 @@ export function CampaignConsole() {
   const sessions = sessionsQuery.data ?? [];
   const characters = charactersQuery.data ?? [];
   const proposals = proposalsQuery.data ?? [];
+
+  const selectedCampaign = campaigns.find((c) => c.id === selectedCampaignId);
+  // ยังไม่มี route/role system แยก DM/player (out of scope Part 3 นี้ — ดู plan) — ใช้ "ไม่ใช่ DM
+  // ของแคมเปญที่เลือกอยู่" เป็นตัวตัดสินว่าจะโชว์ player action panel แทน reuse single-page app เดิม
+  const isDm = !!selectedCampaign && selectedCampaign.ownerUserId === userId;
+  const ownCharacters = characters.filter((c) => c.ownerUserId === userId);
 
   return (
     <main className="flex-1 p-6 space-y-6 max-w-3xl mx-auto w-full">
@@ -459,7 +546,16 @@ export function CampaignConsole() {
             {characters.map((c) => (
               <li key={c.id} className="px-3 py-1.5">
                 {c.name}{" "}
-                <span className="opacity-50 text-xs">(level {c.level})</span>
+                <span className="opacity-50 text-xs">(level {c.level})</span>{" "}
+                {/* HP realtime — backend broadcast มีมาตั้งแต่ Sprint C Part 3 (ดู onHpUpdated) */}
+                <span
+                  className={`text-xs ${
+                    c.currentHp <= 0 ? "text-red-500" : "opacity-70"
+                  }`}
+                >
+                  {c.currentHp}/{c.maxHp} HP
+                  {c.currentTempHp > 0 ? ` (+${c.currentTempHp} temp)` : ""}
+                </span>
                 {c.controlledByDm && (
                   <span className="ml-1 text-xs text-indigo-500">
                     [DM คุม]
@@ -493,6 +589,87 @@ export function CampaignConsole() {
               ทอย
             </button>
           </div>
+        </section>
+      )}
+
+      {selectedSessionId && (
+        <section className="rounded border border-black/10 dark:border-white/10 p-4 space-y-3">
+          <h2 className="font-medium">
+            {isDm ? "Action feed (สิ่งที่ผู้เล่นทำแบบ realtime)" : "Action ของคุณ"}
+          </h2>
+          {isDm ? null : ownCharacters.length === 0 ? (
+            <p className="text-sm opacity-50">
+              ยังไม่มีตัวละครของคุณในแคมเปญนี้ — สร้างตัวละครก่อนถึงจะส่ง action ได้
+            </p>
+          ) : (
+            <>
+              <select
+                value={selectedActingCharacterId ?? ownCharacters[0].id}
+                onChange={(e) => setSelectedActingCharacterId(e.target.value)}
+                className="w-full rounded border border-black/20 dark:border-white/20 bg-transparent px-3 py-1.5"
+              >
+                {ownCharacters.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+              {/* ปุ่มคำสั่งพื้นฐาน — แค่ template ข้อความที่เติมลงช่อง free text ไม่ใช่เส้นทางแยก
+                  (ดู player-side-design.md §2 "ทั้งสองทางไปที่ orchestrator ทางเดียวกัน") */}
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { label: "โจมตี", template: "ฉันโจมตี" },
+                  { label: "เคลื่อนที่", template: "ฉันเดินไปที่" },
+                  { label: "ปฏิสัมพันธ์", template: "ฉันลองใช้/ตรวจสอบ" },
+                ].map((btn) => (
+                  <button
+                    key={btn.label}
+                    type="button"
+                    onClick={() => setActionInput(btn.template)}
+                    className="rounded border border-black/20 dark:border-white/20 px-2 py-1 text-xs hover:bg-black/5 dark:hover:bg-white/5"
+                  >
+                    {btn.label}
+                  </button>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <textarea
+                  value={actionInput}
+                  onChange={(e) => setActionInput(e.target.value)}
+                  placeholder="อธิบาย action ของตัวละคร..."
+                  className="flex-1 rounded border border-black/20 dark:border-white/20 bg-transparent px-3 py-1.5"
+                />
+                <button
+                  onClick={() => {
+                    const text = actionInput.trim();
+                    const characterId = selectedActingCharacterId ?? ownCharacters[0]?.id;
+                    if (!text || !characterId) return;
+                    postAction.mutate({ characterId, content: text });
+                    setActionInput("");
+                  }}
+                  disabled={postAction.isPending || !actionInput.trim()}
+                  className="rounded bg-indigo-600 px-3 py-1.5 text-white disabled:opacity-50"
+                >
+                  ส่ง
+                </button>
+              </div>
+            </>
+          )}
+          <ul className="space-y-1 text-sm max-h-64 overflow-y-auto">
+            {actionFeed.map((m) => (
+              <li
+                key={m.id}
+                className={
+                  m.authorType === "Player" ? "opacity-100" : "opacity-90 text-indigo-400"
+                }
+              >
+                <span className="font-mono text-xs">[{m.authorType}]</span> {m.content}
+              </li>
+            ))}
+            {actionFeed.length === 0 && (
+              <li className="opacity-50 text-sm">ยังไม่มี action ในเซสชันนี้</li>
+            )}
+          </ul>
         </section>
       )}
 

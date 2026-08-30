@@ -81,7 +81,7 @@ public static class CampaignEndpoints
             var campaigns = await db.Campaigns
                 .OrderBy(c => c.CreatedAt)
                 .ThenBy(c => c.Id)
-                .Select(c => new CampaignListItem(c.Id, c.Name, c.Mode.ToString(), c.CreatedAt))
+                .Select(c => new CampaignListItem(c.Id, c.Name, c.Mode.ToString(), c.CreatedAt, c.OwnerUserId))
                 .ToListAsync();
 
             return Results.Ok(campaigns);
@@ -121,7 +121,10 @@ internal record CreateCampaignRequest(
 
 internal record CampaignCreatedResponse(Guid Id, string Name, string Mode);
 
-internal record CampaignListItem(Guid Id, string Name, string Mode, DateTimeOffset CreatedAt);
+// Sprint E Part 3 — เพิ่ม OwnerUserId เข้า list ด้วย (เดิมมีแค่ CampaignDetailResponse) — frontend
+// ต้องใช้แยกว่า caller เป็น DM ของแคมเปญที่เลือกอยู่ไหม (โชว์ player action panel หรือ DM panel เดิม)
+// ไม่ใช่ข้อมูลใหม่ที่ต้อง authorize เพิ่ม — สมาชิกทุกคนเห็น OwnerUserId ผ่าน GET รายตัวได้อยู่แล้ว
+internal record CampaignListItem(Guid Id, string Name, string Mode, DateTimeOffset CreatedAt, Guid OwnerUserId);
 
 internal record CampaignDetailResponse(
     Guid Id,

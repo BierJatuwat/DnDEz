@@ -68,4 +68,41 @@ describe("useConsoleStore", () => {
       expect(useConsoleStore.getState().consultMessages).toEqual([]);
     });
   });
+
+  describe("action feed (Sprint E Part 3)", () => {
+    const message = (id: string) => ({
+      id,
+      sessionId: "session-1",
+      authorType: "Player",
+      characterId: "character-1",
+      content: `action ${id}`,
+      createdAt: "2026-08-28T00:00:00Z",
+    });
+
+    it("appends action messages and dedupes by id", () => {
+      useConsoleStore.getState().appendActionFeedMessage(message("m-1"));
+      useConsoleStore.getState().appendActionFeedMessage(message("m-1"));
+      useConsoleStore.getState().appendActionFeedMessage(message("m-2"));
+
+      expect(useConsoleStore.getState().actionFeed.map((m) => m.id)).toEqual(["m-1", "m-2"]);
+    });
+
+    it("clears the action feed and the draft input when another session is selected", () => {
+      useConsoleStore.getState().appendActionFeedMessage(message("m-1"));
+      useConsoleStore.getState().setActionInput("ร่างที่ยังไม่ได้ส่ง");
+
+      useConsoleStore.getState().setSelectedSessionId("session-2");
+
+      expect(useConsoleStore.getState().actionFeed).toEqual([]);
+      expect(useConsoleStore.getState().actionInput).toBe("");
+    });
+
+    it("clears the action feed when another campaign is selected", () => {
+      useConsoleStore.getState().appendActionFeedMessage(message("m-1"));
+
+      useConsoleStore.getState().setSelectedCampaignId("campaign-2");
+
+      expect(useConsoleStore.getState().actionFeed).toEqual([]);
+    });
+  });
 });

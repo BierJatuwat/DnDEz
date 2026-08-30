@@ -854,6 +854,32 @@ public class ConsultEndpointsTests : IAsyncLifetime
         Assert.DoesNotContain(list!, p => p.Id == proposalId);
     }
 
+    // ── Sprint E Part 3 regression — DM consult ต้องไม่ broadcast ActionMessageCreated ────
+    // (เพิ่มใหม่ ไม่ใช่แก้เทสต์เดิม) ดู doc comment ของ OrchestratorTurnRunner: /consult อาจมีคำถาม/
+    // สปอยล์ส่วนตัวของ DM ปนอยู่ ห้าม broadcast เข้ากลุ่มแคมเปญแบบไม่เลือกเด็ดขาด
+
+    [Fact]
+    public async Task Consult_never_broadcasts_ActionMessageCreated_to_campaign_group()
+    {
+        await using var connection = BuildConnection(_dmToken);
+        var receivedAnything = false;
+        connection.On<JsonElement>("ActionMessageCreated", _ => receivedAnything = true);
+
+        await connection.StartAsync();
+        await connection.InvokeAsync("JoinCampaign", _campaignId);
+
+        var response = await AuthedClient(_dmToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignId}/sessions/{_sessionId}/consult",
+            new { Content = "This might contain a DM-only spoiler about the villain." });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        // ให้เวลาพอจะรับได้ถ้าจะรับจริง กัน false negative จาก timing
+        await Task.Delay(TimeSpan.FromSeconds(1));
+        Assert.False(receivedAnything);
+
+        await connection.StopAsync();
+    }
+
     private record AuthResponse(string Token, Guid UserId);
 
     private record ConsultToolCallResponse(string Name, JsonElement Input, string Result);

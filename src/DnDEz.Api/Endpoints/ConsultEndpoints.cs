@@ -58,25 +58,6 @@ public static class ConsultEndpoints
     private const string AnthropicProvider = "anthropic";
     private const int MaxContentLength = 4000;
 
-    private static readonly AnthropicToolDefinition RollDiceTool = new(
-        Name: "roll_dice",
-        Description: "Roll dice using standard tabletop RPG notation (e.g. \"1d20+5\", \"2d6\"). " +
-                     "Returns the total and per-die breakdown. Use this whenever an action's outcome " +
-                     "should be determined by chance.",
-        InputSchema: new
-        {
-            type = "object",
-            properties = new
-            {
-                expression = new
-                {
-                    type = "string",
-                    description = "Dice notation, e.g. \"1d20+5\" or \"2d6\"",
-                },
-            },
-            required = new[] { "expression" },
-        });
-
     public static void MapConsultEndpoints(this WebApplication app)
     {
         app.MapPost("/campaigns/{campaignId:guid}/sessions/{sessionId:guid}/consult", async (
@@ -137,99 +118,14 @@ public static class ConsultEndpoints
             var protector = dataProtectionProvider.CreateProtector(ProtectorPurpose);
             var rawApiKey = protector.Unprotect(apiKey.EncryptedKey);
 
-            var autonomyLevel = await GetEffectiveAutonomyLevelAsync(db, campaignId, AutonomySubsystem.RulesCombat);
-            var toolToOffer = autonomyLevel == AutonomyLevel.Manual ? null : RollDiceTool;
+            // broadcastActionMessages: false — ดู doc comment ของ OrchestratorTurnRunner ว่าทำไม
+            // DM consult ห้าม broadcast เนื้อหาเข้ากลุ่มแคมเปญ (อาจมีคำถาม/สปอยล์ส่วนตัวของ DM ปนอยู่)
+            var result = await OrchestratorTurnRunner.RunTurnAsync(
+                db, anthropicClient, hubContext, logger, campaign, sessionId, rawApiKey, content,
+                MessageAuthorType.Dm, ActionSource.DmOverride, callerUserId.Value, characterId: null,
+                broadcastActionMessages: false);
 
-            var history = await BuildHistoryAsync(db, sessionId);
-            history.Add(new AnthropicHistoryMessage("user", content));
-
-            var incomingMessage = new Message
-            {
-                Id = Guid.NewGuid(),
-                SessionId = sessionId,
-                AuthorType = MessageAuthorType.Dm,
-                AuthorUserId = callerUserId.Value,
-                CharacterId = null,
-                Content = content,
-                ToolCalls = null,
-                Source = ActionSource.DmOverride,
-                CreatedAt = DateTimeOffset.UtcNow,
-            };
-            db.Messages.Add(incomingMessage);
-
-            var firstTurn = await anthropicClient.SendTurnAsync(rawApiKey, history, toolToOffer, CancellationToken.None);
-
-            if (firstTurn.ToolUse is null)
-            {
-                // Claude ตอบ narration จบเลย ไม่มี tool ให้ต้องตัดสินใจ auto/gate เลย — เหมือนกันทุก level
-                var narrationMessage = BuildAiMessage(sessionId, firstTurn.Text, toolCallsJson: null);
-                db.Messages.Add(narrationMessage);
-                await db.SaveChangesAsync();
-                return Results.Ok(new ConsultResponse(narrationMessage.Id, narrationMessage.Content, ToolCall: null, Pending: null));
-            }
-
-            if (autonomyLevel == AutonomyLevel.Suggest)
-            {
-                var proposal = new Proposal
-                {
-                    Id = Guid.NewGuid(),
-                    SessionId = sessionId,
-                    Subsystem = AutonomySubsystem.RulesCombat,
-                    ToolCallJson = JsonSerializer.Serialize(new PendingProposalPayload(
-                        firstTurn.ToolUse.Name,
-                        firstTurn.ToolUse.Input,
-                        firstTurn.ToolUse.Id,
-                        firstTurn.RawAssistantContent,
-                        history)),
-                    Reason = string.IsNullOrWhiteSpace(firstTurn.Text) ? null : firstTurn.Text,
-                    Status = ProposalStatus.Pending,
-                    CreatedAt = DateTimeOffset.UtcNow,
-                };
-                db.Proposals.Add(proposal);
-                await db.SaveChangesAsync();
-
-                try
-                {
-                    // security review (Sprint E Part 2): เดิมยิงเข้า Clients.Group(CampaignHub.GroupName)
-                    // ซึ่งทุกสมาชิกแคมเปญ (ไม่ใช่แค่ DM) join ได้ผ่าน JoinCampaign — ทำให้ player เห็น
-                    // proposal เต็ม (tool input + reason) ผ่าน realtime ทั้งที่ REST (GET/consult/resolve)
-                    // ทุกตัวบังคับ DM-only แล้ว ขัดกับ locked decision "ผู้เล่นไม่เห็นคิว proposal" ตรง ๆ —
-                    // เปลี่ยนเป็น Clients.User(dmUserId) ยิงตรงเฉพาะ connection ของ DM เท่านั้น ใช้ได้ทันที
-                    // เพราะ JwtTokenIssuer ใส่ ClaimTypes.NameIdentifier ไว้แล้วและไม่มี custom
-                    // IUserIdProvider ลงทะเบียน — SignalR default IUserIdProvider จึงอ่าน user id ได้ตรง
-                    await hubContext.Clients.User(campaign.OwnerUserId.ToString()).SendAsync(
-                        "ProposalCreated",
-                        new ProposalCreatedBroadcast(
-                            proposal.Id, sessionId, proposal.Subsystem.ToString(),
-                            firstTurn.ToolUse.Name, firstTurn.ToolUse.Input, proposal.Reason));
-                }
-                catch (Exception ex)
-                {
-                    logger.LogWarning(ex, "Failed to broadcast ProposalCreated for proposal {ProposalId}", proposal.Id);
-                }
-
-                return Results.Ok(new ConsultResponse(
-                    MessageId: null, Content: firstTurn.Text, ToolCall: null,
-                    Pending: new ConsultPendingResponse(proposal.Id, firstTurn.ToolUse.Name, firstTurn.ToolUse.Input)));
-            }
-
-            // Autonomous — execute ทันที (Manual ไม่มีทางมาถึงบรรทัดนี้ได้เลยเพราะไม่เสนอ tool ให้ตั้งแต่ต้น)
-            var toolResult = ExecuteRollDice(db, sessionId, firstTurn.ToolUse.Input);
-            var secondTurn = await anthropicClient.ContinueWithToolResultAsync(
-                rawApiKey, history, RollDiceTool, firstTurn.RawAssistantContent,
-                firstTurn.ToolUse.Id, toolResult, CancellationToken.None);
-
-            var toolCallResponse = new ConsultToolCallResponse(firstTurn.ToolUse.Name, firstTurn.ToolUse.Input, toolResult);
-            var toolCallsJson = JsonSerializer.Serialize(new[]
-            {
-                new { name = toolCallResponse.Name, input = toolCallResponse.Input, result = toolCallResponse.Result },
-            });
-
-            var aiMessage = BuildAiMessage(sessionId, secondTurn.Text, toolCallsJson);
-            db.Messages.Add(aiMessage);
-            await db.SaveChangesAsync();
-
-            return Results.Ok(new ConsultResponse(aiMessage.Id, aiMessage.Content, toolCallResponse, Pending: null));
+            return Results.Ok(result);
         }).RequireAuthorization();
 
         app.MapPost("/campaigns/{campaignId:guid}/proposals/{proposalId:guid}/resolve", async (
@@ -335,9 +231,9 @@ public static class ConsultEndpoints
             // ถ้าอะไรพังตั้งแต่บรรทัดนี้ลงไป (เช่น Anthropic เรียกไม่สำเร็จ) exception จะลอยขึ้นไปโดน
             // catch-all ของ RLS middleware ที่ rollback ทั้ง transaction — claim ข้างบนจะถูก undo ไป
             // ด้วยเลย ทำให้ proposal กลับไปเป็น Pending ให้ retry ใหม่ได้จริง ไม่ค้างสถานะครึ่ง ๆ กลาง ๆ
-            var toolResult = ExecuteRollDice(db, proposal.SessionId, payload.ToolInput);
+            var toolResult = OrchestratorTurnRunner.ExecuteRollDice(db, proposal.SessionId, payload.ToolInput);
             var secondTurn = await anthropicClient.ContinueWithToolResultAsync(
-                rawApiKey, payload.History, RollDiceTool, payload.RawAssistantContent,
+                rawApiKey, payload.History, OrchestratorTurnRunner.RollDiceTool, payload.RawAssistantContent,
                 payload.ToolUseId, toolResult, CancellationToken.None);
 
             var toolCallResponse = new ConsultToolCallResponse(payload.ToolName, payload.ToolInput, toolResult);
@@ -346,7 +242,7 @@ public static class ConsultEndpoints
                 new { name = toolCallResponse.Name, input = toolCallResponse.Input, result = toolCallResponse.Result },
             });
 
-            var aiMessage = BuildAiMessage(proposal.SessionId, secondTurn.Text, toolCallsJson);
+            var aiMessage = OrchestratorTurnRunner.BuildAiMessage(proposal.SessionId, secondTurn.Text, toolCallsJson);
             db.Messages.Add(aiMessage);
             await db.SaveChangesAsync();
 
@@ -409,98 +305,6 @@ public static class ConsultEndpoints
         await db.ApiKeys.SingleOrDefaultAsync(
             k => k.UserId == dmUserId && k.Provider == AnthropicProvider && k.Status == ApiKeyStatus.Active);
 
-    private static async Task<AutonomyLevel> GetEffectiveAutonomyLevelAsync(
-        DnDEzDbContext db, Guid campaignId, AutonomySubsystem subsystem)
-    {
-        var setting = await db.AutonomySettings
-            .Where(a => a.CampaignId == campaignId && a.Subsystem == subsystem)
-            .Select(a => (AutonomyLevel?)a.Level)
-            .SingleOrDefaultAsync();
-        // ไม่มีแถว = ยังไม่เคยตั้งค่า — default เดียวกับที่ entity ประกาศไว้เอง (ดู doc comment คลาส)
-        return setting ?? AutonomyLevel.Suggest;
-    }
-
-    private static async Task<List<AnthropicHistoryMessage>> BuildHistoryAsync(DnDEzDbContext db, Guid sessionId)
-    {
-        var existingMessages = await db.Messages
-            .Where(m => m.SessionId == sessionId)
-            .OrderBy(m => m.CreatedAt)
-            .Select(m => new { m.AuthorType, m.Content })
-            .ToListAsync();
-
-        return existingMessages
-            .Select(m => new AnthropicHistoryMessage(m.AuthorType == MessageAuthorType.Ai ? "assistant" : "user", m.Content))
-            .ToList();
-    }
-
-    private static Message BuildAiMessage(Guid sessionId, string content, string? toolCallsJson) => new()
-    {
-        Id = Guid.NewGuid(),
-        SessionId = sessionId,
-        AuthorType = MessageAuthorType.Ai,
-        AuthorUserId = null,
-        CharacterId = null,
-        Content = content,
-        ToolCalls = toolCallsJson,
-        Source = ActionSource.Ai,
-        CreatedAt = DateTimeOffset.UtcNow,
-    };
-
-    /// <summary>
-    /// executor ของ tool `roll_dice` — persist เป็น DiceRoll จริงเสมอ (ไม่มีทาง skip ได้ตาม
-    /// PROJECT-CONTEXT §3) คืนข้อความสรุปที่ **ไม่มี seed** ให้ Claude เอาไปใช้ต่อ expression ที่ผิด
-    /// รูปแบบคืน error string กลับไปแทนการโยน exception (ดู doc comment ของคลาส)
-    /// </summary>
-    private static string ExecuteRollDice(DnDEzDbContext db, Guid sessionId, JsonElement input)
-    {
-        string? expression;
-        try
-        {
-            expression = input.GetProperty("expression").GetString();
-        }
-        catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException)
-        {
-            // KeyNotFoundException = ไม่มี field "expression" เลย, InvalidOperationException =
-            // input ไม่ใช่ JSON object หรือ "expression" ไม่ใช่ string — ทั้งคู่ต้องกลายเป็น
-            // tool_result ข้อความ error ธรรมดา ไม่ใช่โยนขึ้นไปจน request ทั้งก้อนล้ม 500
-            return "Error: missing or malformed required \"expression\" field.";
-        }
-
-        if (string.IsNullOrWhiteSpace(expression))
-        {
-            return "Error: \"expression\" must be a non-empty dice notation string.";
-        }
-
-        RollResult roll;
-        var roller = SeededDiceRoller.CreateWithSecureRandomSeed();
-        try
-        {
-            var engine = new DiceEngine();
-            roll = engine.RollSystem(expression, roller, roller.Seed);
-        }
-        catch (DiceExpressionException ex)
-        {
-            return $"Error: invalid dice expression \"{expression}\" ({ex.Message}).";
-        }
-
-        var diceRoll = new DiceRoll
-        {
-            Id = Guid.NewGuid(),
-            SessionId = sessionId,
-            CharacterId = null,
-            Expression = roll.Expression,
-            Rolls = JsonSerializer.Serialize(roll.Rolls),
-            Total = roll.Total,
-            Source = DiceMode.SystemRoll,
-            Seed = roller.Seed,
-            EnteredByUserId = null,
-            CreatedAt = DateTimeOffset.UtcNow,
-        };
-        db.DiceRolls.Add(diceRoll);
-
-        var breakdown = string.Join(", ", roll.Rolls.Select(r => r.Dropped ? $"~~{r.Value}~~" : r.Value.ToString()));
-        return $"Rolled {roll.Expression} -> total {roll.Total} (dice: [{breakdown}])";
-    }
 }
 
 internal record ConsultRequest(string? Content);

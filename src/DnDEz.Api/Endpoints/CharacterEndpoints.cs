@@ -152,7 +152,9 @@ public static class CharacterEndpoints
             var characters = await db.Characters
                 .Where(c => c.CampaignId == campaignId)
                 .OrderBy(c => c.Id)
-                .Select(c => new CharacterListItem(c.Id, c.Name, c.Level, c.OwnerUserId, c.ControlledByDm))
+                .Select(c => new CharacterListItem(
+                    c.Id, c.Name, c.Level, c.OwnerUserId, c.ControlledByDm,
+                    c.CurrentHp, c.MaxHp, c.CurrentTempHp))
                 .ToListAsync();
 
             return Results.Ok(characters);
@@ -210,7 +212,12 @@ internal record CharacterCreatedResponse(
     string[] DamageVulnerabilities,
     string[] DamageImmunities);
 
-internal record CharacterListItem(Guid Id, string Name, int Level, Guid? OwnerUserId, bool ControlledByDm);
+// Sprint E Part 3 — เพิ่ม HP fields เข้า list (Sheet jsonb เต็มยังไม่ส่งเหมือนเดิม แค่คอลัมน์ HP
+// ที่ promote ออกมาแล้วตั้งแต่ Sprint B Part 2 ราคาถูกพอจะส่งใน list ได้) ให้ frontend แสดง HP
+// realtime ในรายการตัวละครได้โดยไม่ต้อง fetch detail ทีละตัว
+internal record CharacterListItem(
+    Guid Id, string Name, int Level, Guid? OwnerUserId, bool ControlledByDm,
+    int CurrentHp, int MaxHp, int CurrentTempHp);
 
 internal record CharacterDetailResponse(
     Guid Id,

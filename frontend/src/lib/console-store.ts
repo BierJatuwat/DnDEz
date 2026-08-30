@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { appendActionMessage, type ActionMessage } from "./action-feed";
 
 export type HubStatus = "disconnected" | "connecting" | "connected";
 export type LogEntry = { at: string; text: string };
@@ -15,6 +16,8 @@ type ConsoleState = {
   rollExpression: string;
   consultInput: string;
   consultMessages: ConsultMessage[];
+  actionInput: string;
+  actionFeed: ActionMessage[];
   setSelectedCampaignId: (id: string | null) => void;
   setSelectedSessionId: (id: string | null) => void;
   setJoinedCampaignId: (id: string | null) => void;
@@ -23,6 +26,8 @@ type ConsoleState = {
   appendLog: (text: string) => void;
   setConsultInput: (value: string) => void;
   appendConsultMessage: (role: ConsultRole, text: string) => void;
+  setActionInput: (value: string) => void;
+  appendActionFeedMessage: (message: ActionMessage) => void;
 };
 
 /** UI state ของ DM console (ไม่ใช่ server state) ตาม PROJECT-CONTEXT §3 —
@@ -36,20 +41,26 @@ export const useConsoleStore = create<ConsoleState>((set) => ({
   rollExpression: "1d20",
   consultInput: "",
   consultMessages: [],
+  actionInput: "",
+  actionFeed: [],
   setSelectedCampaignId: (id) =>
     set({
       selectedCampaignId: id,
       selectedSessionId: null,
-      // แชทปรึกษา AI ผูกกับเซสชัน — เปลี่ยนแคมเปญคือเปลี่ยนเซสชันไปด้วยอยู่แล้ว ต้องล้างทิ้ง
+      // แชทปรึกษา AI + action feed ผูกกับเซสชัน — เปลี่ยนแคมเปญคือเปลี่ยนเซสชันไปด้วยอยู่แล้ว ต้องล้างทิ้ง
       consultMessages: [],
       consultInput: "",
+      actionFeed: [],
+      actionInput: "",
     }),
   setSelectedSessionId: (id) =>
     set({
       selectedSessionId: id,
-      // แชทปรึกษา AI ผูกกับเซสชัน ห้ามให้ transcript ของเซสชันเก่าเล็ดลอดข้ามไป
+      // แชทปรึกษา AI + action feed ผูกกับเซสชัน ห้ามให้ transcript ของเซสชันเก่าเล็ดลอดข้ามไป
       consultMessages: [],
       consultInput: "",
+      actionFeed: [],
+      actionInput: "",
     }),
   setJoinedCampaignId: (id) => set({ joinedCampaignId: id }),
   setHubStatus: (status) => set({ hubStatus: status }),
@@ -70,4 +81,7 @@ export const useConsoleStore = create<ConsoleState>((set) => ({
         { at: new Date().toLocaleTimeString("th-TH"), role, text },
       ].slice(-50),
     })),
+  setActionInput: (value) => set({ actionInput: value }),
+  appendActionFeedMessage: (message) =>
+    set((state) => ({ actionFeed: appendActionMessage(state.actionFeed, message) })),
 }));
