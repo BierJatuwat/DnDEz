@@ -55,7 +55,13 @@ public static class ApiKeyEndpoints
     private const int KeySuffixLength = 4;
 
     /// <summary>provider ที่รองรับตอนนี้ — เพิ่มได้ทีหลังเมื่อมี HTTP client ของ provider นั้นจริง
-    /// (Voyage/OpenAI ถูกพูดถึงใน PROJECT-CONTEXT §4 สำหรับ embeddings แต่ยังไม่ถึงตอนนี้)</summary>
+    /// (Voyage/OpenAI ถูกพูดถึงใน PROJECT-CONTEXT §4 สำหรับ embeddings แต่ยังไม่ถึงตอนนี้)
+    ///
+    /// ห้ามเติม provider ที่นี่โดยไม่แยก validator ก่อน — ดู PROJECT-CONTEXT §4
+    /// "LLM provider — โฟกัส Anthropic เจ้าเดียวไปก่อน" (ตัดสิน 2026-08-30): ตอนนี้ validate ด้วย
+    /// `anthropicClient.ValidateKeyAsync()` แบบ hardcode ตัวเดียวไม่ผูกกับ provider ที่รับมาจาก URL —
+    /// เติมชื่อเจ้าอื่นลง allowlist เฉย ๆ โดยไม่แก้อะไรอีก = คีย์ของเจ้านั้นถูกส่งไปยิงหา
+    /// api.anthropic.com ทันที (คีย์ลับรั่วข้ามเจ้า)</summary>
     private static readonly HashSet<string> SupportedProviders = new(StringComparer.Ordinal) { "anthropic" };
 
     public static void MapApiKeyEndpoints(this WebApplication app)
