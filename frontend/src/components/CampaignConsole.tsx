@@ -77,6 +77,28 @@ type ResolveProposalResponse = {
   content: string;
   toolCall: ToolCallResult | null;
 };
+// Sprint F งานที่ 2b — /users/me/api-keys เป็น per-user ไม่ใช่ per-campaign (ดู Sprint D)
+// แสดงไม่ผูกกับแคมเปญที่เลือกอยู่ เพราะ user คนเดียวอาจเป็น DM ของหลายแคมเปญ
+type ApiKeyInfo = {
+  provider: string;
+  keySuffix: string;
+  status: string;
+  createdAt: string;
+  lastValidatedAt: string | null;
+};
+// ต้องตรงกับ AutonomySubsystem/AutonomyLevel ฝั่ง Domain.Enums เป๊ะ (string เทียบตรง ๆ ไม่ผ่าน mapping)
+type AutonomySetting = { campaignId: string; subsystem: string; level: string };
+const AUTONOMY_SUBSYSTEMS: { value: string; label: string }[] = [
+  { value: "Narration", label: "การเล่าเรื่อง" },
+  { value: "NpcDialogue", label: "บทพูด NPC" },
+  { value: "RulesCombat", label: "กฎการต่อสู้" },
+  { value: "MapScene", label: "ฉาก/แผนที่" },
+];
+const AUTONOMY_LEVELS: { value: string; label: string }[] = [
+  { value: "Manual", label: "ทำเอง (Manual)" },
+  { value: "Suggest", label: "เสนอก่อน (Suggest)" },
+  { value: "Autonomous", label: "อัตโนมัติ (Autonomous)" },
+];
 
 /**
  * Sprint E Part 1 — proof ว่า frontend คุยกับ Sprint A-D จริงครบ auth + REST + rules engine +
@@ -153,6 +175,23 @@ export function CampaignConsole() {
     enabled: !!token && !!selectedCampaignId && !!selectedSessionId,
   });
 
+  const apiKeysQuery = useQuery({
+    queryKey: ["api-keys"],
+    queryFn: () => apiFetch<ApiKeyInfo[]>("/users/me/api-keys", { token }),
+    enabled: !!token,
+  });
+
+  // GET เปิดให้สมาชิกทุกคนอ่านได้ (ไม่ใช่ DM-only) — ดู AutonomySettingEndpoints.cs
+  const autonomySettingsQuery = useQuery({
+    queryKey: ["autonomy-settings", selectedCampaignId],
+    queryFn: () =>
+      apiFetch<AutonomySetting[]>(
+        `/campaigns/${selectedCampaignId}/autonomy-settings`,
+        { token },
+      ),
+    enabled: !!token && !!selectedCampaignId,
+  });
+
   const createCampaign = useMutation({
     mutationFn: (name: string) =>
       apiFetch<{ id: string }>("/campaigns", {
@@ -215,6 +254,64 @@ export function CampaignConsole() {
     onError: (err) => {
       if (err instanceof ApiError) {
         appendLog(`สร้างตัวละครไม่สำเร็จ: HTTP ${err.status}`);
+      }
+    },
+  });
+
+  const setApiKey = useMutation({
+    mutationFn: (apiKey: string) =>
+      apiFetch<ApiKeyInfo>("/users/me/api-keys/anthropic", {
+        method: "PUT",
+        token,
+        body: { apiKey },
+      }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["api-keys"] });
+    },
+    onError: (err) => {
+      if (err instanceof ApiError) {
+        appendLog(`ตั้งค่า API key ไม่สำเร็จ: HTTP ${err.status}`);
+      }
+    },
+  });
+
+  const deleteApiKey = useMutation({
+    mutationFn: (provider: string) =>
+      apiFetch<void>(`/users/me/api-keys/${provider}`, {
+        method: "DELETE",
+        token,
+      }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["api-keys"] });
+    },
+    onError: (err) => {
+      if (err instanceof ApiError) {
+        appendLog(`ลบ API key ไม่สำเร็จ: HTTP ${err.status}`);
+      }
+    },
+  });
+
+  // DM-only ที่ชั้น API (403 ถ้าไม่ใช่ DM) — ปุ่มถูกซ่อนสำหรับ non-DM อยู่แล้ว แต่ error handling
+  // ไว้เผื่อ race (เช่น DM ย้ายความเป็นเจ้าของระหว่างที่ฟอร์มเปิดค้างอยู่ — ยังไม่มี feature นี้จริง
+  // แต่กันไว้เหมือน pattern อื่นในไฟล์นี้)
+  const setAutonomyLevel = useMutation({
+    mutationFn: ({ subsystem, level }: { subsystem: string; level: string }) =>
+      apiFetch<AutonomySetting>(
+        `/campaigns/${selectedCampaignId}/autonomy-settings/${subsystem}`,
+        { method: "PUT", token, body: { level } },
+      ),
+    onSuccess: (result) => {
+      queryClient.setQueryData<AutonomySetting[]>(
+        ["autonomy-settings", selectedCampaignId],
+        (old) =>
+          old?.map((s) => (s.subsystem === result.subsystem ? result : s)) ?? [
+            result,
+          ],
+      );
+    },
+    onError: (err) => {
+      if (err instanceof ApiError) {
+        appendLog(`ตั้งค่า autonomy ไม่สำเร็จ: HTTP ${err.status}`);
       }
     },
   });
@@ -388,6 +485,9 @@ export function CampaignConsole() {
   const sessions = sessionsQuery.data ?? [];
   const characters = charactersQuery.data ?? [];
   const proposals = proposalsQuery.data ?? [];
+  const apiKeys = apiKeysQuery.data ?? [];
+  const autonomySettings = autonomySettingsQuery.data ?? [];
+  const anthropicKey = apiKeys.find((k) => k.provider === "anthropic");
 
   const selectedCampaign = campaigns.find((c) => c.id === selectedCampaignId);
   // ยังไม่มี route/role system แยก DM/player (out of scope Part 3 นี้ — ดู plan) — ใช้ "ไม่ใช่ DM
@@ -424,6 +524,64 @@ export function CampaignConsole() {
             <span className="opacity-70"> · joined {joinedCampaignId}</span>
           )}
         </h2>
+      </section>
+
+      <section className="rounded border border-black/10 dark:border-white/10 p-4 space-y-3">
+        <h2 className="font-medium">Anthropic API key ของฉัน (BYOK)</h2>
+        <p className="text-xs opacity-60">
+          ใช้เมื่อคุณเป็น DM — orchestrator จะดึงคีย์นี้ไปเรียก AI แทนคุณ ไม่ผูกกับแคมเปญใดแคมเปญหนึ่ง
+        </p>
+        {anthropicKey ? (
+          <div className="flex items-center justify-between gap-2 text-sm">
+            <span>
+              anthropic ····{anthropicKey.keySuffix}{" "}
+              <span
+                className={
+                  anthropicKey.status === "Active"
+                    ? "text-green-500"
+                    : "text-red-500"
+                }
+              >
+                ({anthropicKey.status})
+              </span>
+            </span>
+            <button
+              onClick={() => deleteApiKey.mutate("anthropic")}
+              disabled={deleteApiKey.isPending}
+              className="rounded bg-red-600/80 px-3 py-1.5 text-white disabled:opacity-50"
+            >
+              ลบ
+            </button>
+          </div>
+        ) : (
+          <p className="text-sm opacity-50">ยังไม่ได้ตั้งค่า API key</p>
+        )}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            const form = e.currentTarget;
+            const input = form.elements.namedItem("apiKey") as HTMLInputElement;
+            if (input.value.trim()) {
+              setApiKey.mutate(input.value.trim());
+              input.value = "";
+            }
+          }}
+          className="flex gap-2"
+        >
+          <input
+            name="apiKey"
+            type="password"
+            placeholder={anthropicKey ? "ตั้งคีย์ใหม่ (rotate)..." : "sk-ant-..."}
+            className="flex-1 rounded border border-black/20 dark:border-white/20 bg-transparent px-3 py-1.5"
+          />
+          <button
+            type="submit"
+            disabled={setApiKey.isPending}
+            className="rounded bg-indigo-600 px-3 py-1.5 text-white disabled:opacity-50"
+          >
+            บันทึก
+          </button>
+        </form>
       </section>
 
       {campaignsQuery.isError && (
@@ -566,6 +724,54 @@ export function CampaignConsole() {
             {characters.length === 0 && (
               <li className="opacity-50 text-sm">ยังไม่มีตัวละคร</li>
             )}
+          </ul>
+        </section>
+      )}
+
+      {selectedCampaignId && (
+        <section className="rounded border border-black/10 dark:border-white/10 p-4 space-y-3">
+          <h2 className="font-medium">Autonomy dial (AI มีอำนาจแค่ไหนต่อ subsystem)</h2>
+          {autonomySettingsQuery.isError && (
+            <p className="text-sm text-red-500">โหลด autonomy dial ไม่สำเร็จ</p>
+          )}
+          <ul className="space-y-2">
+            {AUTONOMY_SUBSYSTEMS.map((sub) => {
+              const current =
+                autonomySettings.find((s) => s.subsystem === sub.value)?.level ??
+                "Suggest";
+              const isUpdating =
+                setAutonomyLevel.isPending &&
+                setAutonomyLevel.variables?.subsystem === sub.value;
+              return (
+                <li key={sub.value} className="flex items-center justify-between gap-2">
+                  <span className="text-sm">{sub.label}</span>
+                  {isDm ? (
+                    <select
+                      value={current}
+                      disabled={isUpdating}
+                      onChange={(e) =>
+                        setAutonomyLevel.mutate({
+                          subsystem: sub.value,
+                          level: e.target.value,
+                        })
+                      }
+                      className="rounded border border-black/20 dark:border-white/20 bg-transparent px-2 py-1 text-sm disabled:opacity-50"
+                    >
+                      {AUTONOMY_LEVELS.map((lvl) => (
+                        <option key={lvl.value} value={lvl.value}>
+                          {lvl.label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <span className="text-sm opacity-70">
+                      {AUTONOMY_LEVELS.find((l) => l.value === current)?.label ??
+                        current}
+                    </span>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         </section>
       )}
