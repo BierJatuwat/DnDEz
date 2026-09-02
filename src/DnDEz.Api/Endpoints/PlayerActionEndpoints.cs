@@ -80,18 +80,13 @@ public static class PlayerActionEndpoints
                 return Results.NotFound();
             }
 
-            var character = await db.Characters
-                .SingleOrDefaultAsync(c => c.Id == request.CharacterId && c.CampaignId == campaignId);
-            if (character is null)
-            {
-                return Results.NotFound();
-            }
-
             // ผู้เล่นแทนตัวละครของตัวเองเท่านั้น — เล่นแทนคนอื่น/ตัวละคร quick-play (OwnerUserId=null)
             // สงวนไว้ให้ DM ผ่าน override เท่านั้น (§6) ยังไม่ทำในรอบนี้
-            if (character.OwnerUserId != callerUserId.Value)
+            var (character, failure) = await CampaignAuthorization.RequireCharacterOwnerAsync(
+                db, request.CharacterId, campaignId, callerUserId.Value);
+            if (failure is not null)
             {
-                return Results.Forbid();
+                return failure;
             }
 
             // EF Core's Database.SqlQuery<T> สำหรับ scalar type คาดหวัง column ชื่อ "Value" เป๊ะ
@@ -110,7 +105,7 @@ public static class PlayerActionEndpoints
 
             var result = await OrchestratorTurnRunner.RunTurnAsync(
                 db, anthropicClient, hubContext, logger, campaign, sessionId, rawApiKey, content,
-                MessageAuthorType.Player, ActionSource.Player, callerUserId.Value, character.Id,
+                MessageAuthorType.Player, ActionSource.Player, callerUserId.Value, character!.Id,
                 broadcastActionMessages: true);
 
             return Results.Ok(result);

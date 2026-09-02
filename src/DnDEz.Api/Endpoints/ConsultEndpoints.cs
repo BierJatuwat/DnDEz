@@ -92,15 +92,10 @@ public static class ConsultEndpoints
                 return Results.Unauthorized();
             }
 
-            var campaign = await db.Campaigns.SingleOrDefaultAsync(c => c.Id == campaignId);
-            if (campaign is null)
+            var (campaign, failure) = await CampaignAuthorization.RequireCampaignDmAsync(db, campaignId, callerUserId.Value);
+            if (failure is not null)
             {
-                return Results.NotFound();
-            }
-
-            if (campaign.OwnerUserId != callerUserId.Value)
-            {
-                return Results.Forbid();
+                return failure;
             }
 
             var sessionExists = await db.Sessions.AnyAsync(s => s.Id == sessionId && s.CampaignId == campaignId);
@@ -121,7 +116,7 @@ public static class ConsultEndpoints
             // broadcastActionMessages: false — ดู doc comment ของ OrchestratorTurnRunner ว่าทำไม
             // DM consult ห้าม broadcast เนื้อหาเข้ากลุ่มแคมเปญ (อาจมีคำถาม/สปอยล์ส่วนตัวของ DM ปนอยู่)
             var result = await OrchestratorTurnRunner.RunTurnAsync(
-                db, anthropicClient, hubContext, logger, campaign, sessionId, rawApiKey, content,
+                db, anthropicClient, hubContext, logger, campaign!, sessionId, rawApiKey, content,
                 MessageAuthorType.Dm, ActionSource.DmOverride, callerUserId.Value, characterId: null,
                 broadcastActionMessages: false);
 
@@ -262,17 +257,12 @@ public static class ConsultEndpoints
                 return Results.Unauthorized();
             }
 
-            var campaign = await db.Campaigns.SingleOrDefaultAsync(c => c.Id == campaignId);
-            if (campaign is null)
-            {
-                return Results.NotFound();
-            }
-
             // DM-only เหมือน consult/resolve ในไฟล์นี้ — ผู้เล่นห้ามเห็นคิว proposal แม้แต่ empty list
             // ที่แยกแยะได้จาก "ไม่มี proposal" (locked design decision — ดู doc comment คลาส)
-            if (campaign.OwnerUserId != callerUserId.Value)
+            var (_, failure) = await CampaignAuthorization.RequireCampaignDmAsync(db, campaignId, callerUserId.Value);
+            if (failure is not null)
             {
-                return Results.Forbid();
+                return failure;
             }
 
             var sessionExists = await db.Sessions.AnyAsync(s => s.Id == sessionId && s.CampaignId == campaignId);

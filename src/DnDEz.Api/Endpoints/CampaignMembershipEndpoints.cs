@@ -47,15 +47,10 @@ public static class CampaignMembershipEndpoints
                 return Results.Unauthorized();
             }
 
-            var campaign = await db.Campaigns.SingleOrDefaultAsync(c => c.Id == campaignId);
-            if (campaign is null)
+            var (campaign, failure) = await CampaignAuthorization.RequireCampaignDmAsync(db, campaignId, callerUserId.Value);
+            if (failure is not null)
             {
-                return Results.NotFound();
-            }
-
-            if (campaign.OwnerUserId != callerUserId.Value)
-            {
-                return Results.Forbid();
+                return failure;
             }
 
             string? normalizedCode = null;
@@ -68,7 +63,7 @@ public static class CampaignMembershipEndpoints
                 }
             }
 
-            campaign.JoinCode = normalizedCode;
+            campaign!.JoinCode = normalizedCode;
 
             try
             {

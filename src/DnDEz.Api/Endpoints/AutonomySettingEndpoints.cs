@@ -53,15 +53,10 @@ public static class AutonomySettingEndpoints
             // ลำดับ auth-ก่อน-validate ลอกจาก join-code PUT: คนที่ไม่มีสิทธิ์แตะแคมเปญนี้ต้องได้
             // คำตอบเดียวกันเสมอ (404/403) ไม่ว่าจะส่ง subsystem/level มาถูกหรือผิด — ไม่เปิดให้ใช้
             // ความต่างของ 400 vs 404 เป็นเครื่องมือ probe
-            var campaign = await db.Campaigns.SingleOrDefaultAsync(c => c.Id == campaignId);
-            if (campaign is null)
+            var (_, failure) = await CampaignAuthorization.RequireCampaignDmAsync(db, campaignId, callerUserId.Value);
+            if (failure is not null)
             {
-                return Results.NotFound();
-            }
-
-            if (campaign.OwnerUserId != callerUserId.Value)
-            {
-                return Results.Forbid();
+                return failure;
             }
 
             if (!TryParseEnumName<AutonomySubsystem>(subsystem, out var parsedSubsystem))
