@@ -25,8 +25,12 @@ namespace DnDEz.Api.Realtime;
 /// ทำต่อ HTTP request) ผ่าน IServiceScopeFactory แทนการพึ่ง DbContext ที่ inject มาจาก connection scope
 /// </summary>
 [Authorize]
-public sealed class CampaignHub(IServiceScopeFactory scopeFactory) : Hub
+public sealed class CampaignHub(IServiceScopeFactory scopeFactory, CampaignGroupRegistry registry) : Hub
 {
+    // จำไว้ว่า connection นี้อยู่ group ของแคมเปญ/user ไหน — การเช็คสิทธิ์ตอน join ครั้งเดียวไม่พอ
+    // เพราะ broadcast จริงยิงผ่าน IHubContext จาก REST endpoint ไม่ผ่าน hub method เลย จึงต้องมี
+    // registry ให้ CampaignGroupRevalidator สแกนซ้ำ/เตะทันทีได้ (เหตุผลเต็ม: CampaignGroupMembership.cs)
+
     /// <summary>ชื่อ SignalR group ต่อแคมเปญ — endpoint ฝั่ง REST (Part 2/3) ต้อง broadcast เข้า group
     /// ชื่อนี้เป๊ะ ๆ ถึงจะถึงผู้เล่นที่ join ไว้</summary>
     public static string GroupName(Guid campaignId) => $"campaign:{campaignId}";
@@ -49,11 +53,24 @@ public sealed class CampaignHub(IServiceScopeFactory scopeFactory) : Hub
         }
 
         await Groups.AddToGroupAsync(Context.ConnectionId, GroupName(campaignId));
+        registry.Add(Context.ConnectionId, campaignId, userId.Value);
     }
 
     public async Task LeaveCampaign(Guid campaignId)
     {
         await Groups.RemoveFromGroupAsync(Context.ConnectionId, GroupName(campaignId));
+        registry.Remove(Context.ConnectionId, campaignId);
+    }
+
+    /// <summary>
+    /// ล้าง registry ตอน connection หลุด (ปิดแท็บ/เน็ตขาด ฯลฯ) — ถ้าไม่ทำ registry จะมีแถวค้างของ
+    /// connection ที่ตายแล้วไปเรื่อย ๆ (memory leak) และ <see cref="CampaignGroupRevalidator"/> จะเสีย
+    /// เวลาสแกน connection ที่ไม่มีอยู่จริงทุกรอบ
+    /// </summary>
+    public override async Task OnDisconnectedAsync(Exception? exception)
+    {
+        registry.RemoveConnection(Context.ConnectionId);
+        await base.OnDisconnectedAsync(exception);
     }
 
     private async Task<bool> IsMemberAsync(Guid campaignId, Guid userId)

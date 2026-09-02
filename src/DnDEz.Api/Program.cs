@@ -44,6 +44,13 @@ var redisConnectionString = Environment.GetEnvironmentVariable("DNDEZ_REDIS")
     ?? "localhost:6379";
 builder.Services.AddSignalR().AddStackExchangeRedis(redisConnectionString);
 
+// Sprint F งานที่ 3 — registry ของ group membership + revalidator ที่สแกนซ้ำเป็นรอบ (เหตุผลเต็ม:
+// Realtime/CampaignGroupMembership.cs) ทั้งสามตัวพึ่ง dependency ที่เป็น singleton ได้เท่านั้น
+// (IHubContext<CampaignHub> / IServiceScopeFactory) — ห้าม inject DbContext ตรง ๆ ที่นี่
+builder.Services.AddSingleton<CampaignGroupRegistry>();
+builder.Services.AddSingleton<CampaignGroupRevalidator>();
+builder.Services.AddHostedService<CampaignGroupRevalidationService>();
+
 // ── Sprint D Part 1: BYOK — Data Protection key ring ────────────────────────
 // key ring เก็บใน Redis ตัวเดียวกับ SignalR backplane (multiplexer แยกต่างหาก — SignalR ผูก
 // connection ของตัวเองไว้ภายใน AddStackExchangeRedis ไม่ได้ expose ให้ share ใช้ซ้ำ) เหตุผลเดียวกับ
