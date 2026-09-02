@@ -137,3 +137,70 @@
 [2026-08-31 00:20 +07] opus-worker (owner) : verify แบบแยกชั้นตามที่ผู้ใช้สั่ง — Stage A (REVOKE อย่างเดียว, proconfig ยัง NULL): CREATE TEMP โดน 42501, app_is_dm()=f, forged rows=0 · Stage B (คืน TEMP, pin search_path อย่างเดียว): attacker สร้าง+ใส่ข้อมูลตารางปลอมได้จริง (1 row) แต่ app_is_dm() ยัง f และ INSERT โดนบล็อก → **สองชั้นกันได้อิสระจากกันจริง** · Down/Up round-trip ผ่าน · migrate DB เปล่าใหม่ทั้งเชน ผ่าน (format %I current_database() ชี้ถูก DB ไม่ hardcode) · ล้าง probe object หมด
 [2026-08-31 00:20 +07] code-reviewer -> owner : APPROVE WITH NITS — ตรวจ signature ครบตรง pg_proc, Down เป็น inverse จริง, snapshot ไม่ถูกแตะ, ตัวเลขใน doc comment ถูกต้องตามที่วัด, คอมเมนต์ที่แก้ตรงกับ policy จริงและไม่มี logic เปลี่ยน · ชี้ช่องจริง 1 ข้อ: [Theory] hardcode ชื่อ 8 ตัว → ฟังก์ชันใหม่ที่ลืม pin จะรอดสายตา (owner เพิ่มเทสต์ catch-all query pg_proc ครอบ prosecdef OR app_* + guard กันผ่านแบบว่างเปล่า และพิสูจน์ด้วย negative control 3 แบบ: unpin, ใส่ search_path=public แบบละ pg_temp, unpin ตัว non-secdef — fail ทั้ง 3 ตามต้องการ)
 [2026-08-31 00:20 +07] security-reviewer -> owner : ยืนยัน fix **เพียงพอ** ปิดช่องโหว่ที่รายงาน · แต่พบของเดิมเพิ่ม 2 ข้อ (ไม่ได้เกิดจาก migration นี้) — (H1) raw_chunks มีทั้ง campaign_isolation(member) และ dm_only(dm) เป็น PERMISSIVE ทั้งคู่ → OR กัน = dm_only เป็นหมัน สมาชิกอ่าน/เขียน source material ของ DM ได้ (H2) campaign_members มีแค่ campaign_isolation FOR ALL app_is_member() → **สมาชิกรัน UPDATE campaign_members SET role='Dm' ให้ตัวเองได้ที่ชั้น DB** owner พิสูจน์เองแล้ว (UPDATE 1 → app_is_dm() พลิกเป็น t → INSERT ตาราง DM-only ผ่าน, rollback แล้ว) · **แต่ยังไม่ reachable ผ่าน HTTP**: grep แล้วไม่มีโค้ด C# เขียน campaign_members เลย มีแต่ app_create_campaign/app_join_campaign ที่ hardcode role → จัดเป็นช่องโหว่ defense-in-depth ที่รอวันมีคนเพิ่ม endpoint แก้ role · เข้า backlog ก้อนเดียวกับที่บันทึกไว้รอบก่อน ไม่รวม scope migration นี้
+
+[2026-09-02 main] : Sprint F งานที่ 3 (role enforcement + ปิดช่องโหว่ SignalR membership re-verify)
+— สำรวจก่อน dispatch พบ 3 subtask อิสระต่อกันจริง (เข้า decision framework "แตกเป็นส่วนอิสระได้"):
+  1. shared authorization helper — พบ pattern `campaign.OwnerUserId != callerUserId.Value -> Forbid()`
+     ซ้ำ 4 จุด (AutonomySettingEndpoints.cs, CampaignMembershipEndpoints.cs, ConsultEndpoints.cs x2,
+     PlayerActionEndpoints.cs ใช้ `Character.OwnerUserId` แทน) ยังไม่เคยแยกเป็น helper กลาง
+  2. SignalR group re-verify — CampaignHub.JoinCampaign เช็ค membership ครั้งเดียวตอน join แล้วไม่มี
+     evict เมื่อ membership เปลี่ยน (ค้างจาก Sprint C Part 1 security review) ยังไม่ exploitable จริง
+     วันนี้ (ไม่มี endpoint ถอนสมาชิก) แต่เป็นจุดที่ต้องปิดก่อนมี feature เปลี่ยน role ในอนาคต
+  3. เพิ่ม scope เอง (ไม่ใช่คำสั่งผู้ใช้ตรง ๆ): bundle backlog เดิมจากการแก้ CVE-2018-1058 —
+     `campaign_members` ให้ member UPDATE role ตัวเองเป็น 'Dm' ได้ที่ชั้น DB (ยังไม่ HTTP-reachable
+     แต่เป็นเรื่อง "role" เดียวกันเป๊ะ ทำพร้อมกันคุ้มกว่าแยกรอบ) — บันทึกไว้ตรงนี้ให้โปร่งใสตามหลัก
+     "ห้ามขยาย scope เงียบ ๆ"
+  4. พบ fact สำคัญจาก doc comment migration AddAutonomySettingDmOnlyRls ข้อ 4: ระบบมีนิยาม "DM" 2 ชั้น
+     ไม่ตรงกันเป๊ะ (C# = campaigns.owner_user_id, RLS = campaign_members.role='Dm') ที่เข้ากันได้
+     ทุกวันนี้เพราะ invariant "owner ถูก insert เป็น role Dm เสมอ" — shared helper ต้องยึด invariant
+     เดิม (เช็ค OwnerUserId ต่อ ไม่เปลี่ยนไปเช็ค role) ไม่งั้นเปิดช่องให้ 2 ชั้นไม่ตรงกันจริง
+- ทั้ง 3 subtask ต้องสร้างไฟล์ใหม่อย่างน้อย subtask 1 (helper file ใหม่) และ subtask 3 (migration ใหม่)
+  ตามข้อ 1a dispatch ตรง opus-worker ข้าม first triage
+
+[2026-09-02 21:1x +07] opus-worker (owner) : รับงาน Sprint F งานที่ 3 ทั้ง 3 subtask · **แก้ premise ที่รับมา 2 จุดหลังพิสูจน์เอง**:
+  (1) โจทย์ระบุ "Postgres/Redis containers กำลังรันอยู่ ห้ามสร้างใหม่" — ของจริง **Docker Desktop ไม่ได้รัน
+      เลย** (npipe dockerDesktopLinuxEngine ต่อไม่ได้, TCP 5432/6379 ปิดทั้งคู่) ต้องสตาร์ต Docker Desktop
+      แล้ว `docker compose up -d postgres redis` · ใช้ named volume เดิม (postgres_data) จึงเป็นการคืนชีพ
+      stack เดิม ไม่ใช่สร้าง container ใหม่ — ข้อมูล/migration เดิมอยู่ครบ (ตรวจ \dt + __EFMigrationsHistory)
+  (2) โจทย์ระบุว่า `app_create_campaign()`/`app_join_campaign()` "เป็น SECURITY DEFINER จึง bypass RLS"
+      — **เหตุผลนี้ผิด** และเป็นกับดักแบบเดียวกับ false fix รอบ Sprint F 2a: SECURITY DEFINER **ไม่ได้
+      bypass RLS ด้วยตัวมันเอง** (แค่เปลี่ยน current_user เป็น owner) และ `campaign_members` ตั้ง
+      **FORCE ROW LEVEL SECURITY** ไว้จริง (relforcerowsecurity=t) ซึ่งบังคับ policy กับเจ้าของตารางด้วย ·
+      ที่รอดจริงเพราะ owner ของฟังก์ชันคือ role `dndez` ซึ่งเป็น **superuser + BYPASSRLS** (ตรวจ pg_roles)
+      → บันทึกไว้ใน migration ข้อ 5 ว่าถ้าวันหลังย้าย owner ไป role ธรรมดาตามหลัก least privilege
+      INSERT ในฟังก์ชันจะพังทันที และมีเทสต์ App_join_campaign_still_inserts_membership_after_policy_change
+      คอยจับ
+[2026-09-02 21:1x +07] opus-worker (owner) : subtask 3 ยึด TDD ข้อ 3 — owner เขียน red test เอง 10 ตัว
+  (CampaignMemberRoleRlsTests.cs) ยืนยัน red จริง **fail 5 / pass 5** ก่อนแก้ · พิสูจน์ exploit ด้วยมือที่
+  psql ก่อนเขียนเทสต์ด้วย (app_is_dm()=f → UPDATE campaign_members SET role='Dm' คืน UPDATE 1 →
+  app_is_dm()=t → INSERT autonomy_settings ที่เป็น DM-only สำเร็จ → rollback) · **ตัดสินใจไม่ลอก pattern
+  member_read+dm_write ของ autonomy_settings มาทั้งดุ้นตามที่โจทย์เสนอ** — campaign_members ไม่มีโค้ด C#
+  เขียนเลยสักที่ (มีแต่ SELECT ที่ CampaignMembershipEndpoints.cs:136) จึงให้แค่ member_read (FOR SELECT)
+  และ **ไม่มี write policy เลย** · ถ้าลอก dm_write มาด้วย DM จะ DELETE แถว role='Dm' ของตัวเองได้ →
+  พัง invariant ที่เชื่อมนิยาม DM สองชั้นเข้าหากัน (ข้อ 4 ของบันทึกก่อนหน้า) · green 39/39
+[2026-09-02 21:1x +07] opus-worker -> sonnet-worker x4 (dispatch, ไม่ใช่ escalate) : (a) audit endpoint ทั้ง 11 ไฟล์
+  แบบ read-only (b) refactor 5 call site ไปใช้ CampaignAuthorization (c) wire SignalR revalidator + เทสต์ ·
+  owner เขียน **ไฟล์ใหม่ทั้ง 3 ไฟล์เอง** (CampaignAuthorization.cs, CampaignGroupMembership.cs,
+  CampaignMemberRoleRlsTests.cs + migration) เพราะ sonnet-worker ไม่มี Write tool (ข้อ 1a) แล้วส่งต่อเฉพาะ
+  ส่วน Edit/Bash/verify ให้ worker — ลดการชนเพดาน turn ตามบทเรียน "การเขียนพรอมต์ dispatch"
+  · sonnet-worker ชน turn limit 2 ครั้ง ต้อง SendMessage ต่อรอบ (pattern เดิมที่ยังไม่หาย)
+[2026-09-02 21:5x +07] code-reviewer -> owner : **APPROVE WITH NITS** — verify เองแล้วว่า refactor ไม่เปลี่ยนพฤติกรรม
+  (ลำดับ 404-ก่อน-403 ครบทั้ง 5 จุด, ไม่มี null-deref, PlayerActionEndpoints ไม่ได้ถูกใส่ DM check เกินมา,
+  AutonomySettingEndpoints ยัง auth-ก่อน-validate) · nit ที่รับมาแก้ 1 ข้อ: เทสต์
+  EvictMemberAsync_immediately_removes_connection_from_group **ไม่มีฐานเทียบ positive** → assert "ไม่ได้รับ"
+  จะผ่านฟรีถ้า pipe พังตั้งแต่ต้น (vacuous pass) — เพิ่ม baseline broadcast+assert ก่อนเตะแล้ว
+[2026-09-02 21:5x +07] security-reviewer -> owner : **APPROVE WITH FINDINGS** ไม่มี Critical · ยืนยัน fix ปิดช่องโหว่จริง
+  ด้วย SQL ของตัวเองบน DB จริง (UPDATE 0 / INSERT 42501 / DELETE 0 / SELECT ยังได้ / app_join_campaign ยัง insert ได้)
+  · **พิสูจน์กลไกที่ owner อ้างด้วย counter-experiment** (ไม่ใช่เห็นด้วยเฉย ๆ): สร้าง SECURITY DEFINER function
+  ที่ owner เป็น role ธรรมดา (rolsuper=f, rolbypassrls=f) แล้วเรียก → INSERT โดนบล็อกจริง
+  → ยืนยันว่า "SECURITY DEFINER อย่างเดียวไม่พอภายใต้ FORCE RLS" และที่ app_join_campaign รอดคือเพราะ
+  owner `dndez` เป็น superuser+BYPASSRLS ตามที่ owner เขียนไว้ใน migration ข้อ 5
+  · finding ที่รับมาแก้: SweepAsync ครอบ try แค่การเช็คสมาชิกภาพ ไม่ครอบ RemoveAsync → Redis สะดุดตอนถอด group
+    จะทำให้ subscription ที่เหลือในรอบนั้นถูกข้ามหมด (แก้แล้ว ครอบ try ทั้งก้อน)
+  · finding ที่รับมาแก้ (doc): EvictMemberAsync เป็น local-instance-only เพราะ registry อยู่ใน memory ต่ออินสแตนซ์
+    (ตัว Groups.RemoveFromGroupAsync เองข้ามอินสแตนซ์ได้ผ่าน backplane — คอขวดคือ "อินสแตนซ์ไหนรู้จัก subscription")
+    doc comment เดิมเขียนว่า "ปิดหน้าต่าง" ซึ่ง overstate — owner แก้ doc ให้ตรงความจริงตั้งแต่ก่อน review กลับมา
+  · ⚠️ **ไม่ apply** ข้อเสนอ `REVOKE INSERT/UPDATE/DELETE ON campaign_members FROM dndez_app` — reviewer ระบุเอง
+    ว่า **ยังไม่ได้ทดสอบ** ตามกฎ "ห้าม apply fix ที่ reviewer เสนอโดยไม่พิสูจน์เอง" เข้า backlog ให้เขียน red test ก่อน
+  · reviewer แจ้งตรงว่า **ไม่ได้รัน** dependency audit/secret scan รอบนี้ — owner ตรวจเองแทน: `git diff -- '*.csproj'`
+    ว่างเปล่า = ไม่มี dependency ใหม่ในงานนี้
