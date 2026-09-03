@@ -47,6 +47,10 @@ public class CharacterCrudTests : IAsyncLifetime
     private readonly Guid _campaignBId = Guid.NewGuid();
     private readonly Guid _campaignOwnerFixtureId = Guid.NewGuid();
 
+    // Sprint F งานที่ 7 — แคมเปญแยกที่ owner เป็น user จริงมี JWT ใช้ได้ (ต่างจาก campaignA/B ที่ owner
+    // เป็น synthetic fixture ไม่มี token) จำเป็นเพราะเทสต์ NPC ต้องมี DM ตัวจริงยิง request ผ่าน HTTP
+    private readonly Guid _campaignCId = Guid.NewGuid();
+
     private readonly Guid _characterA1Id = Guid.NewGuid();
     private readonly Guid _characterA2Id = Guid.NewGuid();
     private readonly Guid _characterB1Id = Guid.NewGuid();
@@ -57,12 +61,15 @@ public class CharacterCrudTests : IAsyncLifetime
     private string _userAToken = null!;
     private Guid _userBId;
     private string _userBToken = null!;
+    private Guid _dmUserId;
+    private string _dmToken = null!;
 
     public async Task InitializeAsync()
     {
         _factory = new WebApplicationFactory<Program>();
         (_userAId, _userAToken) = await RegisterAsync("a");
         (_userBId, _userBToken) = await RegisterAsync("b");
+        (_dmUserId, _dmToken) = await RegisterAsync("dm");
 
         await using var conn = new NpgsqlConnection(OwnerConnectionString);
         await conn.OpenAsync();
@@ -97,16 +104,36 @@ public class CharacterCrudTests : IAsyncLifetime
             await insertCampaign.ExecuteNonQueryAsync();
         }
 
-        foreach (var (campaignId, userId) in new[] { (_campaignAId, _userAId), (_campaignBId, _userBId) })
+        await using (var insertCampaignC = new NpgsqlCommand(
+            """
+            INSERT INTO campaigns
+                (id, owner_user_id, name, mode, rules_system, dice_mode, death_save_visibility, created_at)
+            VALUES
+                (@id, @ownerId, @name, 'Guided', 'srd2024', 'SystemRoll', 'PartyVisible', now())
+            """, conn))
+        {
+            insertCampaignC.Parameters.AddWithValue("id", _campaignCId);
+            insertCampaignC.Parameters.AddWithValue("ownerId", _dmUserId);
+            insertCampaignC.Parameters.AddWithValue("name", $"Character Campaign C (NPC) {_suffix}");
+            await insertCampaignC.ExecuteNonQueryAsync();
+        }
+
+        foreach (var (campaignId, userId, role) in new[]
+                 {
+                     (_campaignAId, _userAId, "Player"),
+                     (_campaignBId, _userBId, "Player"),
+                     (_campaignCId, _dmUserId, "Dm"),
+                 })
         {
             await using var insertMembership = new NpgsqlCommand(
                 """
                 INSERT INTO campaign_members (id, campaign_id, user_id, role, joined_at)
-                VALUES (@id, @campaignId, @userId, 'Player', now())
+                VALUES (@id, @campaignId, @userId, @role, now())
                 """, conn);
             insertMembership.Parameters.AddWithValue("id", Guid.NewGuid());
             insertMembership.Parameters.AddWithValue("campaignId", campaignId);
             insertMembership.Parameters.AddWithValue("userId", userId);
+            insertMembership.Parameters.AddWithValue("role", role);
             await insertMembership.ExecuteNonQueryAsync();
         }
 
@@ -145,11 +172,11 @@ public class CharacterCrudTests : IAsyncLifetime
         await using (var deleteCampaigns = new NpgsqlCommand(
             "DELETE FROM campaigns WHERE id = ANY(@ids)", conn))
         {
-            deleteCampaigns.Parameters.AddWithValue("ids", new[] { _campaignAId, _campaignBId });
+            deleteCampaigns.Parameters.AddWithValue("ids", new[] { _campaignAId, _campaignBId, _campaignCId });
             await deleteCampaigns.ExecuteNonQueryAsync();
         }
 
-        var userIds = new[] { _campaignOwnerFixtureId, _userAId, _userBId }
+        var userIds = new[] { _campaignOwnerFixtureId, _userAId, _userBId, _dmUserId }
             .Where(id => id != Guid.Empty).ToArray();
         await using (var deleteUsers = new NpgsqlCommand("DELETE FROM users WHERE id = ANY(@ids)", conn))
         {
@@ -440,6 +467,8 @@ public class CharacterCrudTests : IAsyncLifetime
         string Name,
         int Level,
         Guid? OwnerUserId,
+        bool ControlledByDm,
+        bool NpcStatsVisibleToParty,
         int CurrentHp,
         int MaxHp,
         int CurrentTempHp,
@@ -448,7 +477,9 @@ public class CharacterCrudTests : IAsyncLifetime
         string[] DamageVulnerabilities,
         string[] DamageImmunities);
 
-    private record CharacterListItem(Guid Id, string Name, int Level, Guid? OwnerUserId, bool ControlledByDm);
+    private record CharacterListItem(
+        Guid Id, string Name, int Level, Guid? OwnerUserId, bool ControlledByDm,
+        int? CurrentHp, int? MaxHp, int? CurrentTempHp);
 
     private record CharacterDetailResponse(
         Guid Id,
@@ -458,16 +489,17 @@ public class CharacterCrudTests : IAsyncLifetime
         string? Sheet,
         Guid? OwnerUserId,
         bool ControlledByDm,
+        bool NpcStatsVisibleToParty,
         bool HarvestConsent,
         bool IsOrphan,
         DateTimeOffset CreatedAt,
-        int CurrentHp,
-        int MaxHp,
-        int CurrentTempHp,
-        int ArmorClass,
-        string[] DamageResistances,
-        string[] DamageVulnerabilities,
-        string[] DamageImmunities);
+        int? CurrentHp,
+        int? MaxHp,
+        int? CurrentTempHp,
+        int? ArmorClass,
+        string[]? DamageResistances,
+        string[]? DamageVulnerabilities,
+        string[]? DamageImmunities);
 
     // ── Sprint B Part 2 — HP/AC/resistance ต่อยอดจาก endpoint เดิมของ Sprint A Part 3 ──────────
     // (ดู migration AddCharacterCombatStats + PROJECT-CONTEXT §4 "Sprint B Part 2" สำหรับเหตุผลเต็ม)
@@ -624,5 +656,151 @@ public class CharacterCrudTests : IAsyncLifetime
         Assert.Equal(25, detail.CurrentHp);
         Assert.Equal(14, detail.ArmorClass);
         Assert.Equal(new[] { "Poison" }, detail.DamageImmunities);
+    }
+
+    // ── Sprint F งานที่ 7: NPC/monster ─────────────────────────────────────
+
+    [Fact]
+    public async Task Dm_can_create_npc_with_controlled_by_dm_true_and_null_owner()
+    {
+        var response = await AuthedClient(_dmToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignCId}/characters",
+            new { Name = "Goblin Boss", IsNpc = true, ArmorClass = 17, MaxHp = 21 });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var created = await response.Content.ReadFromJsonAsync<CharacterCreatedResponse>(JsonOptions);
+        Assert.NotNull(created);
+        Assert.True(created!.ControlledByDm);
+        Assert.Null(created.OwnerUserId);
+        Assert.True(created.NpcStatsVisibleToParty, "ไม่ส่ง StatsVisibleToParty มา = default true");
+    }
+
+    [Fact]
+    public async Task Non_dm_cannot_create_npc()
+    {
+        var before = await CountCharactersAsync(_campaignAId);
+
+        var response = await AuthedClient(_userAToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignAId}/characters", new { Name = "Sneaky NPC Attempt", IsNpc = true });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(before, await CountCharactersAsync(_campaignAId));
+    }
+
+    [Fact]
+    public async Task Non_dm_member_sees_null_stats_for_hidden_npc_but_dm_sees_real_values()
+    {
+        var createResponse = await AuthedClient(_dmToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignCId}/characters",
+            new { Name = "Ambush Predator", IsNpc = true, StatsVisibleToParty = false, ArmorClass = 15, MaxHp = 40 });
+        var npc = await createResponse.Content.ReadFromJsonAsync<CharacterCreatedResponse>(JsonOptions);
+
+        // ต้อง join แคมเปญ C ก่อนถึงจะเป็นสมาชิกเห็นได้ (RLS) — ใช้ userA เข้าเป็น player เพิ่ม
+        await AddMembershipAsync(_campaignCId, _userAId, "Player");
+
+        var playerDetail = await (await AuthedClient(_userAToken)
+                .GetAsync($"/campaigns/{_campaignCId}/characters/{npc!.Id}"))
+            .Content.ReadFromJsonAsync<CharacterDetailResponse>(JsonOptions);
+        Assert.NotNull(playerDetail);
+        Assert.Null(playerDetail!.ArmorClass);
+        Assert.Null(playerDetail.CurrentHp);
+        Assert.Null(playerDetail.MaxHp);
+        Assert.Null(playerDetail.Sheet);
+
+        var playerList = await (await AuthedClient(_userAToken).GetAsync($"/campaigns/{_campaignCId}/characters"))
+            .Content.ReadFromJsonAsync<List<CharacterListItem>>(JsonOptions);
+        var listItem = playerList!.Single(c => c.Id == npc.Id);
+        Assert.Null(listItem.CurrentHp);
+        Assert.Null(listItem.MaxHp);
+        Assert.Null(listItem.CurrentTempHp);
+
+        var dmDetail = await (await AuthedClient(_dmToken)
+                .GetAsync($"/campaigns/{_campaignCId}/characters/{npc.Id}"))
+            .Content.ReadFromJsonAsync<CharacterDetailResponse>(JsonOptions);
+        Assert.Equal(15, dmDetail!.ArmorClass);
+        Assert.Equal(40, dmDetail.MaxHp);
+    }
+
+    [Fact]
+    public async Task Player_character_stats_always_visible_regardless_of_npc_flag_logic()
+    {
+        // ตัวละครผู้เล่นปกติ (ControlledByDm=false) ต้องไม่มีวันโดนซ่อน stat แม้แต่ในแคมเปญที่มี NPC
+        // ปิดการมองเห็นอยู่ด้วย — กันการเผลอ apply เงื่อนไขผิดตัว (ต้อง join ก่อนสร้างตัวละครเองได้เลย
+        // เพราะ POST เช็ค membership ก่อนเสมอ)
+        await AddMembershipAsync(_campaignCId, _userAId, "Player");
+
+        var createResponse = await AuthedClient(_userAToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignCId}/characters", new { Name = "Real Player Hero", ArmorClass = 16 });
+        var pc = await createResponse.Content.ReadFromJsonAsync<CharacterCreatedResponse>(JsonOptions);
+
+        var detail = await (await AuthedClient(_userAToken)
+                .GetAsync($"/campaigns/{_campaignCId}/characters/{pc!.Id}"))
+            .Content.ReadFromJsonAsync<CharacterDetailResponse>(JsonOptions);
+        Assert.Equal(16, detail!.ArmorClass);
+    }
+
+    [Fact]
+    public async Task Dm_can_toggle_npc_visibility()
+    {
+        var createResponse = await AuthedClient(_dmToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignCId}/characters",
+            new { Name = "Toggle Test NPC", IsNpc = true, StatsVisibleToParty = true, ArmorClass = 12 });
+        var npc = await createResponse.Content.ReadFromJsonAsync<CharacterCreatedResponse>(JsonOptions);
+
+        var toggleResponse = await AuthedClient(_dmToken).PutAsJsonAsync(
+            $"/campaigns/{_campaignCId}/characters/{npc!.Id}/npc-visibility", new { Visible = false });
+
+        Assert.Equal(HttpStatusCode.OK, toggleResponse.StatusCode);
+
+        await using var conn = new NpgsqlConnection(OwnerConnectionString);
+        await conn.OpenAsync();
+        await using var select = new NpgsqlCommand(
+            "SELECT npc_stats_visible_to_party FROM characters WHERE id = @id", conn);
+        select.Parameters.AddWithValue("id", npc.Id);
+        Assert.False((bool)(await select.ExecuteScalarAsync())!);
+    }
+
+    [Fact]
+    public async Task Non_dm_cannot_toggle_npc_visibility()
+    {
+        var createResponse = await AuthedClient(_dmToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignCId}/characters", new { Name = "Guarded NPC", IsNpc = true });
+        var npc = await createResponse.Content.ReadFromJsonAsync<CharacterCreatedResponse>(JsonOptions);
+        await AddMembershipAsync(_campaignCId, _userAId, "Player");
+
+        var response = await AuthedClient(_userAToken).PutAsJsonAsync(
+            $"/campaigns/{_campaignCId}/characters/{npc!.Id}/npc-visibility", new { Visible = false });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Toggling_visibility_on_a_player_character_returns_400()
+    {
+        var createResponse = await AuthedClient(_dmToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignCId}/characters", new { Name = "Not An NPC" });
+        var pc = await createResponse.Content.ReadFromJsonAsync<CharacterCreatedResponse>(JsonOptions);
+
+        var response = await AuthedClient(_dmToken).PutAsJsonAsync(
+            $"/campaigns/{_campaignCId}/characters/{pc!.Id}/npc-visibility", new { Visible = false });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    private async Task AddMembershipAsync(Guid campaignId, Guid userId, string role)
+    {
+        await using var conn = new NpgsqlConnection(OwnerConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO campaign_members (id, campaign_id, user_id, role, joined_at)
+            VALUES (@id, @campaignId, @userId, @role, now())
+            ON CONFLICT DO NOTHING
+            """, conn);
+        cmd.Parameters.AddWithValue("id", Guid.NewGuid());
+        cmd.Parameters.AddWithValue("campaignId", campaignId);
+        cmd.Parameters.AddWithValue("userId", userId);
+        cmd.Parameters.AddWithValue("role", role);
+        await cmd.ExecuteNonQueryAsync();
     }
 }

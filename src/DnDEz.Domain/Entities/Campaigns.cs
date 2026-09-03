@@ -131,6 +131,13 @@ public class Character
     /// <summary>DM เข้าควบคุมตัวละครนี้อยู่หรือไม่ (ได้ตลอดเวลา ไม่ใช่แค่ตอนหลุด) — player-side-design §6</summary>
     public bool ControlledByDm { get; set; }
 
+    /// <summary>Sprint F งานที่ 7 — เฉพาะตัวละครที่ ControlledByDm=true (NPC/monster) เท่านั้นที่ flag นี้
+    /// มีความหมาย: DM toggle ได้ว่าผู้เล่นเห็นค่า AC/HP/resistance ที่แน่นอนของ NPC ตัวนี้ไหม (ตัดสิน
+    /// 2026-09-03 — DM ปรับได้เอง ไม่ hardcode ซ่อนเสมอ) ตัวละครผู้เล่น (ControlledByDm=false) ไม่ผ่าน
+    /// flag นี้เลย เห็นได้ตามปกติเสมอไม่ว่าค่าจะเป็นอะไร — default true (เห็นได้) เพื่อไม่ให้ NPC ที่สร้าง
+    /// จากของเดิม (ยังไม่เคย toggle) กลายเป็นซ่อนโดยไม่ตั้งใจ</summary>
+    public bool NpcStatsVisibleToParty { get; set; } = true;
+
     // ── Quick play lifecycle (dm-side-design §8 + player-side-design §19, §22) ──
     /// <summary>ผู้เล่นอนุญาตให้เก็บ "โครง" ไปเป็น preset หรือไม่ · ไม่ติ๊ก = hard delete ตามเดิม</summary>
     public bool HarvestConsent { get; set; }

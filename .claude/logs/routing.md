@@ -333,3 +333,36 @@ CurrentHp ที่ไม่มี concurrency protection อยู่แล้�
 เพราะตรงกับ mandate ของมันโดยตรง (adversarial "โค้ดนี้ถูกใช้ผิดทางได้ยังไง") และตรงกับ precedent
 Sprint F งานที่ 4 ที่เจอ race แบบเดียวกัน (ผลลัพธ์ต่างแค่ "ขโมย action ฟรี" vs "หลบความตาย") ซึ่งแก้ไปแล้ว
 ไม่ใช่ปล่อยเป็น backlog -> สั่งแก้ก่อน merge
+
+[2026-09-03 main (self, ไม่ dispatch)] : Sprint F งานที่ 7 (NPC/monster ให้ DM คุม) — ไม่มี <tier>
+นำหน้า prompt ที่ได้รับ ("push แล้วไปงานที่ 7") ตามกฎ "เปิดใช้งาน" ทำเองตรง ๆ ไม่เรียก subagent ใดๆ
+รวมถึงไม่ dispatch code-reviewer/security-reviewer แม้งานนี้แตะ authorization + information disclosure
+(ปกติเข้า trigger บังคับ) — ตรวจเองอย่างละเอียดแทน (ดูด้านล่าง) เพราะ CLAUDE.md ห้าม subagent เด็ดขาด
+เมื่อไม่มี tier ไม่มีข้อยกเว้น
+
+สำรวจก่อนพบว่างานเล็กกว่าที่คาด: authorization (`ControlledByDm`) ที่งานที่ 3-5 วางไว้แล้วรองรับ NPC
+ครบอยู่แล้ว (RequireCharacterActorAsync) แต่ CharacterEndpoints.cs hardcode ControlledByDm=false ตอน
+สร้างเสมอ ไม่มีทางสร้าง NPC ได้เลยจริง — เจอคำถามที่ไม่มีคำตอบในระบบระหว่างสำรวจ (GET .../characters
+list ส่ง AC/HP ให้ทุกสมาชิกเห็นหมดอยู่แล้ว ไม่มี DM-only gate เลยแม้แต่ตัวละครผู้เล่นด้วยกันเอง) ถาม
+ผู้ใช้ตรง ๆ ก่อนตัดสินใจเอง — คำตอบ: DM toggle ได้ต่อตัวละคร (ไม่ hardcode ซ่อนเสมอ ไม่เปิดเผยเสมอ)
+
+เพิ่ม Character.NpcStatsVisibleToParty (bool, default true, มีความหมายเฉพาะตอน ControlledByDm=true)
++ migration AddNpcStatsVisibility + endpoint ใหม่ PUT npc-visibility (DM-only) + IsNpc/StatsVisibleToParty
+บน POST create เดิม (DM-only เมื่อ IsNpc=true, reuse CampaignAuthorization.RequireCampaignDmAsync ไม่
+หมุนเช็คเอง) + list/detail กรอง AC/HP/resistance/Sheet เป็น null ให้ non-DM เมื่อ NPC ปิดการมองเห็นไว้
+
+⚠️ **เจอบั๊กจริงระหว่าง scaffold migration ไม่เกี่ยวกับงานนี้โดยตรง — งานที่ 5 ทิ้งไว้**: `dotnet ef
+migrations add` ของงานนี้ scaffold `AddColumn<uint>(name: "xmin", ...)` ให้ death_save_states ด้วย
+(ยังไม่เคยมีการ scaffold migration จริงให้ xmin concurrency token ที่งานที่ 5 เพิ่มไว้ — sub-worker
+เข้าใจถูกว่า "ไม่ต้อง migration" แต่ไม่เคยรัน `dotnet ef migrations add` เพื่อพิสูจน์ว่า EF เห็นด้วย)
+ยืนยันด้วย WebSearch ว่าเป็น known bug จริงของ Npgsql.EntityFrameworkCore.PostgreSQL (github issue
+npgsql/efcore.pg#3854) — `IsRowVersion()` เป็นวิธี config ที่ถูกต้องตามเอกสารแล้ว แต่ migration
+generator ไม่ suppress DDL ให้ system column apply migration ที่มี AddColumn ตัวนี้จริงจะพังทันที
+("column xmin conflicts with a system column name") แก้ด้วยการตัด AddColumn/DropColumn ของ xmin ออก
+จาก migration file ด้วยมือ (ตัว config ใน DbContext ถูกต้องอยู่แล้ว ไม่ต้องแก้) ยืนยันจริงว่าใช้งานได้
+ด้วยการ apply migration จริง + รัน DeathSaveEndpointsTests ทั้งไฟล์ซ้ำ (37/37 ผ่านรวม concurrency test)
+— บทเรียน: "ไม่ต้อง migration" เป็น claim ที่ต้องพิสูจน์ด้วยการ scaffold จริงเสมอ ไม่ใช่แค่เหตุผลทาง
+ทฤษฎีว่า xmin เป็น system column อยู่แล้ว
+
+392 เทสต์ทั้งชุดผ่าน (391 ผ่าน 1 fail เดิมไม่เกี่ยวข้อง) รวม 7 เทสต์ใหม่ของงานนี้ + 1 เทสต์เดิมที่พัง
+ตอนแรกเพราะลำดับ join-ก่อน-สร้างผิด (แก้เองแล้วก่อน commit)

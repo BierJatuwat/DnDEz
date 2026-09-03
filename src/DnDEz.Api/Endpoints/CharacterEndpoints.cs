@@ -6,6 +6,16 @@ using Microsoft.EntityFrameworkCore;
 
 namespace DnDEz.Api.Endpoints;
 
+/// <summary>Sprint F งานที่ 7 — helper กำหนดว่าตัวเลข stat (AC/HP/resistance) ของตัวละครหนึ่งตัว
+/// ควรส่งให้ caller คนนี้เห็นจริงไหม เกณฑ์: ไม่ใช่ NPC (ControlledByDm=false) เห็นได้เสมอ, เป็น NPC
+/// ที่ NpcStatsVisibleToParty=true เห็นได้เสมอ, เป็น NPC ที่ปิดการมองเห็นไว้ (false) เห็นได้เฉพาะ DM
+/// เท่านั้น — ใช้ทั้งใน list และ detail ให้เกณฑ์ตรงกันเป๊ะ ไม่ให้สองจุดเพี้ยนจากกัน</summary>
+internal static class CharacterStatsVisibility
+{
+    public static bool IsVisibleTo(bool controlledByDm, bool npcStatsVisibleToParty, bool callerIsDm) =>
+        !controlledByDm || npcStatsVisibleToParty || callerIsDm;
+}
+
 /// <summary>
 /// Sprint A Part 3 — thin CRUD ของ `characters` ภายใต้แคมเปญที่เลือกแล้ว (create + list + get)
 /// Sprint B Part 2 — เพิ่ม combat stats (HP/AC/resistance) ที่ promote จาก Sheet jsonb เป็น typed
@@ -97,7 +107,34 @@ public static class CharacterEndpoints
                 return Results.NotFound();
             }
 
-            var ownerUserId = principal.GetUserId();
+            var callerUserId = principal.GetUserId();
+            if (callerUserId is null)
+            {
+                return Results.Unauthorized();
+            }
+
+            // Sprint F งานที่ 7 — สร้าง NPC/monster ได้เฉพาะ DM เท่านั้น (IsNpc=true) ตัวละครผู้เล่น
+            // ปกติ (IsNpc=false/null) ใครก็สร้างของตัวเองได้เหมือนเดิมทุกประการ ไม่กระทบ path เดิม
+            var isNpc = request.IsNpc ?? false;
+            Guid? ownerUserId = callerUserId.Value;
+
+            if (isNpc)
+            {
+                // ใช้ helper กลางเดียวกับที่ endpoint อื่นใช้ทั่วระบบ (Sprint F งานที่ 3) ไม่หมุน DM
+                // check เองซ้ำ — กันไม่ให้เกิด pattern ซ้ำกระจายที่ต่างกันแบบก่อนงานที่ 3 อีก
+                var (_, dmFailure) = await CampaignAuthorization.RequireCampaignDmAsync(
+                    db, campaignId, callerUserId.Value);
+                if (dmFailure is not null)
+                {
+                    return dmFailure;
+                }
+
+                // NPC ไม่มีเจ้าของเป็นผู้เล่น — DM คุมผ่าน ControlledByDm (ดู
+                // CampaignAuthorization.RequireCharacterActorAsync) ไม่ใช่ OwnerUserId
+                ownerUserId = null;
+            }
+
+            var statsVisibleToParty = request.StatsVisibleToParty ?? true;
 
             var character = new Character
             {
@@ -114,7 +151,8 @@ public static class CharacterEndpoints
                 DamageResistances = damageResistances,
                 DamageVulnerabilities = damageVulnerabilities,
                 DamageImmunities = damageImmunities,
-                ControlledByDm = false,
+                ControlledByDm = isNpc,
+                NpcStatsVisibleToParty = statsVisibleToParty,
                 HarvestConsent = false,
                 IsOrphan = false,
                 CreatedAt = DateTimeOffset.UtcNow,
@@ -131,6 +169,8 @@ public static class CharacterEndpoints
                     character.Name,
                     character.Level,
                     character.OwnerUserId,
+                    character.ControlledByDm,
+                    character.NpcStatsVisibleToParty,
                     character.CurrentHp,
                     character.MaxHp,
                     character.CurrentTempHp,
@@ -140,8 +180,50 @@ public static class CharacterEndpoints
                     character.DamageImmunities));
         }).RequireAuthorization();
 
+        // Sprint F งานที่ 7 — DM toggle การมองเห็น stat ของ NPC ระหว่างเล่นได้ (เช่น เผยค่าที่แน่นอน
+        // หลังผู้เล่นรู้จักมอนสเตอร์ตัวนั้นแล้ว) 400 ถ้าไม่ใช่ NPC เพราะ flag นี้ไม่มีความหมายกับ
+        // ตัวละครผู้เล่น (เห็นได้เสมอไม่ว่าค่าไหน) — กัน DM เผลอเซ็ตแล้วคิดว่ามีผลทั้งที่ไม่มี
+        app.MapPut("/campaigns/{campaignId:guid}/characters/{characterId:guid}/npc-visibility", async (
+            Guid campaignId,
+            Guid characterId,
+            SetNpcVisibilityRequest request,
+            ClaimsPrincipal principal,
+            DnDEzDbContext db) =>
+        {
+            var callerUserId = principal.GetUserId();
+            if (callerUserId is null)
+            {
+                return Results.Unauthorized();
+            }
+
+            var (campaign, failure) = await CampaignAuthorization.RequireCampaignDmAsync(
+                db, campaignId, callerUserId.Value);
+            if (failure is not null)
+            {
+                return failure;
+            }
+
+            var character = await db.Characters
+                .SingleOrDefaultAsync(c => c.Id == characterId && c.CampaignId == campaignId);
+            if (character is null)
+            {
+                return Results.NotFound();
+            }
+
+            if (!character.ControlledByDm)
+            {
+                return Results.BadRequest();
+            }
+
+            character.NpcStatsVisibleToParty = request.Visible;
+            await db.SaveChangesAsync();
+
+            return Results.Ok(new SetNpcVisibilityResponse(character.Id, character.NpcStatsVisibleToParty));
+        }).RequireAuthorization();
+
         app.MapGet("/campaigns/{campaignId:guid}/characters", async (
             Guid campaignId,
+            ClaimsPrincipal principal,
             DnDEzDbContext db) =>
         {
             if (!await CampaignVisibility.IsVisibleAsync(db, campaignId))
@@ -149,20 +231,33 @@ public static class CharacterEndpoints
                 return Results.NotFound();
             }
 
+            var callerUserId = principal.GetUserId();
+            var campaign = await db.Campaigns.SingleOrDefaultAsync(c => c.Id == campaignId);
+            var callerIsDm = campaign is not null && callerUserId is not null
+                && campaign.OwnerUserId == callerUserId.Value;
+
             var characters = await db.Characters
                 .Where(c => c.CampaignId == campaignId)
                 .OrderBy(c => c.Id)
-                .Select(c => new CharacterListItem(
-                    c.Id, c.Name, c.Level, c.OwnerUserId, c.ControlledByDm,
-                    c.CurrentHp, c.MaxHp, c.CurrentTempHp))
+                .Select(c => new
+                {
+                    c.Id, c.Name, c.Level, c.OwnerUserId, c.ControlledByDm, c.NpcStatsVisibleToParty,
+                    c.CurrentHp, c.MaxHp, c.CurrentTempHp,
+                })
                 .ToListAsync();
 
-            return Results.Ok(characters);
+            var items = characters.Select(c =>
+                CharacterStatsVisibility.IsVisibleTo(c.ControlledByDm, c.NpcStatsVisibleToParty, callerIsDm)
+                ? new CharacterListItem(c.Id, c.Name, c.Level, c.OwnerUserId, c.ControlledByDm, c.CurrentHp, c.MaxHp, c.CurrentTempHp)
+                : new CharacterListItem(c.Id, c.Name, c.Level, c.OwnerUserId, c.ControlledByDm, null, null, null));
+
+            return Results.Ok(items);
         }).RequireAuthorization();
 
         app.MapGet("/campaigns/{campaignId:guid}/characters/{characterId:guid}", async (
             Guid campaignId,
             Guid characterId,
+            ClaimsPrincipal principal,
             DnDEzDbContext db) =>
         {
             if (!await CampaignVisibility.IsVisibleAsync(db, campaignId))
@@ -170,16 +265,38 @@ public static class CharacterEndpoints
                 return Results.NotFound();
             }
 
+            var callerUserId = principal.GetUserId();
+            var campaign = await db.Campaigns.SingleOrDefaultAsync(c => c.Id == campaignId);
+            var callerIsDm = campaign is not null && callerUserId is not null
+                && campaign.OwnerUserId == callerUserId.Value;
+
             var character = await db.Characters
                 .Where(c => c.Id == characterId && c.CampaignId == campaignId)
-                .Select(c => new CharacterDetailResponse(
-                    c.Id, c.CampaignId, c.Name, c.Level, c.Sheet, c.OwnerUserId,
-                    c.ControlledByDm, c.HarvestConsent, c.IsOrphan, c.CreatedAt,
-                    c.CurrentHp, c.MaxHp, c.CurrentTempHp, c.ArmorClass,
-                    c.DamageResistances, c.DamageVulnerabilities, c.DamageImmunities))
                 .SingleOrDefaultAsync();
 
-            return character is null ? Results.NotFound() : Results.Ok(character);
+            if (character is null)
+            {
+                return Results.NotFound();
+            }
+
+            var statsVisible = CharacterStatsVisibility.IsVisibleTo(
+                character.ControlledByDm, character.NpcStatsVisibleToParty, callerIsDm);
+
+            // Sheet (jsonb เต็ม) เป็น stat เหมือนกัน — NPC ที่ปิดการมองเห็นไว้ต้องไม่ส่ง Sheet ให้
+            // non-DM เห็นเช่นกัน (จะเผลอมี AC/HP ที่แท้จริงปนอยู่ใน jsonb ก็ได้ในอนาคต ไม่ใช่แค่คอลัมน์
+            // typed ที่ promote ออกมาแล้ว)
+            return Results.Ok(new CharacterDetailResponse(
+                character.Id, character.CampaignId, character.Name, character.Level,
+                statsVisible ? character.Sheet : null,
+                character.OwnerUserId, character.ControlledByDm, character.NpcStatsVisibleToParty,
+                character.HarvestConsent, character.IsOrphan, character.CreatedAt,
+                statsVisible ? character.CurrentHp : null,
+                statsVisible ? character.MaxHp : null,
+                statsVisible ? character.CurrentTempHp : null,
+                statsVisible ? character.ArmorClass : null,
+                statsVisible ? character.DamageResistances : null,
+                statsVisible ? character.DamageVulnerabilities : null,
+                statsVisible ? character.DamageImmunities : null));
         }).RequireAuthorization();
     }
 
@@ -196,7 +313,15 @@ internal record CreateCharacterRequest(
     int? ArmorClass,
     string[]? DamageResistances,
     string[]? DamageVulnerabilities,
-    string[]? DamageImmunities);
+    string[]? DamageImmunities,
+    // Sprint F งานที่ 7 — DM เท่านั้นที่ตั้ง IsNpc=true ได้ (403 ถ้าไม่ใช่) StatsVisibleToParty มีผล
+    // เฉพาะตอน IsNpc=true เท่านั้น (default true ถ้าไม่ส่งมา)
+    bool? IsNpc,
+    bool? StatsVisibleToParty);
+
+internal record SetNpcVisibilityRequest(bool Visible);
+
+internal record SetNpcVisibilityResponse(Guid CharacterId, bool Visible);
 
 internal record CharacterCreatedResponse(
     Guid Id,
@@ -204,6 +329,8 @@ internal record CharacterCreatedResponse(
     string Name,
     int Level,
     Guid? OwnerUserId,
+    bool ControlledByDm,
+    bool NpcStatsVisibleToParty,
     int CurrentHp,
     int MaxHp,
     int CurrentTempHp,
@@ -215,9 +342,13 @@ internal record CharacterCreatedResponse(
 // Sprint E Part 3 — เพิ่ม HP fields เข้า list (Sheet jsonb เต็มยังไม่ส่งเหมือนเดิม แค่คอลัมน์ HP
 // ที่ promote ออกมาแล้วตั้งแต่ Sprint B Part 2 ราคาถูกพอจะส่งใน list ได้) ให้ frontend แสดง HP
 // realtime ในรายการตัวละครได้โดยไม่ต้อง fetch detail ทีละตัว
+//
+// Sprint F งานที่ 7 — HP fields เป็น nullable แล้ว: null หมายถึง "ตัวละครนี้เป็น NPC ที่ DM ปิดการ
+// มองเห็น stat ไว้ และ caller ไม่ใช่ DM" (ดู CharacterStatsVisibility.IsVisibleTo) ตัวละครผู้เล่นปกติ
+// หรือ NPC ที่เปิดให้เห็น จะยังได้ค่าจริงเหมือนเดิมทุกประการ ไม่ใช่ breaking change สำหรับเคสเดิม
 internal record CharacterListItem(
     Guid Id, string Name, int Level, Guid? OwnerUserId, bool ControlledByDm,
-    int CurrentHp, int MaxHp, int CurrentTempHp);
+    int? CurrentHp, int? MaxHp, int? CurrentTempHp);
 
 internal record CharacterDetailResponse(
     Guid Id,
@@ -227,13 +358,14 @@ internal record CharacterDetailResponse(
     string? Sheet,
     Guid? OwnerUserId,
     bool ControlledByDm,
+    bool NpcStatsVisibleToParty,
     bool HarvestConsent,
     bool IsOrphan,
     DateTimeOffset CreatedAt,
-    int CurrentHp,
-    int MaxHp,
-    int CurrentTempHp,
-    int ArmorClass,
-    string[] DamageResistances,
-    string[] DamageVulnerabilities,
-    string[] DamageImmunities);
+    int? CurrentHp,
+    int? MaxHp,
+    int? CurrentTempHp,
+    int? ArmorClass,
+    string[]? DamageResistances,
+    string[]? DamageVulnerabilities,
+    string[]? DamageImmunities);
