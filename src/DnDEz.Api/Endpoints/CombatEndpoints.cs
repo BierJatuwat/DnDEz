@@ -1,4 +1,6 @@
+using System.Security.Claims;
 using System.Text.Json;
+using DnDEz.Api.Auth;
 using DnDEz.Api.Realtime;
 using DnDEz.Domain.Entities;
 using DnDEz.Domain.Enums;
@@ -28,6 +30,13 @@ namespace DnDEz.Api.Endpoints;
 ///    ไม่ใช่สร้าง Character ใหม่แล้ว Update() ทับ (จะเขียนทับคอลัมน์อื่นที่ไม่ได้ query มาด้วย)
 ///  • endpoint นี้เป็น action/RPC (resolve แล้วจบ) ไม่ใช่ resource creation ตรง ๆ — ไม่มี GET ให้ชี้
 ///    Location กลับไปได้ (ต่างจาก dice-rolls ที่มี pattern REST ปกติ) จึงตอบ 200 OK ไม่ใช่ 201 Created
+///  • Sprint F งานที่ 3.1 — ตัวละคร "ที่ลงมือ" (characterId ใน route ทั้งสอง endpoint) ต้องผ่าน
+///    <see cref="CampaignAuthorization.RequireCharacterActorAsync"/> ก่อนเสมอ (เจ้าของตัวละครเอง
+///    หรือ DM คุม character ที่ <c>ControlledByDm == true</c>) — เดิม endpoint นี้เช็คแค่ "ตัวละครมีอยู่
+///    จริงในแคมเปญ" (<c>AnyAsync</c>) ทำให้สมาชิกแคมเปญคนไหนก็เล่นแทนตัวละครของคนอื่นได้ (ช่องโหว่จริง
+///    แก้พร้อมเทสต์ red-proof ใน CombatResolutionTests) ส่วนตัวละคร **เป้าหมาย** ของ attacks
+///    (targetCharacterId) ไม่ต้องผ่านเช็คนี้ — โจมตีตัวละครอื่นเป็นการกระทำ combat ปกติ ไม่ใช่ปัญหา
+///    authorization
 /// </summary>
 public static class CombatEndpoints
 {
@@ -42,8 +51,15 @@ public static class CombatEndpoints
             Guid sessionId,
             Guid characterId,
             CreateCheckRequest request,
+            ClaimsPrincipal principal,
             DnDEzDbContext db) =>
         {
+            var callerUserId = principal.GetUserId();
+            if (callerUserId is null)
+            {
+                return Results.Unauthorized();
+            }
+
             if (string.IsNullOrWhiteSpace(request.Expression))
             {
                 return Results.BadRequest();
@@ -74,11 +90,11 @@ public static class CombatEndpoints
                 return Results.NotFound();
             }
 
-            var characterExists = await db.Characters
-                .AnyAsync(c => c.Id == characterId && c.CampaignId == campaignId);
-            if (!characterExists)
+            var (_, actorFailure) = await CampaignAuthorization.RequireCharacterActorAsync(
+                db, characterId, campaignId, campaign, callerUserId.Value);
+            if (actorFailure is not null)
             {
-                return Results.NotFound();
+                return actorFailure;
             }
 
             if (campaign.DiceMode != DiceMode.SystemRoll)
@@ -132,6 +148,7 @@ public static class CombatEndpoints
             Guid sessionId,
             Guid characterId,
             CreateAttackRequest request,
+            ClaimsPrincipal principal,
             DnDEzDbContext db,
             IHubContext<CampaignHub> hubContext,
             ILoggerFactory loggerFactory) =>
@@ -141,6 +158,13 @@ public static class CombatEndpoints
             // ILoggerFactory.CreateLogger(Type) แทน ได้ category name เดียวกันเป๊ะ
             // ("DnDEz.Api.Endpoints.CombatEndpoints") โดยไม่ต้องพึ่ง generic constraint
             var logger = loggerFactory.CreateLogger(typeof(CombatEndpoints));
+
+            var callerUserId = principal.GetUserId();
+            if (callerUserId is null)
+            {
+                return Results.Unauthorized();
+            }
+
             if (string.IsNullOrWhiteSpace(request.Expression))
             {
                 return Results.BadRequest();
@@ -210,11 +234,11 @@ public static class CombatEndpoints
                 return Results.NotFound();
             }
 
-            var attackerExists = await db.Characters
-                .AnyAsync(c => c.Id == characterId && c.CampaignId == campaignId);
-            if (!attackerExists)
+            var (_, actorFailure) = await CampaignAuthorization.RequireCharacterActorAsync(
+                db, characterId, campaignId, campaign, callerUserId.Value);
+            if (actorFailure is not null)
             {
-                return Results.NotFound();
+                return actorFailure;
             }
 
             var target = await db.Characters

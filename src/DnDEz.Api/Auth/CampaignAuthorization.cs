@@ -90,4 +90,80 @@ public static class CampaignAuthorization
 
         return (character, null);
     }
+
+    /// <summary>
+    /// Sprint F งานที่ 3.1 — บังคับว่าผู้เรียกมีสิทธิ์ "เล่นแทน" ตัวละครตัวนี้ในการกระทำ combat
+    /// (checks/attacks) ได้จริง ตัวละครต้องอยู่ในแคมเปญที่ระบุใน route เหมือน
+    /// <see cref="RequireCharacterOwnerAsync"/> (กัน IDOR แบบเดียวกัน — 404 ก่อน 403 เสมอ)
+    ///
+    /// ต่างจาก <see cref="RequireCharacterOwnerAsync"/> ตรงที่เมธอดนี้มี "DM override": อนุญาตได้
+    /// สองทาง —
+    ///   • <c>character.OwnerUserId == callerUserId</c> (เจ้าของตัวละครเล่นเอง) หรือ
+    ///   • <c>campaign.OwnerUserId == callerUserId AND character.ControlledByDm</c> (DM คุมตัวละคร
+    ///     ที่ตั้งค่าให้ DM คุมได้ เช่น monster/NPC) — เช็ค <c>ControlledByDm</c> ตรง ๆ ไม่ใช่อนุมานจาก
+    ///     <c>OwnerUserId == null</c> เพราะสองอย่างนี้เป็นคนละแกนกัน (ตัวละคร quick-play ที่ยังไม่มี
+    ///     เจ้าของก็ <c>OwnerUserId == null</c> เหมือนกันแต่ไม่ได้แปลว่า DM คุมได้)
+    ///
+    /// รับ <paramref name="campaign"/> เข้ามาแทนการ query ซ้ำ — caller (CombatEndpoints) โหลด
+    /// campaign มาแล้วก่อนหน้านี้ในทุก call site เพื่อเช็ค null/DiceMode อยู่แล้ว จึงไม่ต้องเรียก
+    /// <see cref="RequireCampaignDmAsync"/> ซ้ำ (เทียบ <c>campaign.OwnerUserId</c> ตรง ๆ พอ เหมือนที่
+    /// เมธอดอื่นในไฟล์นี้ทำ)
+    ///
+    /// ⚠️ ห้ามใช้เมธอดนี้แทน <see cref="RequireCharacterOwnerAsync"/> ที่ <c>PlayerActionEndpoints</c> —
+    /// ที่นั่นตั้งใจไม่มี DM override (ผู้เล่นโพสต์ action แทนตัวเองเท่านั้น ตาม §6 ที่ DM override ยัง
+    /// ไม่ทำ) semantics ต่างกันโดยตั้งใจ
+    /// </summary>
+    public static async Task<(Character? Character, IResult? Failure)> RequireCharacterActorAsync(
+        DnDEzDbContext db, Guid characterId, Guid campaignId, Campaign campaign, Guid callerUserId)
+    {
+        var character = await db.Characters
+            .SingleOrDefaultAsync(c => c.Id == characterId && c.CampaignId == campaignId);
+        if (character is null)
+        {
+            return (null, Results.NotFound());
+        }
+
+        var isOwner = character.OwnerUserId == callerUserId;
+        var isDmControlling = campaign.OwnerUserId == callerUserId && character.ControlledByDm;
+        if (!isOwner && !isDmControlling)
+        {
+            return (null, Results.Forbid());
+        }
+
+        return (character, null);
+    }
+
+    /// <summary>
+    /// Sprint F งานที่ 4 — บังคับว่าผู้เรียกต้องเป็น "DM ของแคมเปญ" หรือ "เจ้าของตัวละครที่ถึงตาเดิน
+    /// อยู่ตอนนี้" เท่านั้น (ใช้กับ endpoint ใช้ทรัพยากรระหว่างเทิร์น เช่น spend action/movement)
+    ///
+    /// ต่างจาก <see cref="RequireCharacterActorAsync"/> ตรงที่อันนั้นผูกกับ **ตัวละคร** ("เจ้าของ
+    /// ตัวละคร หรือ DM ที่คุมตัวละครที่ <c>ControlledByDm == true</c>") ส่วนเมธอดนี้ผูกกับ **เทิร์น**
+    /// ("DM ของแคมเปญ หรือเจ้าของตัวละครที่ถึงตาเดินอยู่ตอนนี้") — คนละแกนกัน
+    ///
+    /// DM ผ่านได้เสมอโดยไม่ต้องดู <c>ControlledByDm</c> เพราะ DM เป็นคนเดินวง initiative เอง
+    /// (endpoint next-turn/end เป็น DM-only อยู่แล้ว จึงไม่มีทางที่ DM จะ "ไม่ควบคุม" เทิร์นที่ตัวเอง
+    /// เป็นคนเดินให้)
+    ///
+    /// เป็น synchronous ไม่แตะ DB โดยตั้งใจ — ลำดับ 404-ก่อน-403 ถูกจัดการไปแล้วตอน caller โหลด
+    /// campaign/encounter/participant (RLS กรองให้แล้ว) โหลดไม่เจอ = 404 ก่อนจะมาถึงเมธอดนี้
+    ///
+    /// ตัวละคร quick-play ที่ <c>OwnerUserId == null</c> ไม่มีวันผ่าน (null != Guid เสมอ) → เหลือแค่
+    /// DM สั่งแทน ตรงกับเมธอดอื่นในไฟล์นี้
+    /// </summary>
+    public static IResult? RequireDmOrCurrentTurnCharacterOwner(
+        Campaign campaign, Character currentTurnCharacter, Guid callerUserId)
+    {
+        if (campaign.OwnerUserId == callerUserId)
+        {
+            return null;
+        }
+
+        if (currentTurnCharacter.OwnerUserId == callerUserId)
+        {
+            return null;
+        }
+
+        return Results.Forbid();
+    }
 }

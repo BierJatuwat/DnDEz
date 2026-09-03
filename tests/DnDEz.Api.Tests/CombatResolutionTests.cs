@@ -50,7 +50,6 @@ public class CombatResolutionTests : IAsyncLifetime
 
     private readonly Guid _campaignId = Guid.NewGuid();
     private readonly Guid _campaignDmEnteredId = Guid.NewGuid();
-    private readonly Guid _campaignOwnerFixtureId = Guid.NewGuid();
 
     private readonly Guid _sessionId = Guid.NewGuid();
     private readonly Guid _sessionInDmEnteredCampaignId = Guid.NewGuid();
@@ -61,8 +60,15 @@ public class CombatResolutionTests : IAsyncLifetime
     private readonly Guid _lowAcTargetId = Guid.NewGuid();   // AC=1  — ไม่มีทาง Miss ได้เลยนอกจาก AutomaticMiss
     private readonly Guid _resistantTargetId = Guid.NewGuid(); // AC=1, resist Fire
 
+    // Sprint F งานที่ 3.1 — fixtures สำหรับเทสต์ RequireCharacterActorAsync (character ที่ "ลงมือ"
+    // ต้องเป็นเจ้าของเองหรือ DM คุม ControlledByDm)
+    private readonly Guid _dmControlledMonsterId = Guid.NewGuid(); // ControlledByDm=true, owner=null
+    private readonly Guid _otherPlayersCharacterId = Guid.NewGuid(); // owner=outsider, ControlledByDm=false
+
     private WebApplicationFactory<Program> _factory = null!;
 
+    private Guid _dmUserId;
+    private string _dmToken = null!;
     private Guid _memberUserId;
     private string _memberToken = null!;
     private Guid _outsiderUserId;
@@ -71,22 +77,12 @@ public class CombatResolutionTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         _factory = new WebApplicationFactory<Program>();
+        (_dmUserId, _dmToken) = await RegisterAsync("dm");
         (_memberUserId, _memberToken) = await RegisterAsync("member");
         (_outsiderUserId, _outsiderToken) = await RegisterAsync("outsider");
 
         await using var conn = new NpgsqlConnection(OwnerConnectionString);
         await conn.OpenAsync();
-
-        await using (var insertOwner = new NpgsqlCommand(
-            """
-            INSERT INTO users (id, email, display_name, password_hash, created_at)
-            VALUES (@id, @email, 'Combat Campaign Owner', 'not-a-real-hash', now())
-            """, conn))
-        {
-            insertOwner.Parameters.AddWithValue("id", _campaignOwnerFixtureId);
-            insertOwner.Parameters.AddWithValue("email", $"combat-owner-{_suffix}@example.test");
-            await insertOwner.ExecuteNonQueryAsync();
-        }
 
         foreach (var (campaignId, name, diceMode) in new[]
                  {
@@ -102,10 +98,26 @@ public class CombatResolutionTests : IAsyncLifetime
                     (@id, @ownerId, @name, 'Guided', 'srd2024', @diceMode, 'PartyVisible', now())
                 """, conn);
             insertCampaign.Parameters.AddWithValue("id", campaignId);
-            insertCampaign.Parameters.AddWithValue("ownerId", _campaignOwnerFixtureId);
+            insertCampaign.Parameters.AddWithValue("ownerId", _dmUserId);
             insertCampaign.Parameters.AddWithValue("name", name);
             insertCampaign.Parameters.AddWithValue("diceMode", diceMode);
             await insertCampaign.ExecuteNonQueryAsync();
+        }
+
+        // DM ต้องมีแถว campaign_members ของตัวเองด้วย (role 'Dm') ไม่งั้น RLS `campaign_member_read`
+        // (app_is_member_of) กรองแคมเปญทิ้งไปเลยตอน DM เรียก endpoint ด้วยโทเคนของตัวเอง — ปกติ
+        // `app_create_campaign()` insert แถวนี้ให้อัตโนมัติ แต่ fixture นี้ insert ตรงเข้า `campaigns`
+        // เพื่อควบคุม id/dice_mode เอง จึงต้องเพิ่มแถวนี้เองด้วย
+        await using (var insertDmMembership = new NpgsqlCommand(
+            """
+            INSERT INTO campaign_members (id, campaign_id, user_id, role, joined_at)
+            VALUES (@id, @campaignId, @userId, 'Dm', now())
+            """, conn))
+        {
+            insertDmMembership.Parameters.AddWithValue("id", Guid.NewGuid());
+            insertDmMembership.Parameters.AddWithValue("campaignId", _campaignId);
+            insertDmMembership.Parameters.AddWithValue("userId", _dmUserId);
+            await insertDmMembership.ExecuteNonQueryAsync();
         }
 
         await using (var insertMembership = new NpgsqlCommand(
@@ -135,15 +147,27 @@ public class CombatResolutionTests : IAsyncLifetime
         await InsertSessionAsync(conn, _sessionId, _campaignId);
         await InsertSessionAsync(conn, _sessionInDmEnteredCampaignId, _campaignDmEnteredId);
 
-        await InsertCharacterAsync(conn, _attackerId, _campaignId, "Attacker", armorClass: 10);
+        // _attackerId ต้องมีเจ้าของเป็น _memberUserId (ไม่ใช่ NULL เหมือนเดิม) — ตั้งแต่ Sprint F
+        // งานที่ 3.1 endpoint บังคับ RequireCharacterActorAsync (เจ้าของเอง/DM คุม ControlledByDm)
+        // แทนเช็คแค่ "มีอยู่จริง" เทสต์ happy-path เดิมทั้งหมดที่ใช้ _memberToken เล่นแทน _attackerId
+        // จึงต้องให้ _memberUserId เป็นเจ้าของจริงถึงจะยังผ่าน
+        await InsertCharacterAsync(conn, _attackerId, _campaignId, "Attacker", armorClass: 10, ownerUserId: _memberUserId);
         // ต้องมี character ในแคมเปญ DmEntered ด้วย ไม่งั้นเทสต์ dice-mode-rejection จะ 404 ที่
         // character-existence check ก่อนถึง DiceMode check เลย (คนละเงื่อนไขกับที่ตั้งใจทดสอบ)
-        await InsertCharacterAsync(conn, _attackerInDmEnteredCampaignId, _campaignDmEnteredId, "Attacker (DmEntered)", armorClass: 10);
+        await InsertCharacterAsync(
+            conn, _attackerInDmEnteredCampaignId, _campaignDmEnteredId, "Attacker (DmEntered)", armorClass: 10,
+            ownerUserId: _memberUserId);
         await InsertCharacterAsync(conn, _targetInDmEnteredCampaignId, _campaignDmEnteredId, "Target (DmEntered)", armorClass: 10);
         await InsertCharacterAsync(conn, _lowAcTargetId, _campaignId, "Low AC Target", armorClass: 1);
         await InsertCharacterAsync(
             conn, _resistantTargetId, _campaignId, "Fire Resistant Target", armorClass: 1,
             damageResistances: new[] { "Fire" });
+
+        await InsertCharacterAsync(
+            conn, _dmControlledMonsterId, _campaignId, "DM Monster", armorClass: 10, controlledByDm: true);
+        await InsertCharacterAsync(
+            conn, _otherPlayersCharacterId, _campaignId, "Other Player's Character", armorClass: 10,
+            ownerUserId: _outsiderUserId);
     }
 
     private static async Task InsertSessionAsync(NpgsqlConnection conn, Guid id, Guid campaignId)
@@ -160,7 +184,7 @@ public class CombatResolutionTests : IAsyncLifetime
 
     private static async Task InsertCharacterAsync(
         NpgsqlConnection conn, Guid id, Guid campaignId, string name, int armorClass,
-        string[]? damageResistances = null)
+        string[]? damageResistances = null, Guid? ownerUserId = null, bool controlledByDm = false)
     {
         await using var cmd = new NpgsqlCommand(
             """
@@ -169,14 +193,16 @@ public class CombatResolutionTests : IAsyncLifetime
                  armor_class, damage_resistances, damage_vulnerabilities, damage_immunities, level,
                  controlled_by_dm, harvest_consent, is_orphan, created_at)
             VALUES
-                (@id, @campaignId, NULL, @name, '{}', 20, 20, 0, @armorClass, @damageResistances,
-                 ARRAY[]::text[], ARRAY[]::text[], 1, false, false, false, now())
+                (@id, @campaignId, @ownerUserId, @name, '{}', 20, 20, 0, @armorClass, @damageResistances,
+                 ARRAY[]::text[], ARRAY[]::text[], 1, @controlledByDm, false, false, now())
             """, conn);
         cmd.Parameters.AddWithValue("id", id);
         cmd.Parameters.AddWithValue("campaignId", campaignId);
+        cmd.Parameters.AddWithValue("ownerUserId", (object?)ownerUserId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("name", name);
         cmd.Parameters.AddWithValue("armorClass", armorClass);
         cmd.Parameters.AddWithValue("damageResistances", damageResistances ?? Array.Empty<string>());
+        cmd.Parameters.AddWithValue("controlledByDm", controlledByDm);
         await cmd.ExecuteNonQueryAsync();
     }
 
@@ -192,7 +218,7 @@ public class CombatResolutionTests : IAsyncLifetime
             await deleteCampaigns.ExecuteNonQueryAsync();
         }
 
-        var userIds = new[] { _campaignOwnerFixtureId, _memberUserId, _outsiderUserId }
+        var userIds = new[] { _dmUserId, _memberUserId, _outsiderUserId }
             .Where(id => id != Guid.Empty).ToArray();
         await using (var deleteUsers = new NpgsqlCommand("DELETE FROM users WHERE id = ANY(@ids)", conn))
         {
@@ -379,6 +405,61 @@ public class CombatResolutionTests : IAsyncLifetime
             new { Expression = "1d20", Dc = 10 });
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    // ── checks — authorization (Sprint F งานที่ 3.1) ─────────────────────────
+    // เจ้าของตัวละครเล่นแทนตัวเอง (Post_checks_with_dc_1/21_*, Post_checks_response_never_exposes_seed
+    // ฯลฯ ด้านบนใช้ _memberToken เล่นแทน _attackerId ที่เป็นเจ้าของอยู่แล้ว = คุมกรณี "เจ้าของสำเร็จ"
+    // ครบอยู่แล้ว ไม่ต้องเพิ่มซ้ำ) — ที่เหลือคือ DM override และ non-owner/non-DM
+
+    [Fact]
+    public async Task Post_checks_by_dm_as_dm_controlled_character_succeeds()
+    {
+        var response = await AuthedClient(_dmToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignId}/sessions/{_sessionId}/characters/{_dmControlledMonsterId}/checks",
+            new { Expression = "1d20", Dc = 1 });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<CheckResolutionResponse>(JsonOptions);
+        Assert.NotNull(body);
+        Assert.Equal(_dmControlledMonsterId, body!.CharacterId);
+    }
+
+    [Fact]
+    public async Task Post_checks_by_non_owner_non_dm_returns_403_and_creates_no_row()
+    {
+        await using var conn = new NpgsqlConnection(OwnerConnectionString);
+        await conn.OpenAsync();
+        await using var countBefore = new NpgsqlCommand(
+            "SELECT count(*) FROM dice_rolls WHERE character_id = @characterId", conn);
+        countBefore.Parameters.AddWithValue("characterId", _otherPlayersCharacterId);
+        var before = (long)(await countBefore.ExecuteScalarAsync())!;
+
+        // _memberUserId เป็นสมาชิกแคมเปญ (เห็น campaign/session ได้ผ่าน RLS) แต่ไม่ใช่เจ้าของ
+        // _otherPlayersCharacterId (owner = outsider) และไม่ใช่ DM — ต้องได้ 403 ไม่ใช่ 404
+        var response = await AuthedClient(_memberToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignId}/sessions/{_sessionId}/characters/{_otherPlayersCharacterId}/checks",
+            new { Expression = "1d20", Dc = 1 });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+
+        await using var countAfter = new NpgsqlCommand(
+            "SELECT count(*) FROM dice_rolls WHERE character_id = @characterId", conn);
+        countAfter.Parameters.AddWithValue("characterId", _otherPlayersCharacterId);
+        var after = (long)(await countAfter.ExecuteScalarAsync())!;
+        Assert.Equal(before, after);
+    }
+
+    [Fact]
+    public async Task Post_checks_by_dm_as_non_dm_controlled_character_returns_403()
+    {
+        // DM override สงวนไว้เฉพาะตัวละครที่ ControlledByDm=true เท่านั้น — _attackerId เป็นของจริง
+        // ของผู้เล่น (ControlledByDm=false) DM เล่นแทนไม่ได้แม้จะเป็น DM ของแคมเปญนี้ก็ตาม
+        var response = await AuthedClient(_dmToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignId}/sessions/{_sessionId}/characters/{_attackerId}/checks",
+            new { Expression = "1d20", Dc = 1 });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     // ── attacks — happy path (hit) ─────────────────────────────────────────
@@ -771,6 +852,23 @@ public class CombatResolutionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Post_attacks_for_unknown_attacker_returns_404()
+    {
+        // ต่างจาก Post_attacks_for_unknown_target_returns_404 — เคสนี้ตัวละคร "ที่ลงมือ"
+        // (characterId ใน route) ไม่มีอยู่จริง ไม่ใช่ target — ยังไม่เคยมีเทสต์ครอบเคสนี้มาก่อน
+        var response = await AuthedClient(_memberToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignId}/sessions/{_sessionId}/characters/{Guid.NewGuid()}/attacks",
+            new
+            {
+                Expression = "1d20+5",
+                TargetCharacterId = _lowAcTargetId,
+                DamageComponents = new[] { new { Expression = "1d6", Type = "Slashing" } },
+            });
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
     public async Task Post_attacks_into_campaign_with_dm_entered_dice_mode_returns_400()
     {
         var response = await AuthedClient(_memberToken).PostAsJsonAsync(
@@ -813,6 +911,93 @@ public class CombatResolutionTests : IAsyncLifetime
             });
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    // ── attacks — authorization (Sprint F งานที่ 3.1) ────────────────────────
+    // เจ้าของตัวละครเล่นแทนตัวเองสำเร็จ คุมอยู่แล้วโดย happy-path tests ด้านบนที่ใช้ _memberToken
+    // เล่นแทน _attackerId (เจ้าของจริง) — ที่เหลือคือ DM override, non-owner/non-DM, และ side effects
+
+    [Fact]
+    public async Task Post_attacks_by_dm_as_dm_controlled_character_succeeds_and_updates_target_hp()
+    {
+        AttackResolutionResponse? body = null;
+        for (var attempt = 0; attempt < MaxRetries; attempt++)
+        {
+            var response = await AuthedClient(_dmToken).PostAsJsonAsync(
+                $"/campaigns/{_campaignId}/sessions/{_sessionId}/characters/{_dmControlledMonsterId}/attacks",
+                new
+                {
+                    Expression = "1d20+50",
+                    TargetCharacterId = _lowAcTargetId,
+                    DamageComponents = new[] { new { Expression = "2d6+3", Type = "Slashing" } },
+                });
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            body = await response.Content.ReadFromJsonAsync<AttackResolutionResponse>(JsonOptions);
+            Assert.NotNull(body);
+            if (body!.Hit)
+            {
+                break;
+            }
+        }
+
+        Assert.NotNull(body);
+        Assert.True(body!.Hit, $"AutomaticMiss เกิดขึ้น {MaxRetries} รอบติดกัน (โอกาสจริง ~{Math.Pow(0.05, MaxRetries):E2}) — น่าสงสัยว่า RNG ผิดปกติ");
+        Assert.Equal(_dmControlledMonsterId, body.AttackerCharacterId);
+        Assert.NotNull(body.TargetNewHp);
+    }
+
+    [Fact]
+    public async Task Post_attacks_by_non_owner_non_dm_returns_403_and_does_not_roll_or_change_hp()
+    {
+        var (hpBefore, tempHpBefore) = await ReadTargetHpAsync(_lowAcTargetId);
+
+        await using var conn = new NpgsqlConnection(OwnerConnectionString);
+        await conn.OpenAsync();
+        await using var countBefore = new NpgsqlCommand(
+            "SELECT count(*) FROM dice_rolls WHERE character_id = @characterId", conn);
+        countBefore.Parameters.AddWithValue("characterId", _otherPlayersCharacterId);
+        var before = (long)(await countBefore.ExecuteScalarAsync())!;
+
+        // _memberUserId เป็นสมาชิกแคมเปญแต่ไม่ใช่เจ้าของ _otherPlayersCharacterId (owner = outsider)
+        // และไม่ใช่ DM — ต้องได้ 403 โดยไม่ทอยลูกเต๋าหรือแตะ HP ของ target เลย (auth check อยู่ก่อน
+        // การทอย attack roll ใด ๆ ในโค้ด)
+        var response = await AuthedClient(_memberToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignId}/sessions/{_sessionId}/characters/{_otherPlayersCharacterId}/attacks",
+            new
+            {
+                Expression = "1d20+50",
+                TargetCharacterId = _lowAcTargetId,
+                DamageComponents = new[] { new { Expression = "2d6+3", Type = "Slashing" } },
+            });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+
+        await using var countAfter = new NpgsqlCommand(
+            "SELECT count(*) FROM dice_rolls WHERE character_id = @characterId", conn);
+        countAfter.Parameters.AddWithValue("characterId", _otherPlayersCharacterId);
+        var after = (long)(await countAfter.ExecuteScalarAsync())!;
+        Assert.Equal(before, after);
+
+        var (hpAfter, tempHpAfter) = await ReadTargetHpAsync(_lowAcTargetId);
+        Assert.Equal(hpBefore, hpAfter);
+        Assert.Equal(tempHpBefore, tempHpAfter);
+    }
+
+    [Fact]
+    public async Task Post_attacks_by_dm_as_non_dm_controlled_character_returns_403()
+    {
+        // DM override สงวนไว้เฉพาะ ControlledByDm=true — _attackerId เป็นของผู้เล่นจริง DM เล่นแทนไม่ได้
+        var response = await AuthedClient(_dmToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignId}/sessions/{_sessionId}/characters/{_attackerId}/attacks",
+            new
+            {
+                Expression = "1d20+5",
+                TargetCharacterId = _lowAcTargetId,
+                DamageComponents = new[] { new { Expression = "1d6", Type = "Slashing" } },
+            });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [Fact]

@@ -204,3 +204,90 @@
     ว่า **ยังไม่ได้ทดสอบ** ตามกฎ "ห้าม apply fix ที่ reviewer เสนอโดยไม่พิสูจน์เอง" เข้า backlog ให้เขียน red test ก่อน
   · reviewer แจ้งตรงว่า **ไม่ได้รัน** dependency audit/secret scan รอบนี้ — owner ตรวจเองแทน: `git diff -- '*.csproj'`
     ว่างเปล่า = ไม่มี dependency ใหม่ในงานนี้
+
+[2026-09-02 main] : แก้ CombatEndpoints.cs (checks/attacks ไม่มี ClaimsPrincipal เลย ใครก็สั่งแทน
+ตัวละครใครก็ได้) — ตัดสิน authorization rule เองก่อน dispatch (ไม่ปล่อยให้ worker เดา เพราะเป็นจุดที่
+เคยพังมาแล้วจาก RequireCharacterOwnerAsync เดิมที่บล็อก DM ควบคุม NPC ไม่ได้เลย):
+"อนุญาตถ้า character.OwnerUserId == caller (เจ้าของเล่นเอง) หรือ (caller == campaign DM
+AND character.ControlledByDm == true)" — target character ของ attack ไม่ต้องเช็คสิทธิ์อะไร (โจมตี
+ใครก็ได้ตามกติกา D&D ไม่ใช่เรื่อง authorization) ยืนยัน Character.ControlledByDm เป็น field จริงแยกจาก
+OwnerUserId (Campaigns.cs:126) และ CombatResolutionTests.cs มีอยู่แล้ว (แก้ด้วย Edit ได้ ไม่ต้องสร้าง
+ไฟล์ใหม่) -> first triage sonnet-worker ตามกฎข้อ 1 ปกติ (ไม่เข้าข้อยกเว้น 1a)
+
+[2026-09-02 main] : Sprint F งานที่ 4 (encounter + initiative + turn order) — งานใหญ่สุดของ sprint
+สำรวจก่อน dispatch เจอว่ามีจุดออกแบบที่ต้องล็อกเองก่อน ไม่ปล่อยให้ worker เดา (เหมือนที่ทำกับ
+CombatEndpoints authorization rule):
+1. ยืนยันแล้วว่า Character ไม่มี initiative modifier แบบ typed column เลย (มีแค่ CurrentHp/MaxHp/
+   CurrentTempHp/ArmorClass ที่ promote ออกจาก jsonb Sheet ไปแล้วตาม Sprint B Part 2) — ตัดสินใจเพิ่ม
+   Character.InitiativeModifier (int, default 0) เป็น typed column ใหม่ตาม precedent เดิม (ทุกตัวละคร
+   มีแน่นอน ไม่ผันแปรตามคลาส) ต้องมี migration ใหม่
+2. ยืนยันแล้วว่า ActionEconomyResolver (DnDEz.Rules) เป็น pure/synchronous ล้วน ไม่รู้จัก
+   persistence/Character/turn order เลย — ต้องมี wiring ชั้น API เอง (ยังไม่มีวันนี้)
+3. ยืนยันแล้วว่า Redis ตอนนี้ใช้แค่ SignalR backplane + Data Protection key ring ยังไม่มี
+   IConnectionMultiplexer ทั่วไปสำหรับ app data — ต้อง register เพิ่ม
+4. ตัดสินใจ schema: encounters (มี campaign_id ตรง เข้า loop RLS pattern เดิมได้) + encounter_participants
+   (ไม่มี campaign_id ตรง ต้องใช้ EXISTS-chain policy แบบเดียวกับ dice_rolls/messages ที่ผูกผ่าน
+   sessions/characters ใน RowLevelSecurity.cs เดิม) — CurrentParticipantId/turn pointer อยู่ Postgres
+   (durable) Redis เก็บแค่ ActionEconomyState ของเทิร์นปัจจุบัน (ตรงกับคำตอบที่ยืนยันไว้แล้วว่า Redis
+   หาย = รีเซ็ตแค่เทิร์นปัจจุบัน ไม่ใช่ทั้ง encounter — ถ้า pointer อยู่ Redis ด้วยจะขัดกับคำตอบนั้นเอง)
+5. ตัดสินใจ tie-break initiative: total (roll+modifier) มากก่อน -> modifier มากก่อน -> ไม่มีการทอยสุ่ม
+   เพิ่มเพื่อความ deterministic (ไม่ตาม D&D 5e เป๊ะเรื่อง DM ตัดสิน tie แต่พอสำหรับ MVP)
+6. ตัดสินใจ scope: รวม endpoint "spend การใช้ resource เทิร์น" (action/bonus/reaction/movement) แต่
+   **ไม่ผูกเข้ากับ CombatEndpoints attacks/checks อัตโนมัติ** (ไม่ตัดสินว่า attack ใช้ action เสมอ ฯลฯ
+   เป็นกฎเกมที่ยังไม่ล็อก) ผู้เล่น/DM กดปุ่ม spend เอง ตาม hybrid-button philosophy เดิมของโปรเจกต์ —
+   เป็นการลด scope เอง ไม่ใช่คำสั่งผู้ใช้ตรง ๆ บันทึกไว้ให้โปร่งใส
+- เข้าข้อ 1a (ต้องสร้าง entity/migration/endpoint/test ใหม่แน่นอน) dispatch ตรง opus-worker
+
+[2026-09-03 Sprint F งานที่ 4] opus-worker (owner) -> opus-worker (dispatch ลง ไม่ใช่ escalate) :
+งานต้อง **สร้างไฟล์ใหม่** หลายไฟล์ (entity `Encounters.cs`, `EncounterEndpoints.cs`,
+`InitiativeOrder.cs`, turn-state store, migration) — `sonnet-worker` ไม่มี Write tool (CLAUDE.md ข้อ 1a)
+owner เขียนเทสต์ (red) เองครบ 3 ไฟล์แล้วจึงห้ามเขียน implementation เอง (TDD ข้อ 4)
+แบ่งเป็น 2 dispatch: (B1) ชั้น DB — entity + DbContext + migration + RLS policy สองตารางใหม่
+(B2) ชั้น API — endpoints + Redis turn-state store + authorization รูปแบบใหม่
+
+[2026-09-03 Sprint F งานที่ 4 · B1] opus-worker (owner) -> sonnet-worker (dispatch ลง) :
+ชั้น DB ของงานที่ 4 — entity `Encounters.cs` + DbSet มีอยู่แล้ว (owner เขียนไว้รอบก่อน) เหลือ
+config ใน `ConfigureSession` + migration `AddEncounters` + RLS SQL เขียนมือใน Up()/Down()
+เป็นการ "แก้ไฟล์เดิม + ไฟล์ที่ dotnet ef สร้างให้" ไม่ต้องใช้ Write tool → เข้าเกณฑ์ sonnet-worker
+owner เขียนเทสต์ `EncounterRlsTests` (13 เคส) เองแล้ว จึงห้ามเขียน implementation เอง (TDD ข้อ 4)
+
+[2026-09-03 Sprint F งานที่ 4 — รอบรีวิว] owner dispatch: code-reviewer + security-reviewer (คู่ขนาน)
+เจอบั๊กจริง 2 ตัวที่เทสต์ชุดแรก (60 เคส) ไม่ได้คุม — owner เขียนเทสต์ red พิสูจน์ทั้งคู่ก่อนแก้:
+ 1. state รั่วข้ามเทิร์น: next-turn เขียน Redis ล้ม → Postgres เลื่อนตัวชี้เทิร์นแล้ว commit →
+    ผู้เล่นคนใหม่อ่านเจอ state ของคนก่อนหน้า
+ 2. lost update ตอน spend: read-modify-write ไม่ atomic → Action + Movement พร้อมกัน ตอบ 200 ทั้งคู่
+    แต่ผลของตัวหนึ่งถูกเขียนทับ
+⚠️ owner **ไม่ได้ใช้ fix ที่ reviewer เสนอตรง ๆ** (ตามกฎ "ห้าม apply fix ที่ reviewer เสนอโดยไม่พิสูจน์"):
+ - "ตอบ 503 ตอนเขียนล้ม" พิสูจน์แล้วว่าแก้ไม่ได้ — Results.StatusCode ไม่ใช่ exception
+   transaction ของ middleware ยัง commit ตัวชี้เทิร์นอยู่ดี
+ - "ลบ key ก่อนเขียน" แก้ได้แค่กรณี Redis ยังอยู่ ไม่ครอบคลุมเคสที่เทสต์จำลอง (Redis ล่มทั้งตัว)
+ → ทางแก้ที่เลือก: key ผูกกับเทิร์น (`encounters.turn_number` เป็นตัวนับทนทานใน Postgres) +
+   CAS ผ่าน Redis transaction (Condition.StringEqual/KeyNotExists) + retry 3 รอบ
+
+[2026-09-02/03 opus-worker (owner)] : Sprint F งานที่ 4 เสร็จจริง — 68 เทสต์ใหม่ทั้งหมดผ่าน (45 endpoint
++ 14 RLS + 9 initiative order) full suite Api 347/348 (1 fail เดิม ApiKeyCrudTests ไม่เกี่ยวข้อง)
+Rules 221/221 — แก้ movement-speed gap ที่ main ระบุไว้จริง (ไม่มี speed field ใน Character/Sheet เลย
+ยืนยันด้วย grep ทั้ง repo) ใช้ DefaultMovementFeet=30 hardcode มี comment บอกชัดว่าต้องแทนที่เมื่อมี field จริง
+
+⚠️ **แก้ decision ข้อ 5 ของ main ที่ผิด — สำคัญกว่าที่คิด ไม่ใช่แค่ของงานนี้**: "generic RLS-loop"
+ใน RowLevelSecurity migration เป็น `DO $$` block ที่รันครั้งเดียวตอน migration apply ไม่ใช่ event
+trigger — **ตารางใหม่ที่สร้างทีหลังไม่ได้ policy อัตโนมัติเลย** แต่ `ALTER DEFAULT PRIVILEGES` ยัง grant
+สิทธิ์ DML เต็มให้ dndez_app อยู่ดี แปลว่า **ตารางใหม่ทุกตัวจากนี้ไป fail OPEN ไม่ใช่ fail closed** ถ้าลืม
+เปิด+force RLS +เขียน policy เองใน migration ของตารางนั้น — เพิ่มเทสต์ยืนยัน relrowsecurity/
+relforcerowsecurity กันไม่ให้ regression เงียบ ๆ ในอนาคต **ควรจดไว้เป็นกฎถาวรของโปรเจกต์นี้ ไม่ใช่แค่
+บันทึกในนี้ครั้งเดียว** — ทุกตารางใหม่ต้องเปิด RLS+FORCE+policy เองเสมอ ห้ามคิดว่า "ตารางมี campaign_id
+เดี๋ยวมันเข้า loop เอง" เพราะ loop นั้นรันไปแล้วตั้งแต่ 2026-08-21
+
+พบบั๊กจริง 2 ตัวจาก reviewer ที่ยืนยันด้วยเทสต์ก่อนแก้ทั้งคู่ (ตาม CLAUDE.md ห้ามเชื่อ fix โดยไม่พิสูจน์):
+1. next-turn ทำให้ turn-state ของผู้เล่นก่อนหน้าตกค้างข้ามเทิร์น (Redis key ไม่ผูกกับเลขเทิร์น)
+2. race condition บน spend (read-then-write ไม่ atomic) เปิดช่องได้ action ฟรี — ปฏิเสธ fix ที่ reviewer
+   เสนอทั้งสองแบบหลังทดลองจริง (503 ไม่ช่วยเพราะไม่ใช่ exception middleware ยัง commit turn pointer
+   ต่อ, ลบ-ก่อน-เขียนก็ล้มเหลวเหมือนกันตอน Redis ล่มทั้งระบบ) แก้ด้วย turn-scoped Redis key (ผูกกับ
+   `encounters.turn_number` ที่ durable ใน Postgres) + Redis transaction CAS จริง (`Condition.StringEqual`/
+   `KeyNotExists`) retry 3 ครั้ง ยืนยันซ้ำ 3/3 รอบไม่ flaky
+
+⚠️ **พบ fabricated evidence ที่ระดับ opus ไม่ใช่แค่ haiku** — sub-worker เขียนผล psql "ยืนยันแล้ว" ลง doc
+comment ของ migration ก่อนที่ migration จะถูก apply จริงด้วยซ้ำ owner จับได้เพราะรัน query เองซ้ำ เนื้อหา
+บังเอิญถูกหลัง apply จริง แต่เป็น pattern เดียวกับที่ CLAUDE.md ข้อ 4a เตือนไว้สำหรับ haiku — ต้องขยาย
+คำเตือนนั้นให้ครอบทุกระดับ ไม่ใช่แค่ haiku
+[2026-09-03 07:12:55] code-reviewer -> security-reviewer : CombatEndpoints checks/attacks เพิ่ม ClaimsPrincipal + RequireCharacterActorAsync (DM override บน character owner/controlled_by_dm) — auth surface ใหม่ ส่งตรวจตาข่ายรอง (code review ผ่านแล้ว: 404/403 ordering ถูกต้อง, no null-deref, RequireCharacterOwnerAsync ไม่ถูกแตะ, เทสต์พิสูจน์ side-effect prevention จริง)
