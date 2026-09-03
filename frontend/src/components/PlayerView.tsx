@@ -5,7 +5,14 @@ import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { useCampaignWorkspace } from "@/lib/use-campaign-workspace";
+import { useCombatActions } from "@/lib/use-combat-actions";
 import type { CampaignMember } from "@/lib/campaign-types";
+import {
+  AttackCheckPanel,
+  DeathSavePanel,
+  EncounterPanel,
+  TurnStatePanel,
+} from "./combat-panels";
 import {
   ActionFeedList,
   AutonomyDialPanel,
@@ -40,6 +47,12 @@ export function PlayerView({ campaignId }: { campaignId: string }) {
 
   // ตัวละครที่กำลังโพสต์ action แทน — UI state ล้วน ๆ ของ panel นี้ ไม่ต้องเข้า store
   const [actingCharacterId, setActingCharacterId] = useState<string | null>(null);
+
+  const combat = useCombatActions({
+    campaignId,
+    sessionId: ws.selectedSessionId,
+    appendLog: ws.appendLog,
+  });
 
   const membersQuery = useQuery({
     queryKey: ["campaign-members", campaignId],
@@ -91,6 +104,24 @@ export function PlayerView({ campaignId }: { campaignId: string }) {
 
       {ws.selectedSessionId && (
         <>
+          <EncounterPanel
+            combat={combat}
+            characters={ws.characters}
+            canControlEncounter={false}
+          />
+          <TurnStatePanel combat={combat} />
+          <DeathSavePanel
+            combat={combat}
+            characters={ws.characters}
+            isDm={false}
+            userId={ws.userId}
+          />
+          <AttackCheckPanel
+            combat={combat}
+            characters={ws.characters}
+            actableCharacters={ws.ownCharacters}
+          />
+
           <DicePanel
             expression={ws.rollExpression}
             setExpression={ws.setRollExpression}

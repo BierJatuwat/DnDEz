@@ -1,5 +1,25 @@
 export type HubStatus = "disconnected" | "connecting" | "connected";
 
+/**
+ * Sprint F งานที่ 6b — event ฝั่ง combat (encounter/turn/death save) ที่ backend broadcast ไว้ตั้งแต่
+ * งานที่ 4-5 แต่ frontend ไม่เคยฟัง
+ *
+ * รวมเป็น callback เดียว (`onCombatEvent`) แทนที่จะแยกทีละตัวเหมือน event เดิมข้างบน **เพราะ
+ * พฤติกรรมฝั่ง client เหมือนกันหมดจริง ๆ** คือ "invalidate query ที่เกี่ยวข้อง + log" — ต่างจาก
+ * event เดิมที่แต่ละตัวทำคนละอย่าง (dice → log, proposal → merge cache, HP → patch cache,
+ * action → ต่อท้าย feed) การแยก 6 ตัวที่ทำเหมือนกันเป๊ะจะได้แค่ boilerplate ไม่ได้ type safety เพิ่ม
+ */
+export const COMBAT_EVENT_NAMES = [
+  "EncounterStarted",
+  "TurnChanged",
+  "TurnStateChanged",
+  "EncounterEnded",
+  "DeathSaveStateChanged",
+  "DeathSaveRolled",
+] as const;
+
+export type CombatEventName = (typeof COMBAT_EVENT_NAMES)[number];
+
 export type CampaignHubEvents = {
   onStatusChange: (status: HubStatus) => void;
   onJoinedChange: (campaignId: string | null) => void;
@@ -8,6 +28,7 @@ export type CampaignHubEvents = {
   onProposalCreated: (payload: unknown) => void;
   onHpUpdated: (payload: unknown) => void;
   onActionMessageCreated: (payload: unknown) => void;
+  onCombatEvent: (name: CombatEventName, payload: unknown) => void;
 };
 
 /**
@@ -62,6 +83,11 @@ export class CampaignHubManager {
     // แค่ไม่เคยฟังมาก่อน) + player action feed ใหม่ (ดู OrchestratorTurnRunner ฝั่ง API)
     connection.on("HpUpdated", (payload) => this.events.onHpUpdated(payload));
     connection.on("ActionMessageCreated", (payload) => this.events.onActionMessageCreated(payload));
+
+    // Sprint F งานที่ 6b — encounter/turn/death save (backend broadcast มาตั้งแต่งานที่ 4-5)
+    for (const name of COMBAT_EVENT_NAMES) {
+      connection.on(name, (payload) => this.events.onCombatEvent(name, payload));
+    }
 
     connection.onreconnecting(() => {
       this.started = false;

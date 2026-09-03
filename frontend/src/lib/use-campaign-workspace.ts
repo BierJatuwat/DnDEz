@@ -304,6 +304,14 @@ export function useCampaignWorkspace(campaignId: string) {
           (event.isInstantDeath ? " (instant death!)" : event.droppedToZero ? " (0 HP)" : ""),
       );
     },
+    onCombatEvent: (name) => {
+      appendLog("realtime " + name);
+      void queryClient.invalidateQueries({ queryKey: ["encounter-active"] });
+      if (name === "DeathSaveStateChanged" || name === "DeathSaveRolled") {
+        void queryClient.invalidateQueries({ queryKey: ["death-saves"] });
+        void queryClient.invalidateQueries({ queryKey: ["characters"] });
+      }
+    },
     onActionMessageCreated: (payload) => {
       const message = normalizeActionMessageCreated(payload);
       if (!message) {

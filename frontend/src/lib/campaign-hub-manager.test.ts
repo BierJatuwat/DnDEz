@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { CampaignHubManager, type HubConnectionLike } from "./campaign-hub-manager";
+import {
+  CampaignHubManager,
+  COMBAT_EVENT_NAMES,
+  type HubConnectionLike,
+} from "./campaign-hub-manager";
 
 /**
  * Fake ที่ implement เฉพาะส่วนของ HubConnection ที่ manager ใช้จริง — เก็บ callback ที่ manager
@@ -73,6 +77,7 @@ function makeEvents() {
     onProposalCreated: vi.fn(),
     onHpUpdated: vi.fn(),
     onActionMessageCreated: vi.fn(),
+    onCombatEvent: vi.fn(),
   };
 }
 
@@ -141,6 +146,21 @@ describe("CampaignHubManager", () => {
 
     expect(connection.invoke).toHaveBeenNthCalledWith(1, "LeaveCampaign", "campaign-1");
     expect(connection.invoke).toHaveBeenNthCalledWith(2, "JoinCampaign", "campaign-2");
+  });
+
+  it("forwards every combat event (encounter/turn/death save) to onCombatEvent with its name (Sprint F งานที่ 6b)", async () => {
+    await manager.start();
+
+    // ทุกชื่อใน COMBAT_EVENT_NAMES ต้องถูก subscribe จริง — ถ้าลืมตัวใดตัวหนึ่ง UI จะเงียบเฉพาะ
+    // ฟีเจอร์นั้นโดยไม่มี error ให้เห็น (อาการที่ debug ยากที่สุด)
+    for (const name of COMBAT_EVENT_NAMES) {
+      connection.emit(name, { marker: name });
+    }
+
+    expect(events.onCombatEvent).toHaveBeenCalledTimes(COMBAT_EVENT_NAMES.length);
+    for (const name of COMBAT_EVENT_NAMES) {
+      expect(events.onCombatEvent).toHaveBeenCalledWith(name, { marker: name });
+    }
   });
 
   it("forwards DiceRolled events to onDiceRolled", async () => {

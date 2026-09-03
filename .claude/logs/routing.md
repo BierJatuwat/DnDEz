@@ -433,3 +433,26 @@ fail) **เทสต์ที่ผ่านตั้งแต่ยังไม
 server ส่งไป /play เอง → เห็น UI ผู้เล่น (ไม่มี panel join code/API key/consult, autonomy read-only,
 เซสชันสร้างไม่ได้) → เปิด /dm ตรง ๆ ถูกเด้งกลับ /play · **ไม่แตะ SQL เลยสักคำสั่ง** (ต่างจากตอนทดสอบ
 2b ที่ต้อง INSERT campaign_members เอง) เทสต์ backend 394/395, frontend 48/48
+
+[2026-09-03 main (self, ไม่ dispatch)] : Sprint F งานที่ 6b (UI การต่อสู้ทั้งก้อน) — ไม่มี <tier>
+นำหน้า ทำเองตรง ๆ ไม่เรียก subagent ตามกฎ
+
+wire endpoint ที่ backend ทำไว้ตั้งแต่งานที่ 4-5-7 (+ combat ตั้งแต่ Sprint B Part 3) แต่ไม่เคยมี UI:
+encounter (เปิด/ลำดับเทิร์น/เทิร์นถัดไป/จบ), turn state + spend ทรัพยากร, death save (DM ยืนยัน dying
++ ทอย), NPC (สร้าง + toggle ซ่อน stat), attack/check · เพิ่ม 6 SignalR event ที่ frontend ไม่เคยฟัง
+(EncounterStarted/TurnChanged/TurnStateChanged/EncounterEnded/DeathSaveStateChanged/DeathSaveRolled)
+
+ตัดสินใจรวม 6 event ใหม่เป็น callback เดียว `onCombatEvent(name, payload)` แทนแยกทีละตัวเหมือน event
+เดิม — เพราะพฤติกรรมฝั่ง client เหมือนกันหมดจริง (invalidate query + log) ต่างจาก event เดิมที่แต่ละตัว
+ทำคนละอย่าง · เขียนเทสต์ยืนยันว่า subscribe ครบทุกชื่อใน COMBAT_EVENT_NAMES (ลืมตัวใดตัวหนึ่ง = ฟีเจอร์
+นั้นเงียบโดยไม่มี error ให้เห็น ซึ่ง debug ยากที่สุด)
+
+แยก `use-combat-actions.ts` ออกจาก `use-campaign-workspace.ts` — workspace เป็นของที่ทุกหน้าใช้เสมอ
+ส่วน combat ใช้เฉพาะตอนอยู่ในเซสชันที่สู้กันจริง และมี query key ชุดของตัวเอง
+
+⚠️ **ยังไม่ได้ verify ในเบราว์เซอร์จริง** — Docker Desktop บนเครื่องนี้สตาร์ทไม่ขึ้น (WSL distro
+`docker-desktop` ค้างสถานะ Stopped ทั้งที่ process รันอยู่ ลอง kill+relaunch แล้วรอรวมกว่า 15 นาที
+ไม่สำเร็จ) จึงไม่มี Postgres/Redis/API ให้ทดสอบ flow จริง · **สิ่งที่ verify แล้วจริง**: tsc สะอาด,
+eslint สะอาด, vitest 49/49 (รวมเทสต์ใหม่ของ combat event), `next build` ผ่านและ route table ขึ้นครบ
+5 route · **สิ่งที่ยังไม่ได้ทดสอบ**: วงจร combat จริง (เปิด encounter → เดินเทิร์น → spend → โจมตี →
+HP ถึง 0 → ยืนยัน dying → ทอย death save) และ realtime sync ข้ามเบราว์เซอร์ — ต้องทดสอบก่อนถือว่าปิดงาน

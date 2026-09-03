@@ -1,10 +1,18 @@
 "use client";
 
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch, ApiError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { useCampaignWorkspace } from "@/lib/use-campaign-workspace";
+import { useCombatActions } from "@/lib/use-combat-actions";
 import type { ApiKeyInfo, CampaignMember } from "@/lib/campaign-types";
+import {
+  AttackCheckPanel,
+  DeathSavePanel,
+  EncounterPanel,
+  TurnStatePanel,
+} from "./combat-panels";
 import {
   ActionFeedList,
   AutonomyDialPanel,
@@ -34,6 +42,12 @@ export function DmConsole({ campaignId }: { campaignId: string }) {
   const token = useAuthStore((s) => s.token);
   const queryClient = useQueryClient();
   const ws = useCampaignWorkspace(campaignId);
+  const combat = useCombatActions({
+    campaignId,
+    sessionId: ws.selectedSessionId,
+    appendLog: ws.appendLog,
+  });
+  const [npcVisible, setNpcVisible] = useState(true);
 
   const campaignQuery = useQuery({
     queryKey: ["campaign", campaignId],
@@ -102,6 +116,38 @@ export function DmConsole({ campaignId }: { campaignId: string }) {
       }
     },
   });
+
+  // Sprint F งานที่ 6b — NPC/monster (งานที่ 7 ทำ backend ไว้ แต่ไม่เคยมี UI)
+  const createNpc = useMutation({
+    mutationFn: ({ name, statsVisibleToParty }: { name: string; statsVisibleToParty: boolean }) =>
+      apiFetch<{ id: string }>(`/campaigns/${campaignId}/characters`, {
+        method: "POST",
+        token,
+        body: { name, isNpc: true, statsVisibleToParty },
+      }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["characters", campaignId] });
+    },
+    onError: (err) => {
+      if (err instanceof ApiError) ws.appendLog(`สร้าง NPC ไม่สำเร็จ: HTTP ${err.status}`);
+    },
+  });
+
+  const toggleNpcVisibility = useMutation({
+    mutationFn: ({ characterId, visible }: { characterId: string; visible: boolean }) =>
+      apiFetch<{ characterId: string; visible: boolean }>(
+        `/campaigns/${campaignId}/characters/${characterId}/npc-visibility`,
+        { method: "PUT", token, body: { visible } },
+      ),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["characters", campaignId] });
+    },
+    onError: (err) => {
+      if (err instanceof ApiError) ws.appendLog(`สลับการมองเห็น stat ไม่สำเร็จ: HTTP ${err.status}`);
+    },
+  });
+
+  const npcs = ws.characters.filter((c) => c.controlledByDm);
 
   return (
     <>
@@ -254,8 +300,88 @@ export function DmConsole({ campaignId }: { campaignId: string }) {
         setLevel={ws.setAutonomyLevel}
       />
 
+      <section className={sectionClass}>
+        <h2 className="font-medium">NPC / มอนสเตอร์</h2>
+        <p className="text-xs opacity-60">
+          NPC ไม่มีเจ้าของเป็นผู้เล่น — DM สั่งได้คนเดียว · ปิดการมองเห็น stat ได้เพื่อไม่ให้ผู้เล่นรู้
+          AC/HP ที่แน่นอน (ค่าเริ่มต้นคือเห็นได้)
+        </p>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            const input = e.currentTarget.elements.namedItem("npcName") as HTMLInputElement;
+            if (input.value.trim()) {
+              createNpc.mutate({ name: input.value.trim(), statsVisibleToParty: npcVisible });
+              input.value = "";
+            }
+          }}
+          className="flex flex-wrap items-center gap-2"
+        >
+          <input
+            name="npcName"
+            placeholder="ชื่อ NPC/มอนสเตอร์"
+            className="flex-1 rounded border border-black/20 dark:border-white/20 bg-transparent px-3 py-1.5"
+          />
+          <label className="flex items-center gap-1 text-xs opacity-70">
+            <input
+              type="checkbox"
+              checked={npcVisible}
+              onChange={(e) => setNpcVisible(e.target.checked)}
+            />
+            ผู้เล่นเห็น stat
+          </label>
+          <button
+            type="submit"
+            disabled={createNpc.isPending}
+            className="rounded bg-indigo-600 px-3 py-1.5 text-white disabled:opacity-50"
+          >
+            สร้าง NPC
+          </button>
+        </form>
+        <ul className="space-y-1 text-sm">
+          {npcs.map((n) => (
+            <li key={n.id} className="flex items-center justify-between px-3 py-1.5">
+              <span>
+                {n.name}{" "}
+                <span className="text-xs opacity-60">
+                  {n.currentHp ?? "?"}/{n.maxHp ?? "?"} HP
+                </span>
+              </span>
+              <button
+                onClick={() =>
+                  toggleNpcVisibility.mutate({ characterId: n.id, visible: false })
+                }
+                disabled={toggleNpcVisibility.isPending}
+                className="rounded border border-black/20 dark:border-white/20 px-2 py-1 text-xs hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-50"
+              >
+                ซ่อน stat
+              </button>
+            </li>
+          ))}
+          {npcs.length === 0 && <li className="opacity-50">ยังไม่มี NPC</li>}
+        </ul>
+      </section>
+
       {ws.selectedSessionId && (
         <>
+          <EncounterPanel
+            combat={combat}
+            characters={ws.characters}
+            canControlEncounter
+          />
+          <TurnStatePanel combat={combat} />
+          <DeathSavePanel
+            combat={combat}
+            characters={ws.characters}
+            isDm
+            userId={ws.userId}
+          />
+          <AttackCheckPanel
+            combat={combat}
+            characters={ws.characters}
+            actableCharacters={npcs}
+          />
+
           <DicePanel
             expression={ws.rollExpression}
             setExpression={ws.setRollExpression}
