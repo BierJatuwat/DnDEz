@@ -7,6 +7,7 @@
 //   endpoint จึง query แบบตรงไปตรงมาแล้วปล่อยให้ policy กรองแถวออกเอง (แถวหาย = 404 ไม่ใช่ 403)
 using System.Security.Claims;
 using DnDEz.Api.Auth;
+using DnDEz.Api.Encounters;
 using DnDEz.Api.Endpoints;
 using DnDEz.Api.Orchestration;
 using DnDEz.Api.Realtime;
@@ -70,6 +71,26 @@ if (dataProtectionCertificate is not null)
 {
     dataProtectionBuilder.ProtectKeysWithCertificate(dataProtectionCertificate);
 }
+
+// ── Sprint F งานที่ 4: Redis สำหรับ "ข้อมูลแอป" (turn state ของ encounter) ──
+// multiplexer ตัวที่สาม (แยกจาก SignalR backplane และจาก dataProtectionRedis ด้านบน) ตั้งใจ ไม่ reuse:
+//   1. connection ของ SignalR ถูกสร้าง/ถือไว้ภายใน AddStackExchangeRedis เอง ไม่ expose ออกมาให้ใช้ซ้ำ
+//      (เหตุผลเดียวกับคอมเมนต์ด้านบนตอนตั้ง Data Protection)
+//   2. dataProtectionRedis ใช้ AbortOnConnectFail ค่าเริ่มต้น (true) และหน้าที่ของมันคือ key ring ที่
+//      ถอดรหัส ApiKey — ห้ามเอามาปนกับ policy ความทนทานของข้อมูลเกม (turn state) ที่ต้องการพฤติกรรม
+//      คนละแบบกันโดยสิ้นเชิง
+//   3. AbortOnConnectFail = false ที่นี่จำเป็น: ถ้าเป็น true แล้ว Redis ล่มตอน startup Connect() จะ
+//      throw ทำให้ทั้ง API พังทั้งที่กระทบแค่ turn state ตั้ง false แล้วความล้มเหลวจะไปโผล่ตอนเรียกใช้
+//      จริงแทน ซึ่ง RedisEncounterTurnStateStore จับไว้หมดแล้ว (ดูคอมเมนต์ในไฟล์นั้น) ผลคือ degrade
+//      เป็น "รีเซ็ตเทิร์น" ตามที่ล็อกไว้ใน docs/PROJECT-CONTEXT.md §4 ข้อ 3 — ⚠️ ข้อนี้คือสิ่งที่ทำให้
+//      เทสต์ Active_encounter_falls_back_to_full_turn_resources_when_redis_is_unavailable เป็นไปได้
+//      (เทสต์สลับ IConnectionMultiplexer ใน DI เป็นตัวที่ชี้พอร์ตตาย) ดังนั้นต้องลงทะเบียนเป็น
+//      IConnectionMultiplexer (interface) เท่านั้น ห้ามลงทะเบียนเป็น concrete type
+var appDataRedisConfiguration = ConfigurationOptions.Parse(redisConnectionString);
+appDataRedisConfiguration.AbortOnConnectFail = false;
+builder.Services.AddSingleton<IConnectionMultiplexer>(
+    _ => ConnectionMultiplexer.Connect(appDataRedisConfiguration));
+builder.Services.AddSingleton<IEncounterTurnStateStore, RedisEncounterTurnStateStore>();
 
 // ── Sprint D Part 2: Anthropic client (BYOK tool-calling loop) ─────────────
 // IAnthropicClient แยก interface ออกจาก implementation จริงตั้งใจ — ทดสอบด้วย fake ในเทสต์
@@ -457,6 +478,9 @@ app.MapConsultEndpoints();
 // ── Sprint E Part 3: player action input — ไหลเข้า orchestrator เดียวกับ /consult (ดู
 // OrchestratorTurnRunner) แต่ auth เป็น "เจ้าของตัวละคร" ไม่ใช่ DM-only ──────────────────────
 app.MapPlayerActionEndpoints();
+
+// ── Sprint F งานที่ 4: encounter / initiative / turn order ──
+app.MapEncounterEndpoints();
 
 app.Run();
 

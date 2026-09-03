@@ -114,6 +114,12 @@ public class Character
     public int CurrentTempHp { get; set; }
     public int ArmorClass { get; set; } = 10;
 
+    /// <summary>โบนัส initiative (ปกติ = Dex modifier + feat/feature) — typed column ด้วยเหตุผล
+    /// เดียวกับ HP/AC ข้างบน: ทุกตัวละครมีค่านี้แน่นอน ไม่ผันแปรตามคลาส/subclass และ endpoint
+    /// เปิด encounter ต้องอ่านไปคำนวณลำดับเทิร์นตรง ๆ ไม่ควรต้อง parse `Sheet` jsonb ทุกครั้ง
+    /// (Sprint F งานที่ 4)</summary>
+    public int InitiativeModifier { get; set; }
+
     /// <summary>ชื่อค่าต้องตรงกับ DnDEz.Rules.DamageType enum เป๊ะ (Acid, Bludgeoning, ... 13 ค่า) —
     /// validate ที่ชั้น API ตอนสร้าง/แก้ตัวละคร ไม่ validate ในนี้ (Domain ไม่ reference Rules)</summary>
     public string[] DamageResistances { get; set; } = [];

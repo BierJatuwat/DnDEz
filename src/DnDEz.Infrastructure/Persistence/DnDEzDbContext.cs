@@ -34,6 +34,8 @@ public class DnDEzDbContext(DbContextOptions<DnDEzDbContext> options) : DbContex
     public DbSet<RecapSnapshot> RecapSnapshots => Set<RecapSnapshot>();
     public DbSet<ConsultMessage> ConsultMessages => Set<ConsultMessage>();
     public DbSet<DiceRoll> DiceRolls => Set<DiceRoll>();
+    public DbSet<Encounter> Encounters => Set<Encounter>();
+    public DbSet<EncounterParticipant> EncounterParticipants => Set<EncounterParticipant>();
 
     // ── Source import / presets ───────────────────────────────────────────
     public DbSet<SourceDocument> SourceDocuments => Set<SourceDocument>();
@@ -175,7 +177,14 @@ public class DnDEzDbContext(DbContextOptions<DnDEzDbContext> options) : DbContex
             e.HasIndex(x => x.ClaimToken).IsUnique().HasFilter("claim_token IS NOT NULL");
             // orphan ที่ยังไม่ถูก claim — Hangfire job กวาดลบตามรอบ
             e.HasIndex(x => x.ClaimExpiresAt).HasFilter("is_orphan = true");
-            e.ToTable(t => t.HasCheckConstraint("ck_characters_level", "level BETWEEN 1 AND 20"));
+            e.ToTable(t =>
+            {
+                t.HasCheckConstraint("ck_characters_level", "level BETWEEN 1 AND 20");
+                // ช่วง ±20 เป็น **sanity bound ของระบบนี้เอง ไม่ใช่กฎ 5e** (SRD ไม่ได้กำหนดเพดาน
+                // initiative modifier ไว้) — มีไว้กันค่าขยะ/overflow หลุดเข้า DB เท่านั้น
+                t.HasCheckConstraint(
+                    "ck_characters_initiative_modifier", "initiative_modifier BETWEEN -20 AND 20");
+            });
         });
 
         b.Entity<CharacterResource>(e =>
@@ -316,6 +325,51 @@ public class DnDEzDbContext(DbContextOptions<DnDEzDbContext> options) : DbContex
             e.ToTable(t => t.HasCheckConstraint(
                 "ck_dice_rolls_provenance",
                 "(source = 'SystemRoll' AND seed IS NOT NULL) OR (source = 'DmEntered' AND entered_by_user_id IS NOT NULL)"));
+        });
+
+        b.Entity<Encounter>(e =>
+        {
+            e.ToTable("encounters");
+            e.HasOne(x => x.Campaign).WithMany()
+                .HasForeignKey(x => x.CampaignId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne(x => x.Session).WithMany()
+                .HasForeignKey(x => x.SessionId).OnDelete(DeleteBehavior.Cascade);
+            // ห้าม Cascade — Encounter.CurrentParticipantId ชี้ไป EncounterParticipant ซึ่งเอง
+            // ก็มี FK กลับมาที่ Encounter (EncounterId) ถ้าตั้ง Cascade ทั้งคู่จะเกิด
+            // "multiple cascade paths" ตอน `dotnet ef migrations add` · SetNull ถูกต้องอยู่แล้วเชิง
+            // ความหมายด้วย: ลบ participant ทิ้ง ไม่ควรพา encounter ทั้งวงหายไปด้วย
+            e.HasOne(x => x.CurrentParticipant).WithMany()
+                .HasForeignKey(x => x.CurrentParticipantId).OnDelete(DeleteBehavior.SetNull);
+            e.Property(x => x.StartedAt).HasDefaultValueSql("now()");
+            e.HasIndex(x => new { x.SessionId, x.EndedAt });
+            e.ToTable(t => t.HasCheckConstraint("ck_encounters_turn_number", "turn_number >= 0"));
+        });
+
+        b.Entity<EncounterParticipant>(e =>
+        {
+            e.ToTable("encounter_participants");
+            e.HasOne(x => x.Encounter).WithMany(x => x.Participants)
+                .HasForeignKey(x => x.EncounterId).OnDelete(DeleteBehavior.Cascade);
+            // Cascade (ไม่ใช่ Restrict) — คอมเมนต์เดิมอ้างว่าต้องเลี่ยง "multiple cascade paths"
+            // แต่นั่นเป็นข้อจำกัดของ SQL Server ไม่ใช่ Postgres · Postgres รองรับหลายเส้นทาง
+            // cascade มาถึงตารางเดียวกันได้ตามปกติ
+            // และ Restrict สร้างปัญหาจริง: การลบแคมเปญ cascade ลงไปทั้ง characters และ encounters
+            // พร้อมกัน ถ้า RI trigger ของ characters ทำงานก่อนที่ encounter_participants จะถูกลบ
+            // ตาม encounters จะได้ FK violation แบบ non-deterministic (ขึ้นกับลำดับ trigger)
+            e.HasOne(x => x.Character).WithMany()
+                .HasForeignKey(x => x.CharacterId).OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(x => new { x.EncounterId, x.TurnOrder }).IsUnique();
+            // กันตัวละครเดียวกันถูกใส่เข้า encounter เดียวกันซ้ำสองครั้ง
+            e.HasIndex(x => new { x.EncounterId, x.CharacterId }).IsUnique();
+            e.ToTable(t =>
+            {
+                t.HasCheckConstraint(
+                    "ck_encounter_participants_initiative_roll", "initiative_roll BETWEEN 1 AND 20");
+                t.HasCheckConstraint(
+                    "ck_encounter_participants_initiative_total",
+                    "initiative_total = initiative_roll + initiative_modifier");
+                t.HasCheckConstraint("ck_encounter_participants_turn_order", "turn_order >= 0");
+            });
         });
     }
 

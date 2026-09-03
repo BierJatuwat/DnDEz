@@ -318,6 +318,10 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                         .HasColumnType("boolean")
                         .HasColumnName("harvest_consent");
 
+                    b.Property<int>("InitiativeModifier")
+                        .HasColumnType("integer")
+                        .HasColumnName("initiative_modifier");
+
                     b.Property<bool>("IsOrphan")
                         .HasColumnType("boolean")
                         .HasColumnName("is_orphan");
@@ -367,6 +371,8 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
 
                     b.ToTable("characters", null, t =>
                         {
+                            t.HasCheckConstraint("ck_characters_initiative_modifier", "initiative_modifier BETWEEN -20 AND 20");
+
                             t.HasCheckConstraint("ck_characters_level", "level BETWEEN 1 AND 20");
                         });
                 });
@@ -687,6 +693,112 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                             t.HasCheckConstraint("ck_dice_rolls_provenance", "(source = 'SystemRoll' AND seed IS NOT NULL) OR (source = 'DmEntered' AND entered_by_user_id IS NOT NULL)");
 
                             t.HasCheckConstraint("ck_source_diceroll", "source IN ('SystemRoll', 'DmEntered')");
+                        });
+                });
+
+            modelBuilder.Entity("DnDEz.Domain.Entities.Encounter", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("CampaignId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("campaign_id");
+
+                    b.Property<Guid?>("CurrentParticipantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("current_participant_id");
+
+                    b.Property<DateTimeOffset?>("EndedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("ended_at");
+
+                    b.Property<Guid>("SessionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("session_id");
+
+                    b.Property<DateTimeOffset>("StartedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("started_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<int>("TurnNumber")
+                        .HasColumnType("integer")
+                        .HasColumnName("turn_number");
+
+                    b.HasKey("Id")
+                        .HasName("pk_encounters");
+
+                    b.HasIndex("CampaignId")
+                        .HasDatabaseName("ix_encounters_campaign_id");
+
+                    b.HasIndex("CurrentParticipantId")
+                        .HasDatabaseName("ix_encounters_current_participant_id");
+
+                    b.HasIndex("SessionId", "EndedAt")
+                        .HasDatabaseName("ix_encounters_session_id_ended_at");
+
+                    b.ToTable("encounters", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_encounters_turn_number", "turn_number >= 0");
+                        });
+                });
+
+            modelBuilder.Entity("DnDEz.Domain.Entities.EncounterParticipant", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("CharacterId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("character_id");
+
+                    b.Property<Guid>("EncounterId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("encounter_id");
+
+                    b.Property<int>("InitiativeModifier")
+                        .HasColumnType("integer")
+                        .HasColumnName("initiative_modifier");
+
+                    b.Property<int>("InitiativeRoll")
+                        .HasColumnType("integer")
+                        .HasColumnName("initiative_roll");
+
+                    b.Property<int>("InitiativeTotal")
+                        .HasColumnType("integer")
+                        .HasColumnName("initiative_total");
+
+                    b.Property<int>("TurnOrder")
+                        .HasColumnType("integer")
+                        .HasColumnName("turn_order");
+
+                    b.HasKey("Id")
+                        .HasName("pk_encounter_participants");
+
+                    b.HasIndex("CharacterId")
+                        .HasDatabaseName("ix_encounter_participants_character_id");
+
+                    b.HasIndex("EncounterId", "CharacterId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_encounter_participants_encounter_id_character_id");
+
+                    b.HasIndex("EncounterId", "TurnOrder")
+                        .IsUnique()
+                        .HasDatabaseName("ix_encounter_participants_encounter_id_turn_order");
+
+                    b.ToTable("encounter_participants", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_encounter_participants_initiative_roll", "initiative_roll BETWEEN 1 AND 20");
+
+                            t.HasCheckConstraint("ck_encounter_participants_initiative_total", "initiative_total = initiative_roll + initiative_modifier");
+
+                            t.HasCheckConstraint("ck_encounter_participants_turn_order", "turn_order >= 0");
                         });
                 });
 
@@ -1736,6 +1848,56 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                     b.Navigation("Session");
                 });
 
+            modelBuilder.Entity("DnDEz.Domain.Entities.Encounter", b =>
+                {
+                    b.HasOne("DnDEz.Domain.Entities.Campaign", "Campaign")
+                        .WithMany()
+                        .HasForeignKey("CampaignId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_encounters_campaigns_campaign_id");
+
+                    b.HasOne("DnDEz.Domain.Entities.EncounterParticipant", "CurrentParticipant")
+                        .WithMany()
+                        .HasForeignKey("CurrentParticipantId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("fk_encounters_encounter_participants_current_participant_id");
+
+                    b.HasOne("DnDEz.Domain.Entities.GameSession", "Session")
+                        .WithMany()
+                        .HasForeignKey("SessionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_encounters_sessions_session_id");
+
+                    b.Navigation("Campaign");
+
+                    b.Navigation("CurrentParticipant");
+
+                    b.Navigation("Session");
+                });
+
+            modelBuilder.Entity("DnDEz.Domain.Entities.EncounterParticipant", b =>
+                {
+                    b.HasOne("DnDEz.Domain.Entities.Character", "Character")
+                        .WithMany()
+                        .HasForeignKey("CharacterId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_encounter_participants_characters_character_id");
+
+                    b.HasOne("DnDEz.Domain.Entities.Encounter", "Encounter")
+                        .WithMany("Participants")
+                        .HasForeignKey("EncounterId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_encounter_participants_encounters_encounter_id");
+
+                    b.Navigation("Character");
+
+                    b.Navigation("Encounter");
+                });
+
             modelBuilder.Entity("DnDEz.Domain.Entities.ExtractedCharacterSheet", b =>
                 {
                     b.HasOne("DnDEz.Domain.Entities.Campaign", "Campaign")
@@ -1948,6 +2110,11 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                     b.Navigation("Resources");
 
                     b.Navigation("Review");
+                });
+
+            modelBuilder.Entity("DnDEz.Domain.Entities.Encounter", b =>
+                {
+                    b.Navigation("Participants");
                 });
 
             modelBuilder.Entity("DnDEz.Domain.Entities.GameSession", b =>
