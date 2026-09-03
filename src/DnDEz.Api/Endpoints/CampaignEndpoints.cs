@@ -1,3 +1,5 @@
+using System.Security.Claims;
+using DnDEz.Api.Auth;
 using DnDEz.Domain.Enums;
 using DnDEz.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -89,25 +91,40 @@ public static class CampaignEndpoints
 
         app.MapGet("/campaigns/{campaignId:guid}", async (
             Guid campaignId,
+            ClaimsPrincipal principal,
             DnDEzDbContext db) =>
         {
             var campaign = await db.Campaigns
                 .SingleOrDefaultAsync(c => c.Id == campaignId);
 
-            return campaign is null
-                ? Results.NotFound()
-                : Results.Ok(new CampaignDetailResponse(
-                    campaign.Id,
-                    campaign.Name,
-                    campaign.Mode.ToString(),
-                    campaign.RulesSystem,
-                    campaign.DiceMode.ToString(),
-                    campaign.DeathSaveVisibility.ToString(),
-                    campaign.ReactionTimeoutSeconds,
-                    campaign.CharacterReviewRequired,
-                    campaign.StartingLevel,
-                    campaign.CreatedAt,
-                    campaign.OwnerUserId));
+            if (campaign is null)
+            {
+                return Results.NotFound();
+            }
+
+            // Sprint F งานที่ 6a — `JoinCode` ส่งกลับ **เฉพาะ DM เท่านั้น** สมาชิกคนอื่นได้ null
+            // เสมอ: โค้ดนี้คือสิ่งที่ใช้ "ชวนคนนอกเข้าโต๊ะ" ซึ่งเป็นอำนาจของ DM ตามที่ล็อกไว้ตอน
+            // งานที่ 1 ("DM เป็นคนกำหนดเอง ไม่ใช่ระบบสุ่มให้") ถ้าสมาชิกธรรมดาอ่านได้ ก็ชวนคนอื่น
+            // เข้ามาเองได้เงียบ ๆ โดย DM ไม่รู้ — ไม่ใช่ระดับช่องโหว่ร้ายแรง (ผู้ถูกชวนได้สิทธิ์แค่
+            // เท่าที่สมาชิกคนชวนมีอยู่แล้ว) แต่ผิดเจตนาการออกแบบชัดเจน จึงกันไว้ตั้งแต่ต้น
+            var callerUserId = principal.GetUserId();
+            var joinCode = callerUserId is not null && campaign.OwnerUserId == callerUserId.Value
+                ? campaign.JoinCode
+                : null;
+
+            return Results.Ok(new CampaignDetailResponse(
+                campaign.Id,
+                campaign.Name,
+                campaign.Mode.ToString(),
+                campaign.RulesSystem,
+                campaign.DiceMode.ToString(),
+                campaign.DeathSaveVisibility.ToString(),
+                campaign.ReactionTimeoutSeconds,
+                campaign.CharacterReviewRequired,
+                campaign.StartingLevel,
+                campaign.CreatedAt,
+                campaign.OwnerUserId,
+                joinCode));
         }).RequireAuthorization();
     }
 }
@@ -137,4 +154,9 @@ internal record CampaignDetailResponse(
     bool CharacterReviewRequired,
     int StartingLevel,
     DateTimeOffset CreatedAt,
-    Guid OwnerUserId);
+    Guid OwnerUserId,
+    /// <summary>Sprint F งานที่ 6a — มีค่าเฉพาะตอนผู้เรียกเป็น DM ของแคมเปญนี้ สมาชิกคนอื่นได้ null
+    /// เสมอ (เหตุผลอยู่ที่ handler) · null ยังหมายถึง "DM ยังไม่เคยตั้งโค้ด" ได้ด้วยในกรณีที่ผู้เรียก
+    /// เป็น DM จริง — สองความหมายนี้แยกกันไม่ได้จาก response ตัวเดียว แต่ฝั่ง UI ไม่ต้องแยก เพราะ
+    /// หน้าที่แสดงช่องนี้มีแต่หน้า DM อยู่แล้ว</summary>
+    string? JoinCode);

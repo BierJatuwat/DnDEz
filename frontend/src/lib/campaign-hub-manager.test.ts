@@ -12,9 +12,36 @@ class FakeHubConnection implements HubConnectionLike {
   reconnectedCb: ((connectionId?: string) => void) | null = null;
   closeCb: ((error?: Error) => void) | null = null;
 
-  start = vi.fn().mockResolvedValue(undefined);
-  stop = vi.fn().mockResolvedValue(undefined);
-  invoke = vi.fn().mockResolvedValue(undefined);
+  /**
+   * จำลองกฎจริงของ @microsoft/signalr: `invoke()` ก่อน connection connected จะ reject ด้วย
+   * "Cannot send data if the connection is not in the 'Connected' State." — ถ้า fake ยอมให้ invoke
+   * สำเร็จตลอด เทสต์ที่ตรวจลำดับ start/join จะผ่านแบบ vacuous (พิสูจน์อะไรไม่ได้เลย)
+   */
+  private connected = false;
+
+  /** หน่วงหนึ่ง macrotask ให้เหมือนของจริง (negotiate ผ่านเน็ต) — ถ้า resolve ทันทีในไมโครทาสก์
+   * เดียวกัน งานที่ถูก queue ไว้ก่อน start() จะบังเอิญไปรันตอน connected แล้วพอดี ทำให้ reproduce
+   * เคส "join ก่อน connection พร้อม" ไม่ได้เลย */
+  start = vi.fn().mockImplementation(
+    () =>
+      new Promise<void>((resolve) =>
+        setTimeout(() => {
+          this.connected = true;
+          resolve();
+        }, 0),
+      ),
+  );
+  stop = vi.fn().mockImplementation(async () => {
+    this.connected = false;
+  });
+  invoke = vi.fn().mockImplementation(async (methodName: string) => {
+    if (!this.connected) {
+      throw new Error(
+        `Cannot send data if the connection is not in the 'Connected' State. (${methodName})`,
+      );
+    }
+    return undefined;
+  });
 
   on(methodName: string, callback: (...args: unknown[]) => void): void {
     (this.handlers[methodName] ??= []).push(callback);
@@ -80,6 +107,28 @@ describe("CampaignHubManager", () => {
     expect(connection.invoke).toHaveBeenCalledWith("JoinCampaign", "campaign-1");
     expect(events.onJoinedChange).toHaveBeenCalledWith("campaign-1");
   });
+
+  it(
+    "waits for the connection before joining when the campaign is selected first " +
+      "(Sprint F งานที่ 6a — route-based pages set the campaign at mount, before start() resolves)",
+    async () => {
+      // ลำดับกลับกันกับเทสต์ด้านบนโดยตั้งใจ: เลือกแคมเปญ *ก่อน* ต่อ connection เสร็จ ซึ่งเป็นลำดับ
+      // จริงของหน้า /campaigns/{id}/dm|play (campaignId มาจาก route ตั้งแต่ mount)
+      manager.setSelectedCampaign("campaign-1");
+      expect(connection.invoke).not.toHaveBeenCalled();
+
+      await manager.start();
+      await flush();
+
+      expect(connection.invoke).toHaveBeenCalledWith("JoinCampaign", "campaign-1");
+      expect(events.onJoinedChange).toHaveBeenCalledWith("campaign-1");
+      // ต้องไม่มี log error หลุดออกไปเลย — ก่อนแก้จะขึ้น "join group ไม่สำเร็จ: ... not in the
+      // 'Connected' State" ทุกครั้งที่เข้าหน้า ทั้งที่สุดท้าย join สำเร็จ
+      expect(events.onLog).not.toHaveBeenCalledWith(
+        expect.stringContaining("join group ไม่สำเร็จ"),
+      );
+    },
+  );
 
   it("leaves the old group and joins the new one when the selected campaign changes", async () => {
     await manager.start();

@@ -320,7 +320,41 @@ public class CampaignMembershipEndpointsTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
+    // ── Sprint F งานที่ 6a — join code อ่านกลับได้เฉพาะ DM ────────────────────
+    // หน้า DM ต้องแสดงโค้ดปัจจุบันให้ DM เห็นหลังรีเฟรช (ไม่งั้นตั้งแล้วลืม บอกผู้เล่นไม่ได้) แต่
+    // สมาชิกธรรมดาต้องไม่เห็น ไม่งั้นชวนคนนอกเข้าโต๊ะเองได้เงียบ ๆ โดย DM ไม่รู้
+
+    [Fact]
+    public async Task Dm_sees_join_code_in_campaign_detail()
+    {
+        await SetJoinCodeDirectlyAsync(_campaignId, "SEEN-BY-DM");
+
+        var response = await AuthedClient(_dmToken).GetAsync($"/campaigns/{_campaignId}");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var detail = await response.Content.ReadFromJsonAsync<CampaignDetailForJoinCode>(JsonOptions);
+        Assert.Equal("SEEN-BY-DM", detail!.JoinCode);
+    }
+
+    [Fact]
+    public async Task Player_member_never_sees_join_code_in_campaign_detail()
+    {
+        await SetJoinCodeDirectlyAsync(_campaignId, "HIDDEN-FROM-PLAYER");
+
+        var response = await AuthedClient(_playerToken).GetAsync($"/campaigns/{_campaignId}");
+
+        // สมาชิกเห็นแคมเปญได้ตามปกติ (200) แต่ต้องไม่เห็นโค้ด
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var detail = await response.Content.ReadFromJsonAsync<CampaignDetailForJoinCode>(JsonOptions);
+        Assert.Equal(_campaignId, detail!.Id);
+        Assert.Null(detail.JoinCode);
+    }
+
     private record AuthResponse(string Token, Guid UserId);
+
+    /// <summary>เฉพาะฟิลด์ที่เทสต์ชุดนี้สนใจ — System.Text.Json มองข้ามฟิลด์ที่เหลือของ
+    /// CampaignDetailResponse ให้เอง ไม่ต้องประกาศครบทุกตัวซ้ำกับ CampaignCrudTests</summary>
+    private record CampaignDetailForJoinCode(Guid Id, string? JoinCode);
 
     private record SetJoinCodeResponse(Guid CampaignId, string? JoinCode);
 

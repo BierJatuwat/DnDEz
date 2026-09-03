@@ -397,3 +397,39 @@ CharacterStatsVisibility.IsVisibleTo เหมือน list/detail endpoint (2)
 เพิ่มเทสต์ครอบทั้ง response field และ broadcast (DM ได้รับ, กลุ่มผู้เล่นไม่ได้รับภายใน bounded wait)
 ยังปิดช่องว่างเทสต์ที่ code-reviewer ชี้ไว้ด้วย (DamageResistances/Vulnerabilities/Immunities/
 CurrentTempHp ไม่มีการยืนยันมาก่อน) 393 เทสต์ทั้งชุดผ่าน (392+1 fail เดิมไม่เกี่ยวข้อง)
+
+[2026-09-03 main (self, ไม่ dispatch)] : Sprint F งานที่ 6a (แยกหน้า DM/Player + role จาก server +
+join flow) — ไม่มี <tier> นำหน้า ทำเองตรง ๆ ไม่เรียก subagent ตามกฎ · ถามผู้ใช้เรื่องขอบเขตก่อนลงมือ
+เพราะ frontend ครอบ backend ได้แค่ครึ่งเดียว (join/members/encounter/death save/NPC/attacks ไม่มี UI
+เลย) ผู้ใช้เลือกแบ่ง 6a/6b — 6a = แยก route + role + join flow, 6b = UI การต่อสู้ทั้งก้อน
+
+โครงใหม่: `/` = CampaignPicker (list + create + **join ด้วยโค้ด**), `/campaigns/{id}` = ทางเข้ากลางที่
+ถาม server ว่าเป็นบทบาทอะไรแล้ว redirect, `/campaigns/{id}/dm` และ `/campaigns/{id}/play` แยกกันจริง ·
+แยก plumbing (query/mutation/hub) ออกเป็น `use-campaign-workspace.ts` ให้สองหน้าใช้ร่วมกันโดยไม่ก๊อป
+JSX สองชุด · เลิกเดา role จาก `ownerUserId` ฝั่ง client เปลี่ยนเป็นอ่าน `GET /campaigns/{id}/members`
+(role มาจาก `campaign_members.role` จริง) — ย้ำใน doc comment ว่า role ฝั่ง UI ใช้ตัดสินแค่ "แสดงอะไร"
+ไม่ใช่ security boundary (API เช็คเองอิสระอยู่แล้ว)
+
+แก้ backend เล็กน้อยที่จำเป็น: เพิ่ม `JoinCode` เข้า `CampaignDetailResponse` **ที่ส่งค่าจริงเฉพาะ DM**
+(สมาชิกคนอื่นได้ null เสมอ) — ไม่งั้น DM ตั้งโค้ดแล้วรีเฟรชจะดูไม่ได้ว่าโค้ดคืออะไร บอกผู้เล่นไม่ได้ ·
+กันไม่ให้สมาชิกธรรมดาอ่านเพราะโค้ดคือเครื่องมือ "ชวนคนนอกเข้าโต๊ะ" ซึ่งเป็นอำนาจ DM ตามที่ล็อกไว้ตอน
+งานที่ 1 — เพิ่มเทสต์ 2 เคส (DM เห็น / player member ไม่เห็น)
+
+⚠️ เจอ regression ที่ตัวเองทำระหว่างทดสอบจริงในเบราว์เซอร์: พอ campaignId มาจาก route แล้ว มันมาถึง
+ตั้งแต่ mount (เดิมต้องรอผู้ใช้คลิกเลือกแคมเปญ ซึ่งช้ากว่าการต่อ SignalR เสมอในทางปฏิบัติ) ทำให้
+`setSelectedCampaign()` ยิง `invoke("JoinCampaign")` ใส่ connection ที่ยังไม่ connected → ขึ้น log
+"join group ไม่สำเร็จ: Cannot send data if the connection is not in the 'Connected' State" **ทุกครั้ง
+ที่เข้าหน้า** (แล้ว recover เองทีหลัง ผู้ใช้เลยเห็น error ที่ไม่ได้แปลว่าอะไรพังจริง) — แก้ด้วย flag
+`started` ใน CampaignHubManager
+
+บทเรียนเรื่องเทสต์จากรอบนี้: เขียนเทสต์ครอบเคสนี้แล้ว **ผ่านทั้งที่ยัง reproduce บั๊กไม่ได้** ถึง 2 รอบ
+— รอบแรกเพราะ fake connection ให้ `invoke()` สำเร็จเสมอไม่ว่าสถานะไหน, รอบสองเพราะ `start()` ของ fake
+resolve ทันทีในไมโครทาสก์เดียวกัน งานที่ queue ไว้ก่อนเลยบังเอิญไปรันตอน connected พอดี · ต้องแก้ fake
+ให้เหมือนของจริงทั้งสองจุด (invoke throw ตอนยังไม่ connected + start หน่วง 1 macrotask) ถึงจะพิสูจน์ได้
+จริงว่า red ก่อนแก้/green หลังแก้ — ยืนยันด้วย git stash เฉพาะไฟล์ fix แล้วรันซ้ำ (fail 1 ตรงจุดที่ควร
+fail) **เทสต์ที่ผ่านตั้งแต่ยังไม่แก้บั๊ก = เทสต์ที่ไม่ได้ทดสอบอะไรเลย** ต้องพิสูจน์ทุกครั้งไม่ใช่เดา
+
+ทดสอบ end-to-end จริงในเบราว์เซอร์: สมัคร user ใหม่หมด → กรอกโค้ด TABLE-ALPHA → เข้าโต๊ะได้จริง →
+server ส่งไป /play เอง → เห็น UI ผู้เล่น (ไม่มี panel join code/API key/consult, autonomy read-only,
+เซสชันสร้างไม่ได้) → เปิด /dm ตรง ๆ ถูกเด้งกลับ /play · **ไม่แตะ SQL เลยสักคำสั่ง** (ต่างจากตอนทดสอบ
+2b ที่ต้อง INSERT campaign_members เอง) เทสต์ backend 394/395, frontend 48/48

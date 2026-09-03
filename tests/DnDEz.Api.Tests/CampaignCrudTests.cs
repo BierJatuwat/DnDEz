@@ -371,5 +371,6 @@ public class CampaignCrudTests : IAsyncLifetime
         bool CharacterReviewRequired,
         int StartingLevel,
         DateTimeOffset CreatedAt,
-        Guid OwnerUserId);
+        Guid OwnerUserId,
+        string? JoinCode);
 }

@@ -41,6 +41,15 @@ export class CampaignHubManager {
   private joinedCampaignId: string | null = null;
   private selectedCampaignId: string | null = null;
   private stopped = false;
+  /**
+   * connection พร้อมรับ invoke() แล้วหรือยัง — Sprint F งานที่ 6a เพิ่มเข้ามาเพราะพอแยกหน้าเป็น
+   * `/campaigns/{id}/...` แล้ว campaignId มาถึงตั้งแต่ mount (เดิมต้องรอผู้ใช้คลิกเลือกแคมเปญ ซึ่ง
+   * ช้ากว่าการต่อ connection เสมอในทางปฏิบัติ) `setSelectedCampaign()` จึงถูกเรียกก่อน `start()`
+   * จะ resolve ทำให้ยิง `invoke("JoinCampaign")` ใส่ connection ที่ยังไม่ connected แล้วขึ้น log
+   * error ทุกครั้งที่เข้าหน้า (ตัวมันเอง recover ได้ เพราะ start() เรียก queueSync() ซ้ำ — แต่ผู้ใช้
+   * เห็น error ที่ไม่ได้แปลว่าอะไรพังจริง) · กันด้วยการไม่ sync จนกว่าจะ connected แล้วจริง
+   */
+  private started = false;
   private syncChain: Promise<void> = Promise.resolve();
 
   constructor(
@@ -55,17 +64,20 @@ export class CampaignHubManager {
     connection.on("ActionMessageCreated", (payload) => this.events.onActionMessageCreated(payload));
 
     connection.onreconnecting(() => {
+      this.started = false;
       this.joinedCampaignId = null;
       this.events.onJoinedChange(null);
       this.events.onStatusChange("connecting");
     });
 
     connection.onreconnected(() => {
+      this.started = true;
       this.events.onStatusChange("connected");
       this.queueSync();
     });
 
     connection.onclose(() => {
+      this.started = false;
       this.joinedCampaignId = null;
       this.events.onJoinedChange(null);
       this.events.onStatusChange("disconnected");
@@ -84,8 +96,11 @@ export class CampaignHubManager {
     }
 
     if (this.stopped) return;
+    this.started = true;
     this.events.onStatusChange("connected");
     this.events.onLog("เชื่อมต่อ SignalR hub สำเร็จ");
+    // sync ที่นี่ครอบเคส "เลือกแคมเปญไว้ก่อน connection พร้อม" ด้วย — doSync อ่าน
+    // selectedCampaignId สดตอนรัน ไม่ใช่ค่าที่ capture ไว้ตอน setSelectedCampaign()
     this.queueSync();
   }
 
@@ -100,6 +115,9 @@ export class CampaignHubManager {
   }
 
   private queueSync(): void {
+    // ยังไม่ connected = ยังยิง invoke ไม่ได้ · ไม่ต้องเก็บคิวไว้เอง เพราะ start()/onreconnected()
+    // เรียก queueSync() ต่อทันทีที่พร้อม แล้ว doSync อ่าน selectedCampaignId ล่าสุดเสมอ
+    if (!this.started) return;
     this.syncChain = this.syncChain.then(() => this.doSync());
   }
 

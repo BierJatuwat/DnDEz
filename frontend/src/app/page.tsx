@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthStore } from "@/lib/auth-store";
-import { CampaignConsole } from "@/components/CampaignConsole";
+import { CampaignPicker } from "@/components/CampaignPicker";
 
 export default function HomePage() {
   const router = useRouter();
@@ -24,5 +24,5 @@ export default function HomePage() {
     );
   }
 
-  return <CampaignConsole />;
+  return <CampaignPicker />;
 }
