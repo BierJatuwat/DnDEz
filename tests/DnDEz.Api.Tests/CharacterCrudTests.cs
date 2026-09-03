@@ -692,7 +692,13 @@ public class CharacterCrudTests : IAsyncLifetime
     {
         var createResponse = await AuthedClient(_dmToken).PostAsJsonAsync(
             $"/campaigns/{_campaignCId}/characters",
-            new { Name = "Ambush Predator", IsNpc = true, StatsVisibleToParty = false, ArmorClass = 15, MaxHp = 40 });
+            new
+            {
+                Name = "Ambush Predator", IsNpc = true, StatsVisibleToParty = false, ArmorClass = 15, MaxHp = 40,
+                DamageResistances = new[] { "Cold" },
+                DamageVulnerabilities = new[] { "Fire" },
+                DamageImmunities = new[] { "Poison" },
+            });
         var npc = await createResponse.Content.ReadFromJsonAsync<CharacterCreatedResponse>(JsonOptions);
 
         // ต้อง join แคมเปญ C ก่อนถึงจะเป็นสมาชิกเห็นได้ (RLS) — ใช้ userA เข้าเป็น player เพิ่ม
@@ -705,7 +711,11 @@ public class CharacterCrudTests : IAsyncLifetime
         Assert.Null(playerDetail!.ArmorClass);
         Assert.Null(playerDetail.CurrentHp);
         Assert.Null(playerDetail.MaxHp);
+        Assert.Null(playerDetail.CurrentTempHp);
         Assert.Null(playerDetail.Sheet);
+        Assert.Null(playerDetail.DamageResistances);
+        Assert.Null(playerDetail.DamageVulnerabilities);
+        Assert.Null(playerDetail.DamageImmunities);
 
         var playerList = await (await AuthedClient(_userAToken).GetAsync($"/campaigns/{_campaignCId}/characters"))
             .Content.ReadFromJsonAsync<List<CharacterListItem>>(JsonOptions);
@@ -719,6 +729,10 @@ public class CharacterCrudTests : IAsyncLifetime
             .Content.ReadFromJsonAsync<CharacterDetailResponse>(JsonOptions);
         Assert.Equal(15, dmDetail!.ArmorClass);
         Assert.Equal(40, dmDetail.MaxHp);
+        Assert.Equal(0, dmDetail.CurrentTempHp);
+        Assert.Equal(new[] { "Cold" }, dmDetail.DamageResistances);
+        Assert.Equal(new[] { "Fire" }, dmDetail.DamageVulnerabilities);
+        Assert.Equal(new[] { "Poison" }, dmDetail.DamageImmunities);
     }
 
     [Fact]

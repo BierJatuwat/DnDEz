@@ -644,6 +644,83 @@ public class CombatResolutionTests : IAsyncLifetime
         await connection.StopAsync();
     }
 
+    /// <summary>
+    /// Sprint F งานที่ 7 follow-up (Critical จาก security review commit 4434650) — NPC ที่ DM ปิดการ
+    /// มองเห็น stat ไว้ (ControlledByDm=true, NpcStatsVisibleToParty=false) ต้องไม่ broadcast HpUpdated
+    /// เข้ากลุ่มแคมเปญเลย (ผู้เล่นทุกคนอยู่ในกลุ่มนั้น) — ต้องส่งตรงถึง DM คนเดียวแทน (Clients.User)
+    /// เหมือนแพทเทิร์น DeathSaveVisibility.DmOnly ที่มีอยู่แล้ว ไม่งั้นฟีเจอร์ซ่อน stat ที่ list/detail
+    /// endpoint ทำไว้ไม่มีความหมายทันทีที่เข้า combat จริง
+    /// </summary>
+    [Fact]
+    public async Task Post_attacks_on_hidden_npc_does_not_broadcast_HpUpdated_to_party_group_but_reaches_dm()
+    {
+        await using var conn = new NpgsqlConnection(OwnerConnectionString);
+        await conn.OpenAsync();
+
+        var hiddenNpcId = Guid.NewGuid();
+        await InsertCharacterAsync(conn, hiddenNpcId, _campaignId, "Hidden Ambusher", armorClass: 1, controlledByDm: true);
+        await using (var hide = new NpgsqlCommand(
+            "UPDATE characters SET npc_stats_visible_to_party = false WHERE id = @id", conn))
+        {
+            hide.Parameters.AddWithValue("id", hiddenNpcId);
+            await hide.ExecuteNonQueryAsync();
+        }
+
+        await using var partyConnection = BuildConnection(_memberToken);
+        var partyReceived = new TaskCompletionSource<HpUpdatedBroadcastDto>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        partyConnection.On<HpUpdatedBroadcastDto>("HpUpdated", b => partyReceived.TrySetResult(b));
+        await partyConnection.StartAsync();
+        await partyConnection.InvokeAsync("JoinCampaign", _campaignId);
+
+        await using var dmConnection = BuildConnection(_dmToken);
+        var dmReceived = new TaskCompletionSource<HpUpdatedBroadcastDto>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        dmConnection.On<HpUpdatedBroadcastDto>("HpUpdated", b => dmReceived.TrySetResult(b));
+        await dmConnection.StartAsync();
+        await dmConnection.InvokeAsync("JoinCampaign", _campaignId);
+
+        AttackResolutionResponse? body = null;
+        for (var attempt = 0; attempt < MaxRetries; attempt++)
+        {
+            var response = await AuthedClient(_memberToken).PostAsJsonAsync(
+                $"/campaigns/{_campaignId}/sessions/{_sessionId}/characters/{_attackerId}/attacks",
+                new
+                {
+                    Expression = "1d20+50",
+                    TargetCharacterId = hiddenNpcId,
+                    DamageComponents = new[] { new { Expression = "2d6+3", Type = "Slashing" } },
+                });
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            body = await response.Content.ReadFromJsonAsync<AttackResolutionResponse>(JsonOptions);
+            Assert.NotNull(body);
+            if (body!.Hit)
+            {
+                break;
+            }
+        }
+
+        Assert.NotNull(body);
+        Assert.True(body!.Hit, $"AutomaticMiss เกิดขึ้น {MaxRetries} รอบติดกัน — น่าสงสัยว่า RNG ผิดปกติ");
+
+        // caller ที่ไม่ใช่ DM ต้องไม่เห็น AC จริงใน response แม้เพิ่งโจมตีไปแล้วก็ตาม
+        Assert.Null(body.TargetArmorClass);
+
+        var dmCompleted = await Task.WhenAny(dmReceived.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+        Assert.Same(dmReceived.Task, dmCompleted);
+        var dmPayload = await dmReceived.Task;
+        Assert.Equal(hiddenNpcId, dmPayload.CharacterId);
+        Assert.Equal(body.TargetNewHp, dmPayload.NewHp);
+
+        // ฝั่งผู้เล่นต้องไม่ได้รับ broadcast เลยภายในเวลาที่พอสมควร (bounded wait — mirror
+        // Post_attacks_that_misses_does_not_broadcast_HpUpdated ด้านล่าง)
+        var partyCompleted = await Task.WhenAny(partyReceived.Task, Task.Delay(TimeSpan.FromSeconds(2)));
+        Assert.NotSame(partyReceived.Task, partyCompleted);
+
+        await partyConnection.StopAsync();
+        await dmConnection.StopAsync();
+    }
+
     // ── attacks — miss path (ไม่แตะ HP/damage เลย) ─────────────────────────
     // AC=50 + "1d20+0": Hit ธรรมดาเป็นไปไม่ได้ (max 20 < 50) มีแค่ CriticalHit (นัด20, 5%) หรือ
     // Miss/AutomaticMiss (95%) — retry จนกว่าจะไม่ hit เพื่อยืนยัน miss-path ไม่ flaky
@@ -1034,7 +1111,7 @@ public class CombatResolutionTests : IAsyncLifetime
         string Expression,
         IReadOnlyList<RollDetailDto> Rolls,
         int Total,
-        int TargetArmorClass,
+        int? TargetArmorClass,
         string Outcome,
         bool Hit,
         IReadOnlyList<DamageComponentDto>? DamageComponents,

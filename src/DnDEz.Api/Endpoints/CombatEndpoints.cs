@@ -425,7 +425,20 @@ public static class CombatEndpoints
             {
                 try
                 {
-                    await hubContext.Clients.Group(CampaignHub.GroupName(campaignId)).SendAsync(
+                    // Sprint F งานที่ 7 follow-up (security review commit 4434650 พบว่าเป็น Critical
+                    // — broadcast นี้ส่ง HP จริงให้ทุกคนในกลุ่มเสมอ แม้ target จะเป็น NPC ที่ DM ปิดการ
+                    // มองเห็นไว้ก็ตาม ทำให้ฟีเจอร์ซ่อน stat ที่ list/detail endpoint ทำไว้ไม่มีความหมาย
+                    // เลยทันทีที่เข้า combat) — target ที่เป็น NPC ปิดการมองเห็น ส่งตรงถึง DM คนเดียว
+                    // เท่านั้น (แพทเทิร์นเดียวกับ DeathSaveVisibility.DmOnly ด้านล่าง) ผู้เล่นจะไม่เห็น
+                    // HpUpdated event เลยสำหรับ NPC ตัวนี้จนกว่า DM จะเปิดการมองเห็น — trade-off ที่
+                    // ตั้งใจ (ไม่ mix แบบ "บอกว่ามีอะไรเกิดขึ้นแต่ไม่บอกตัวเลข" เพราะเพิ่ม design surface
+                    // ที่ยังไม่ได้ verify และ frontend ยังไม่มี UI รองรับ NPC เลยตอนนี้)
+                    var hiddenFromParty = target.ControlledByDm && !target.NpcStatsVisibleToParty;
+                    var hpUpdateTarget = hiddenFromParty
+                        ? hubContext.Clients.User(campaign.OwnerUserId.ToString())
+                        : hubContext.Clients.Group(CampaignHub.GroupName(campaignId));
+
+                    await hpUpdateTarget.SendAsync(
                         "HpUpdated",
                         new HpUpdatedBroadcast(
                             targetCharacterId,
@@ -464,6 +477,14 @@ public static class CombatEndpoints
                 }
             }
 
+            // Sprint F งานที่ 7 follow-up — target.ArmorClass ที่ใช้คำนวณ hit/miss จริง (บรรทัดบน) ต้อง
+            // เป็นค่าจริงเสมอ (กติกาเกม) แต่ค่าที่ "ส่งกลับให้ caller เห็น" ต้องเคารพการซ่อน stat ของ
+            // NPC เหมือน list/detail endpoint — caller ไม่ใช่ DM และ target เป็น NPC ที่ปิดการมองเห็นไว้
+            // ต้องไม่เห็น AC ที่แท้จริงแม้จะเพิ่งโจมตีไปแล้วก็ตาม (รู้แค่ hit/miss ไม่ใช่ตัวเลข)
+            var callerIsDm = campaign.OwnerUserId == callerUserId.Value;
+            var targetArmorClassVisible = CharacterStatsVisibility.IsVisibleTo(
+                target.ControlledByDm, target.NpcStatsVisibleToParty, callerIsDm);
+
             return Results.Ok(new AttackResolutionResponse(
                 attackDiceRoll.Id,
                 characterId,
@@ -471,7 +492,7 @@ public static class CombatEndpoints
                 attackRoll.Expression,
                 attackRoll.Rolls.Select(r => new RollDetailResponse(r.Sides, r.Value, r.Dropped, r.Sign)).ToList(),
                 attackRoll.Total,
-                target.ArmorClass,
+                targetArmorClassVisible ? target.ArmorClass : null,
                 attackResult.Outcome.ToString(),
                 attackResult.IsHit,
                 damageComponentResponses,
@@ -520,7 +541,7 @@ internal record AttackResolutionResponse(
     string Expression,
     IReadOnlyList<RollDetailResponse> Rolls,
     int Total,
-    int TargetArmorClass,
+    int? TargetArmorClass,
     string Outcome,
     bool Hit,
     IReadOnlyList<DamageComponentResponse>? DamageComponents,

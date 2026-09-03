@@ -366,3 +366,34 @@ generator ไม่ suppress DDL ให้ system column apply migration ที�
 
 392 เทสต์ทั้งชุดผ่าน (391 ผ่าน 1 fail เดิมไม่เกี่ยวข้อง) รวม 7 เทสต์ใหม่ของงานนี้ + 1 เทสต์เดิมที่พัง
 ตอนแรกเพราะลำดับ join-ก่อน-สร้างผิด (แก้เองแล้วก่อน commit)
+
+[2026-09-03 main -> code-reviewer, security-reviewer] : ผู้ใช้สั่งส่งงานที่ 7 (commit 4434650, ทำเอง
+ไม่มี tier ตอนแรก) เข้ารีวิวย้อนหลังทั้งคู่ — เข้า trigger security ชัดเจน (authorization: DM-only NPC
+creation/visibility toggle, information disclosure: ซ่อน AC/HP จาก non-DM) dispatch คู่ขนาน
+
+[2026-09-03 18:24] security-reviewer -> owner : รีวิว retroactive commit 4434650 (Sprint F งานที่ 7
+NPC/monster) รอบที่ 1 — พบ Critical 1 จุด: CombatEndpoints.cs (POST checks/attacks) ส่ง
+target.ArmorClass ผ่าน AttackResolutionResponse.TargetArmorClass ตรงๆ ในทุกกรณี และ broadcast
+HpUpdatedBroadcast (PreviousHp/NewHp/PreviousTempHp/NewTempHp) เข้า SignalR group ทั้งแคมเปญ
+โดยไม่เช็ค NpcStatsVisibleToParty/ControlledByDm เลย — ทำให้ฟีเจอร์ซ่อน stat ของ NPC ที่เพิ่งเพิ่มใน
+list/detail (CharacterEndpoints.cs) ถูกข้ามได้ทันทีแค่โจมตี NPC ตัวนั้นหนึ่งครั้ง (เห็น AC ตรงๆ ในผล
+attack) หรือแค่อยู่ในแคมเปญตอนคนอื่นโจมตี (เห็น HP ผ่าน broadcast) ไม่ escalate ขึ้น opus-worker เพราะ
+เป็น logic gap ตรงไปตรงมา (fields ที่ไม่ผ่าน CharacterStatsVisibility.IsVisibleTo) ไม่ใช่ auth/crypto/
+session ที่ซับซ้อน — ส่งกลับ owner แก้รอบที่ 1
+
+[2026-09-03 main] : security-reviewer พบ Critical จริงใน commit 4434650 (งานที่ 7) — ฟีเจอร์ซ่อน stat
+NPC ที่ list/detail endpoint ทำไว้ถูกบายพาสเต็มๆ ทันทีที่เข้า combat เพราะ CombatEndpoints.cs attacks
+handler ไม่เคยถูกแก้ให้เคารพ NpcStatsVisibleToParty เลย: (1) AttackResolutionResponse.TargetArmorClass
+ส่งค่า AC จริงกลับให้ caller เสมอ (2) HpUpdatedBroadcast ส่ง HP จริงเข้ากลุ่มแคมเปญทั้งกลุ่มเสมอ (ทุก
+สมาชิกอยู่ในกลุ่มนั้น) ไม่มี <tier> นำหน้ารอบนี้เช่นกัน (คำสั่งคือ "push แล้วส่ง review ย้อนหลังด้วย")
+จึงแก้เองตรง ๆ ไม่ dispatch — แก้ 2 จุด: (1) TargetArmorClass เป็น nullable กรองผ่าน
+CharacterStatsVisibility.IsVisibleTo เหมือน list/detail endpoint (2) HpUpdated broadcast — NPC ที่ปิด
+การมองเห็นส่งตรงถึง DM คนเดียว (Clients.User) แทนกลุ่ม เหมือนแพทเทิร์น DeathSaveVisibility.DmOnly ที่มี
+อยู่แล้ว — ผู้เล่นจะไม่เห็น HpUpdated event เลยสำหรับ NPC ที่ซ่อนไว้ (trade-off ที่ตั้งใจ ไม่ผสมแบบ
+"บอกว่ามีอะไรเกิดขึ้นแต่ไม่บอกตัวเลข" เพราะเพิ่ม design surface ที่ยังไม่ได้ verify)
+
+พิสูจน์ red-then-green จริงด้วย git stash เฉพาะไฟล์ fix (เก็บเทสต์ใหม่ไว้): ก่อนแก้เทสต์ fail จริง
+(TargetArmorClass=1 ไม่ใช่ null ตรงกับที่ security-reviewer อธิบาย exploit ไว้เป๊ะ) หลังแก้ผ่านจริง —
+เพิ่มเทสต์ครอบทั้ง response field และ broadcast (DM ได้รับ, กลุ่มผู้เล่นไม่ได้รับภายใน bounded wait)
+ยังปิดช่องว่างเทสต์ที่ code-reviewer ชี้ไว้ด้วย (DamageResistances/Vulnerabilities/Immunities/
+CurrentTempHp ไม่มีการยืนยันมาก่อน) 393 เทสต์ทั้งชุดผ่าน (392+1 fail เดิมไม่เกี่ยวข้อง)
