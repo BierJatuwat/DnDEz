@@ -456,3 +456,22 @@ encounter (เปิด/ลำดับเทิร์น/เทิร์นถ�
 eslint สะอาด, vitest 49/49 (รวมเทสต์ใหม่ของ combat event), `next build` ผ่านและ route table ขึ้นครบ
 5 route · **สิ่งที่ยังไม่ได้ทดสอบ**: วงจร combat จริง (เปิด encounter → เดินเทิร์น → spend → โจมตี →
 HP ถึง 0 → ยืนยัน dying → ทอย death save) และ realtime sync ข้ามเบราว์เซอร์ — ต้องทดสอบก่อนถือว่าปิดงาน
+
+[2026-09-03 main] : งานที่ 6b — Docker กลับมาสตาร์ทได้แล้ว ทดสอบ end-to-end จริงในเบราว์เซอร์ครบวงจร
+**เจอบั๊กจริง 1 ตัวที่ tsc/lint/build จับไม่ได้เลย**: URL ของ endpoint ทอย death save ผิด — ผมอ่าน
+รายการ route จาก grep แล้ว "เดาต่อ" ว่า roll ใช้ path เดียวกับ confirm-dying (ไม่มี session segment)
+แล้วส่ง sessionId ไปใน body แทน · ของจริงคือ
+`/campaigns/{c}/sessions/{s}/characters/{ch}/death-saves/roll` (sessionId เป็น route segment เพราะการ
+ทอยต้องบันทึกลง dice_rolls ที่ผูกกับเซสชัน) → ยิงแล้วได้ 404 ทุกครั้ง · แก้แล้วทดสอบซ้ำผ่าน
+
+บทเรียนซ้ำรอยเดิมของ session นี้: **การอ่าน route จาก grep แล้วอนุมานว่า endpoint ที่เกี่ยวข้องกันใช้
+รูปแบบเดียวกัน = การเดา** ต้องเปิดดู signature จริงทีละตัว (คราวนี้ type checker ช่วยไม่ได้เลยเพราะ URL
+เป็นสตริง) — จับได้เพราะทดสอบจริงเท่านั้น
+
+ผลทดสอบ e2e (DM + player คนละบัญชี): สร้างเซสชัน/ตัวละคร/NPC → เปิด encounter (initiative 16 vs 6
+เรียงถูก ไฮไลต์ตาปัจจุบัน) → spend Action (ขีดฆ่าถูกตัว) → spend ซ้ำโดนปฏิเสธพร้อมข้อความอ่านออก →
+โจมตี CriticalHit 70 vs AC 10 ดาเมจ 13 → HP 10→0 ผ่าน realtime → death save panel โผล่ [NotDying] →
+DM ยืนยัน dying → [Rolling] → ทอยจนครบ 3 สำเร็จ → [Stable] ปุ่มทอยหายเอง → เทิร์นถัดไป (ตัวชี้ขยับ +
+ทรัพยากรรีเซ็ตเต็ม) → ซ่อน stat NPC → สลับเป็นผู้เล่น: เห็น "HP ซ่อนอยู่" ของ NPC, เห็น HP ตัวละคร
+ปกติตามเดิม, ไม่มีปุ่ม DM, ไม่มีปุ่มทอย death save (ไม่ใช่เจ้าของ/ไม่ใช่ DM) · SignalR event ใหม่ทั้ง
+6 ตัวยิงจริงครบ (EncounterStarted/TurnStateChanged/TurnChanged/DeathSaveStateChanged/DeathSaveRolled)

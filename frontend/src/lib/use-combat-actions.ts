@@ -166,8 +166,10 @@ export function useCombatActions({
   const rollDeathSave = useMutation({
     mutationFn: (characterId: string) =>
       apiFetch<{ outcome: string; successes: number; failures: number; status: string }>(
-        `/campaigns/${campaignId}/characters/${characterId}/death-saves/roll`,
-        { method: "POST", token, body: { sessionId } },
+        // sessionId เป็น route segment ของ endpoint นี้ (ไม่ใช่ body) เพราะการทอยต้องบันทึกลง
+        // dice_rolls ซึ่งผูกกับเซสชัน — ต่างจาก confirm-dying/GET ที่ไม่มี segment นี้
+        `/campaigns/${campaignId}/sessions/${sessionId}/characters/${characterId}/death-saves/roll`,
+        { method: "POST", token },
       ),
     onSuccess: async (r) => {
       appendLog(
