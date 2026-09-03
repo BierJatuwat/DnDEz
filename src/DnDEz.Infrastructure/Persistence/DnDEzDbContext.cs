@@ -206,6 +206,15 @@ public class DnDEzDbContext(DbContextOptions<DnDEzDbContext> options) : DbContex
             EnumCheck<DeathSaveState, DeathSaveStatus>(e, x => x.Status, "status");
             // กติกา SRD: สำเร็จ 3 = stable, ล้มเหลว 3 = ตาย — เกินนี้ไม่ได้
             e.ToTable(t => t.HasCheckConstraint("ck_death_saves_range", "successes BETWEEN 0 AND 3 AND failures BETWEEN 0 AND 3"));
+            // security fix (Sprint F งานที่ 5 review) — lost-update race: roll endpoint อ่าน state
+            // แล้วเขียนกลับคนละ round-trip โดยไม่มีอะไรกันสอง request พร้อมกันอ่านค่าตั้งต้นเดียวกัน
+            // แล้วเขียนทับกัน (เช่น ผลตายถูกทับด้วยผลทอยที่มาทีหลังอย่างเงียบ ๆ) ใช้ xmin ของ Postgres
+            // เป็น concurrency token แทน — เป็นคอลัมน์ system ที่มีอยู่แล้วในทุกแถวโดยธรรมชาติของ
+            // Postgres จึง**ไม่ต้อง migration** แค่ opt-in ผ่าน fluent API ให้ EF ตรวจก่อน UPDATE ทุกครั้ง
+            // ใช้ Property<uint>("xmin").IsRowVersion() แทน UseXminAsConcurrencyToken() ที่ obsolete
+            // ตั้งแต่ Npgsql EF Core provider รุ่นนี้ (8.0.10) — ผลลัพธ์เดียวกัน แค่เป็น API มาตรฐานของ
+            // EF Core เอง (IsRowVersion) ไม่ใช่ extension เฉพาะของ Npgsql ที่ทีมแนะนำให้เลิกใช้
+            e.Property<uint>("xmin").IsRowVersion();
         });
 
         b.Entity<CharacterReview>(e =>

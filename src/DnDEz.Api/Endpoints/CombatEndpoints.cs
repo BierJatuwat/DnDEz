@@ -8,6 +8,12 @@ using DnDEz.Infrastructure.Persistence;
 using DnDEz.Rules;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using DeathSaveStateEntity = DnDEz.Domain.Entities.DeathSaveState;
+// alias ทีละตัวแทนการ import ทั้ง namespace โดยตั้งใจ (แพทเทิร์นเดียวกับ DeathSaveEndpoints.cs) —
+// ไฟล์นี้มีทั้ง `using DnDEz.Domain.Enums;` และ `using DnDEz.Rules;` อยู่แล้ว ทั้งสอง namespace มี
+// DeathSaveStatus ชื่อชนกัน จึง alias เฉพาะตัวที่ต้องใช้ตรง ๆ
+using DomainDeathSaveStatus = DnDEz.Domain.Enums.DeathSaveStatus;
+using RulesDeathSaveState = DnDEz.Rules.DeathSaveState;
 
 namespace DnDEz.Api.Endpoints;
 
@@ -37,6 +43,15 @@ namespace DnDEz.Api.Endpoints;
 ///    แก้พร้อมเทสต์ red-proof ใน CombatResolutionTests) ส่วนตัวละคร **เป้าหมาย** ของ attacks
 ///    (targetCharacterId) ไม่ต้องผ่านเช็คนี้ — โจมตีตัวละครอื่นเป็นการกระทำ combat ปกติ ไม่ใช่ปัญหา
 ///    authorization
+///  • Sprint F งานที่ 5 — attack ที่ hit แล้วแตะ <c>death_save_states</c> เฉพาะ 2 เคสเท่านั้น (ทั้งคู่
+///    เกิดก่อน <c>SaveChangesAsync</c> เดิม ไม่มี SaveChanges รอบสอง): (1) instant death
+///    (<c>applyResult.IsInstantDeath</c>) → set/สร้างแถวเป็น Dead ทันที ไม่ผ่าน death save เลย
+///    ลำดับความสำคัญมาก่อน auto-failure เสมอ (2) เป้าหมายอยู่ที่ 0 HP มาก่อนแล้ว (ไม่ใช่เพิ่งตกถึง 0
+///    จาก hit นี้) และมีแถวอยู่แล้วที่สถานะ Rolling → นับ auto-failure ผ่าน
+///    <see cref="DeathSaveResolver.ApplyAttackedAtZeroHp"/> · **ตกถึง 0 HP ครั้งแรก (ไม่มีแถวมาก่อน)
+///    ไม่สร้างแถวเอง** เพราะ decision ล็อกไว้ว่าการ "ประกาศว่าตัวละครกำลังจะตาย" ต้องผ่าน DM confirm
+///    ผ่าน endpoint <c>confirm-dying</c> เท่านั้น (ดู <c>DeathSaveEndpoints.cs</c>) — endpoint นี้ห้าม
+///    สร้างสถานะให้อัตโนมัติไม่ว่ากรณีใด นอกจาก instant death ที่ตายทันทีไม่ต้องผ่าน death save
 /// </summary>
 public static class CombatEndpoints
 {
@@ -299,6 +314,9 @@ public static class CombatEndpoints
             int? targetNewTempHp = null;
             bool? targetDroppedToZero = null;
             bool? targetIsInstantDeath = null;
+            bool deathSaveBecameDead = false;
+            int deathSaveSuccesses = 0;
+            int deathSaveFailures = 0;
 
             if (attackResult.IsHit)
             {
@@ -306,6 +324,8 @@ public static class CombatEndpoints
                 var resistances = target.DamageResistances.Select(Enum.Parse<DamageType>).ToHashSet();
                 var vulnerabilities = target.DamageVulnerabilities.Select(Enum.Parse<DamageType>).ToHashSet();
                 var immunities = target.DamageImmunities.Select(Enum.Parse<DamageType>).ToHashSet();
+
+                var wasAlreadyAtZero = target.CurrentHp == 0;
 
                 var damageRoller = SeededDiceRoller.CreateWithSecureRandomSeed();
                 var damageResult = DamageResolver.RollAndResolve(
@@ -317,6 +337,55 @@ public static class CombatEndpoints
 
                 target.CurrentHp = applyResult.NewHp;
                 target.CurrentTempHp = applyResult.NewTempHp;
+
+                // Sprint F งานที่ 5 — death save auto-failure/instant-death (ดู doc comment หัว class
+                // สำหรับลำดับความสำคัญและเหตุผลของ decision)
+                var deathSaveRow = await db.DeathSaveStates
+                    .SingleOrDefaultAsync(d => d.CharacterId == targetCharacterId);
+
+                if (applyResult.IsInstantDeath)
+                {
+                    if (deathSaveRow is not null)
+                    {
+                        deathSaveRow.Status = DomainDeathSaveStatus.Dead;
+                        deathSaveRow.UpdatedAt = DateTimeOffset.UtcNow;
+                        deathSaveSuccesses = deathSaveRow.Successes;
+                        deathSaveFailures = deathSaveRow.Failures;
+                    }
+                    else
+                    {
+                        var newRow = new DeathSaveStateEntity
+                        {
+                            CharacterId = targetCharacterId,
+                            Successes = 0,
+                            Failures = 0,
+                            Status = DomainDeathSaveStatus.Dead,
+                            UpdatedAt = DateTimeOffset.UtcNow,
+                        };
+                        db.DeathSaveStates.Add(newRow);
+                        deathSaveSuccesses = 0;
+                        deathSaveFailures = 0;
+                    }
+
+                    deathSaveBecameDead = true;
+                }
+                else if (wasAlreadyAtZero && deathSaveRow is not null
+                    && deathSaveRow.Status == DomainDeathSaveStatus.Rolling)
+                {
+                    var currentDeathSaveState = new RulesDeathSaveState(
+                        deathSaveRow.Successes, deathSaveRow.Failures,
+                        DeathSaveMapping.ToRules(deathSaveRow.Status));
+                    var autoFailureResult = DeathSaveResolver.ApplyAttackedAtZeroHp(currentDeathSaveState, isCritical);
+
+                    deathSaveRow.Successes = autoFailureResult.NewState.Successes;
+                    deathSaveRow.Failures = autoFailureResult.NewState.Failures;
+                    deathSaveRow.Status = DeathSaveMapping.ToDomain(autoFailureResult.NewState.Status);
+                    deathSaveRow.UpdatedAt = DateTimeOffset.UtcNow;
+
+                    deathSaveSuccesses = deathSaveRow.Successes;
+                    deathSaveFailures = deathSaveRow.Failures;
+                    deathSaveBecameDead = deathSaveRow.Status == DomainDeathSaveStatus.Dead;
+                }
 
                 foreach (var componentResult in damageResult.Components)
                 {
@@ -370,6 +439,28 @@ public static class CombatEndpoints
                 catch (Exception ex)
                 {
                     logger.LogWarning(ex, "Failed to broadcast HpUpdated for character {CharacterId}", targetCharacterId);
+                }
+            }
+
+            if (deathSaveBecameDead)
+            {
+                try
+                {
+                    var deathSaveTarget = campaign.DeathSaveVisibility == DeathSaveVisibility.DmOnly
+                        ? hubContext.Clients.User(campaign.OwnerUserId.ToString())
+                        : hubContext.Clients.Group(CampaignHub.GroupName(campaignId));
+
+                    await deathSaveTarget.SendAsync(
+                        "DeathSaveStateChanged",
+                        new DeathSaveStateChangedBroadcast(
+                            targetCharacterId,
+                            deathSaveSuccesses,
+                            deathSaveFailures,
+                            "Dead"));
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Failed to broadcast DeathSaveStateChanged for character {CharacterId}", targetCharacterId);
                 }
             }
 

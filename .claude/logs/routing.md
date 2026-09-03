@@ -291,3 +291,45 @@ comment ของ migration ก่อนที่ migration จะถูก appl
 บังเอิญถูกหลัง apply จริง แต่เป็น pattern เดียวกับที่ CLAUDE.md ข้อ 4a เตือนไว้สำหรับ haiku — ต้องขยาย
 คำเตือนนั้นให้ครอบทุกระดับ ไม่ใช่แค่ haiku
 [2026-09-03 07:12:55] code-reviewer -> security-reviewer : CombatEndpoints checks/attacks เพิ่ม ClaimsPrincipal + RequireCharacterActorAsync (DM override บน character owner/controlled_by_dm) — auth surface ใหม่ ส่งตรวจตาข่ายรอง (code review ผ่านแล้ว: 404/403 ordering ถูกต้อง, no null-deref, RequireCharacterOwnerAsync ไม่ถูกแตะ, เทสต์พิสูจน์ side-effect prevention จริง)
+
+[2026-09-03 main] : Sprint F งานที่ 5 (death save / dying state) — สำรวจก่อน dispatch พบว่า rules
+engine (DeathSaveResolver.cs) เขียนไว้สมบูรณ์แล้วตั้งแต่ Phase 3 (state machine เต็ม: nat20=revive,
+nat1=critical failure 2 counts, auto-failure ตอนโดนตีซ้ำที่ 0 HP, clamp 3/3) เหลือแค่ wiring ชั้น API
+ทั้งหมด (ยังไม่มี endpoint เลย) — ล็อกจุดออกแบบเองก่อน dispatch:
+1. massive damage instant death (HitPointResolver.IsInstantDeath=true) -> set DeathSaveStatus.Dead
+   อัตโนมัติทันทีใน CombatEndpoints attacks handler **ไม่ต้องรอ DM confirm** (ต่างจาก dying state ปกติ
+   ที่ต้องรอ DM ตามคำตอบที่ล็อกไว้แล้ว — เหตุผล: ตายแล้วไม่มีอะไรให้ DM คุมจังหวะเล่าเรื่องต่อ ไม่มี
+   ความกำกวมแบบ dying state)
+2. "โดนโจมตีซ้ำตอน 0 HP" (auto-failure) wire เข้า CombatEndpoints attacks handler โดยตรงแบบอัตโนมัติ
+   (ไม่ใช่ manual endpoint) เช็ค wasAlreadyAtZero (HP==0 ก่อนโดนตีรอบนี้) + DeathSaveState.Status==Rolling
+   ก่อนเรียก ApplyAttackedAtZeroHp
+3. 0 HP รอบแรก (DroppedToZero=true, IsInstantDeath=false, ไม่เคย 0 มาก่อน) — ไม่ auto-transition อะไร
+   เลยตามคำตอบเดิม ต้องรอ endpoint confirm-dying (DM-only) แยกต่างหาก
+4. endpoint roll death save ไม่ผูกกับ turn order ของงานที่ 4 (decouple) — ใครก็ได้ที่เป็นเจ้าของตัวละคร
+   หรือ DM (ถ้า ControlledByDm) กดได้ตามจังหวะที่ตกลงกันเอง ตาม hybrid-manual philosophy เดียวกับ
+   endpoint "spend" ของงานที่ 4
+5. เจอ Campaign.DeathSaveVisibility (PartyVisible/DmOnly) มีอยู่แล้วในสคีมา ยังไม่เคยถูกใช้จริงเลย —
+   ต้องเคารพค่านี้ใน GET + SignalR broadcast (DmOnly = DM เท่านั้นเห็น/broadcast ไปกลุ่ม DM)
+6. nat20 (Revived) -> เรียก HitPointResolver.ApplyHealing(0, maxHp, 1) ต่อด้วย ตั้ง CurrentHp=1 +
+   DeathSaveState กลับเป็น NotDying ตาม doc comment ของ engine เองที่ระบุไว้ตรง ๆ
+7. death_save_states มี RLS อยู่แล้วจาก InitialSchema (any member ผ่าน chain characters) ไม่ต้อง
+   migration ใหม่สำหรับ RLS พื้นฐาน — ตรงกับ gap เดิมที่ยอมรับแล้วเรื่อง HP ก็ any-member-writable ที่
+   RLS เหมือนกัน ไม่ใช่สิ่งที่ต้องแก้ในงานนี้เว้นแต่เจอเพิ่ม
+- ต้องสร้าง endpoint file + test file ใหม่แน่นอน (DeathSaveEndpoints.cs) -> เข้าข้อ 1a dispatch ตรง
+  opus-worker ข้าม first triage
+
+[2026-09-03 Sprint F งานที่ 5] coordinator -> opus-worker : ข้าม first triage ตามกฎ 1a — งานต้องสร้างไฟล์ใหม่
+  (`src/DnDEz.Api/Endpoints/DeathSaveEndpoints.cs` + `tests/DnDEz.Api.Tests/DeathSaveEndpointsTests.cs`)
+  ซึ่ง sonnet-worker ทำไม่ได้เพราะไม่มี Write tool
+[2026-09-03 Sprint F งานที่ 5] opus-worker -> sonnet-worker : dispatch งาน green (implementation) 2 ก้อน
+  owner เขียนเทสต์ red เองแล้ว (36 เทสต์ · 30 red / 6 บังเอิญเขียว) ตาม TDD ข้อ 4 ห้าม owner เขียน
+  implementation ของสิ่งที่ตัวเองเขียนเทสต์ให้ · owner สร้างไฟล์ stub เปล่าไว้ให้ worker ใช้ Edit ต่อได้
+
+[2026-09-03 main] : Sprint F งานที่ 5 — code-reviewer กับ security-reviewer ให้ severity ต่างกันสำหรับ
+concurrency race เดียวกันบน POST death-saves/roll (code-reviewer: Medium ไม่บล็อก เพราะ pattern เดียวกับ
+CurrentHp ที่ไม่มี concurrency protection อยู่แล้วทั้งระบบ / security-reviewer: High แนะนำแก้ก่อน merge
+เพราะเป็น business-logic bypass ต่อกติกาการตายโดยตรง ไม่ใช่แค่ correctness debt ทั่วไป ยกตัวอย่าง exploit
+ที่เป็นรูปธรรม: ยิง roll พร้อมกันตอน failures=2 หลบความตายได้จริง) — ตัดสินใจเชื่อ security-reviewer
+เพราะตรงกับ mandate ของมันโดยตรง (adversarial "โค้ดนี้ถูกใช้ผิดทางได้ยังไง") และตรงกับ precedent
+Sprint F งานที่ 4 ที่เจอ race แบบเดียวกัน (ผลลัพธ์ต่างแค่ "ขโมย action ฟรี" vs "หลบความตาย") ซึ่งแก้ไปแล้ว
+ไม่ใช่ปล่อยเป็น backlog -> สั่งแก้ก่อน merge

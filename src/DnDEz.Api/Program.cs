@@ -482,6 +482,9 @@ app.MapPlayerActionEndpoints();
 // ── Sprint F งานที่ 4: encounter / initiative / turn order ──
 app.MapEncounterEndpoints();
 
+// ── Sprint F งานที่ 5: death save state machine (confirm-dying / roll / GET state) ──
+app.MapDeathSaveEndpoints();
+
 app.Run();
 
 // ให้ WebApplicationFactory<Program> ใน integration test มองเห็นคลาสนี้ได้
