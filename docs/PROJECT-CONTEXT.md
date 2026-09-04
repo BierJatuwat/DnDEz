@@ -4,6 +4,11 @@
 > อ่านไฟล์นี้ก่อน แล้วค่อยเปิด [`dm-side-design.md`](./dm-side-design.md) /
 > [`player-side-design.md`](./player-side-design.md) ถ้าต้องการรายละเอียดเต็ม
 >
+> ⚠️ **[`spatial-play-design.md`](./spatial-play-design.md) (2026-09-04) แก้/ขยายเอกสารเดิมหลายจุด**
+> — แผนที่เป็นแหล่งความจริงเชิงพื้นที่, affordance panel เป็น rules engine ไม่ใช่ AI (แก้
+> `player-side-design` §7), คลังกลไกอาวุธ/เวท, geometry layer, ขอบเขต VTT ที่ขยายจาก §1 ข้างล่าง
+> · **ถ้าจะทำงานเกี่ยวกับแผนที่/การต่อสู้/การสร้างตัวละคร ต้องอ่านเล่มนั้นด้วย**
+>
 > **สถานะ**: ฝั่ง DM ออกแบบเสร็จแล้ว · ฝั่ง Player ออกแบบรอบแรกเสร็จแล้ว (2026-08-21)
 > · **DB schema + RLS ลงโค้ดแล้ว** (30 ตาราง — ดู [`db-schema.md`](./db-schema.md)) ·
 > **rules engine ครบ 3 phase แล้ว** (221 เทสต์ผ่าน — ดู §4) · ยังไม่มี API/frontend
