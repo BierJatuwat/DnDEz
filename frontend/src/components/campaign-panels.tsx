@@ -22,6 +22,26 @@ import type { HubStatus, LogEntry } from "@/lib/console-store";
 const sectionClass =
   "rounded border border-black/10 dark:border-white/10 p-4 space-y-3";
 
+/**
+ * Sprint F defect A4 — โครงคอลัมน์ของทั้งหน้า DM และหน้าผู้เล่น
+ *
+ * เดิมทุก section เรียงต่อกันเป็นคอลัมน์เดียวใน `max-w-3xl` ทำให้หน้า DM (13 section) ต้อง scroll
+ * ยาวมากทั้งที่จอกว้างเหลือที่ว่างสองข้าง · `items-start` สำคัญ: ถ้าไม่ใส่ grid จะยืดทุกคอลัมน์ให้สูง
+ * เท่าคอลัมน์ที่สูงสุด ทำให้การ์ดสั้น ๆ ถูกดึงยืดตามไปด้วย
+ */
+export function WorkspaceGrid({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4 items-start">
+      {children}
+    </div>
+  );
+}
+
+export function WorkspaceColumn({ children }: { children: React.ReactNode }) {
+  return <div className="flex flex-col gap-4 min-w-0">{children}</div>;
+}
+
+/** แถบสถานะบาง ๆ เต็มความกว้าง — ไม่ทำเป็นการ์ดเต็มใบเพราะมีข้อมูลแค่บรรทัดเดียว */
 export function HubStatusPanel({
   hubStatus,
   joinedCampaignId,
@@ -30,17 +50,18 @@ export function HubStatusPanel({
   joinedCampaignId: string | null;
 }) {
   return (
-    <section className={sectionClass}>
-      <h2 className="font-medium">
-        SignalR:{" "}
-        <span className={hubStatus === "connected" ? "text-green-500" : "text-yellow-500"}>
-          {hubStatus}
-        </span>
-        {joinedCampaignId && (
-          <span className="opacity-70"> · joined {joinedCampaignId.slice(0, 8)}</span>
-        )}
-      </h2>
-    </section>
+    <div className="flex items-center gap-2 text-xs">
+      <span
+        className={`inline-block size-2 rounded-full ${
+          hubStatus === "connected" ? "bg-green-500" : "bg-yellow-500"
+        }`}
+        aria-hidden
+      />
+      <span className="opacity-70">
+        SignalR: {hubStatus}
+        {joinedCampaignId && ` · joined ${joinedCampaignId.slice(0, 8)}`}
+      </span>
+    </div>
   );
 }
 

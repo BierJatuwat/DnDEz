@@ -12,9 +12,12 @@ export default function LoginPage() {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   useEffect(() => {
     if (ready && token) {
@@ -25,6 +28,12 @@ export default function LoginPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+
+    if (mode === "register" && password !== confirmPassword) {
+      setError("รหัสผ่านทั้งสองช่องไม่ตรงกัน");
+      return;
+    }
+
     setSubmitting(true);
     try {
       if (mode === "login") {
@@ -69,15 +78,51 @@ export default function LoginPage() {
 
         <label className="block space-y-1">
           <span className="text-sm">Password</span>
-          <input
-            type="password"
-            required
-            minLength={8}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="w-full rounded border border-black/20 dark:border-white/20 bg-transparent px-3 py-2"
-          />
+          <span className="relative flex items-center">
+            <input
+              type={showPassword ? "text" : "password"}
+              required
+              minLength={8}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete={mode === "login" ? "current-password" : "new-password"}
+              className="w-full rounded border border-black/20 dark:border-white/20 bg-transparent px-3 py-2 pr-16"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((v) => !v)}
+              aria-label={showPassword ? "ซ่อนรหัสผ่าน" : "แสดงรหัสผ่าน"}
+              className="absolute right-2 text-xs opacity-60 hover:opacity-100"
+            >
+              {showPassword ? "ซ่อน" : "แสดง"}
+            </button>
+          </span>
         </label>
+
+        {mode === "register" && (
+          <label className="block space-y-1">
+            <span className="text-sm">ยืนยันรหัสผ่าน</span>
+            <span className="relative flex items-center">
+              <input
+                type={showConfirmPassword ? "text" : "password"}
+                required
+                minLength={8}
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                autoComplete="new-password"
+                className="w-full rounded border border-black/20 dark:border-white/20 bg-transparent px-3 py-2 pr-16"
+              />
+              <button
+                type="button"
+                onClick={() => setShowConfirmPassword((v) => !v)}
+                aria-label={showConfirmPassword ? "ซ่อนรหัสผ่าน" : "แสดงรหัสผ่าน"}
+                className="absolute right-2 text-xs opacity-60 hover:opacity-100"
+              >
+                {showConfirmPassword ? "ซ่อน" : "แสดง"}
+              </button>
+            </span>
+          </label>
+        )}
 
         {mode === "register" && (
           <label className="block space-y-1">

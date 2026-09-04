@@ -45,21 +45,28 @@ export default function CampaignLayout({ children }: { children: React.ReactNode
   }
 
   return (
-    <main className="flex-1 p-6 space-y-6 max-w-3xl mx-auto w-full">
-      <div className="flex items-center justify-between">
-        <div>
-          <Link href="/" className="text-xs opacity-60 hover:opacity-100 underline">
-            ← ทุกโต๊ะ
-          </Link>
-          <h1 className="text-xl font-semibold">
-            {campaignQuery.data?.name ?? "กำลังโหลด..."}
-          </h1>
+    <main className="flex-1 w-full">
+      {/* หัวเรื่อง sticky — หน้านี้ยาวพอที่การเลื่อนกลับขึ้นไปหาปุ่ม "ทุกโต๊ะ" จะน่ารำคาญ
+          (defect A4: "scroll ลงเยอะไป") */}
+      <div className="sticky top-0 z-10 border-b border-black/10 dark:border-white/10 bg-white/85 dark:bg-black/85 backdrop-blur">
+        <div className="max-w-[1600px] mx-auto w-full px-6 py-3 flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <Link href="/" className="text-xs opacity-60 hover:opacity-100 underline">
+              ← ทุกโต๊ะ
+            </Link>
+            <h1 className="text-xl font-semibold truncate">
+              {campaignQuery.data?.name ?? "กำลังโหลด..."}
+            </h1>
+          </div>
+          <button
+            onClick={logout}
+            className="text-sm underline opacity-70 hover:opacity-100 shrink-0"
+          >
+            ออกจากระบบ
+          </button>
         </div>
-        <button onClick={logout} className="text-sm underline opacity-70 hover:opacity-100">
-          ออกจากระบบ
-        </button>
       </div>
-      {children}
+      <div className="max-w-[1600px] mx-auto w-full p-6 space-y-4">{children}</div>
     </main>
   );
 }
