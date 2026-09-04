@@ -512,6 +512,7 @@ public static class EncounterEndpoints
             encounter.EndedAt,
             encounter.CurrentParticipantId,
             current?.CharacterId,
+            encounter.TurnNumber,
             participantResponses,
             ToTurnStateResponse(turnState));
     }
@@ -551,6 +552,14 @@ internal record EncounterResponse(
     DateTimeOffset? EndedAt,
     Guid? CurrentParticipantId,
     Guid? CurrentCharacterId,
+    /// <summary>
+    /// นับรวมทุกเทิร์นที่ผ่านไปตั้งแต่เปิด encounter (เริ่มที่ 0, +1 ทุกครั้งที่ next-turn) —
+    /// ไม่ใช่ "รอบ" ของ D&D · UI คำนวณรอบเองด้วย TurnNumber / จำนวนผู้ร่วมต่อสู้
+    ///
+    /// เก็บใน `encounters.turn_number` มาตั้งแต่งานที่ 4 (ใช้เป็นส่วนหนึ่งของ Redis key ของ
+    /// turn state) แต่ไม่เคยส่งออก API จนถึง defect รอบ B — UI จึงแสดง "รอบที่เท่าไร" ไม่ได้เลย
+    /// </summary>
+    int TurnNumber,
     IReadOnlyList<EncounterParticipantResponse> Participants,
     TurnStateResponse? TurnState);
 

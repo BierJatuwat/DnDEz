@@ -11,7 +11,9 @@ import {
   AttackCheckPanel,
   DeathSavePanel,
   EncounterPanel,
+  LatestEventBar,
   TurnStatePanel,
+  VitalsPanel,
 } from "./combat-panels";
 import {
   ActionFeedList,
@@ -120,7 +122,9 @@ export function PlayerView({ campaignId }: { campaignId: string }) {
                 characters={ws.characters}
                 canControlEncounter={false}
               />
+              <LatestEventBar combat={combat} characters={ws.characters} />
               <TurnStatePanel combat={combat} />
+              <VitalsPanel combat={combat} characters={ws.characters} />
               <DeathSavePanel
                 combat={combat}
                 characters={ws.characters}

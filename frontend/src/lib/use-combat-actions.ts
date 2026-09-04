@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch, ApiError } from "./api";
 import { useAuthStore } from "./auth-store";
@@ -8,6 +9,7 @@ import type {
   CheckResult,
   DeathSaveState,
   Encounter,
+  LatestCombatEvent,
   NextTurnResult,
   SpendTurnResourceResult,
 } from "./combat-types";
@@ -32,6 +34,13 @@ export function useCombatActions({
 }) {
   const token = useAuthStore((s) => s.token);
   const queryClient = useQueryClient();
+
+  /**
+   * ผลของ action ล่าสุดที่ผู้ใช้คนนี้สั่ง — เก็บเป็น state ของ hook แทนการอ่าน `mutation.data`
+   * ของแต่ละตัวแล้วมาเทียบว่าอันไหนใหม่กว่า เพราะ "ลำดับ" คือสิ่งที่แถบนี้ต้องการ และการ set
+   * ตรงจุด onSuccess ให้ลำดับที่ถูกต้องโดยนิยาม ไม่ต้องพึ่ง timestamp ของ library
+   */
+  const [latestEvent, setLatestEvent] = useState<LatestCombatEvent | null>(null);
 
   const encounterQuery = useQuery({
     queryKey: ["encounter-active", sessionId],
@@ -171,7 +180,14 @@ export function useCombatActions({
         `/campaigns/${campaignId}/sessions/${sessionId}/characters/${characterId}/death-saves/roll`,
         { method: "POST", token },
       ),
-    onSuccess: async (r) => {
+    onSuccess: async (r, characterId) => {
+      setLatestEvent({
+        kind: "death-save",
+        characterId,
+        outcome: r.outcome,
+        successes: r.successes,
+        failures: r.failures,
+      });
       appendLog(
         `💀 death save: ${r.outcome} (สำเร็จ ${r.successes}/3 · ล้มเหลว ${r.failures}/3 · ${r.status})`,
       );
@@ -212,7 +228,15 @@ export function useCombatActions({
           },
         },
       ),
-    onSuccess: (r) => {
+    onSuccess: (r, variables) => {
+      setLatestEvent({
+        kind: "attack",
+        attackerId: variables.attackerId,
+        targetId: variables.targetCharacterId,
+        total: r.total,
+        hit: r.hit,
+        damage: r.totalDamage,
+      });
       // targetArmorClass เป็น null ได้เมื่อเป้าหมายเป็น NPC ที่ DM ซ่อน stat ไว้ (งานที่ 7)
       const vsAc = r.targetArmorClass !== null ? ` vs AC ${r.targetArmorClass}` : "";
       appendLog(
@@ -244,7 +268,14 @@ export function useCombatActions({
         `/campaigns/${campaignId}/sessions/${sessionId}/characters/${characterId}/checks`,
         { method: "POST", token, body: { expression, dc } },
       ),
-    onSuccess: (r) => {
+    onSuccess: (r, variables) => {
+      setLatestEvent({
+        kind: "check",
+        characterId: variables.characterId,
+        total: r.total,
+        dc: r.dc,
+        success: r.success,
+      });
       appendLog(
         `🎯 เช็ค ${r.expression} = ${r.total} vs DC ${r.dc} → ${r.success ? "ผ่าน" : "ไม่ผ่าน"}`,
       );
@@ -261,6 +292,7 @@ export function useCombatActions({
   return {
     encounter: encounterQuery.data ?? null,
     encounterQuery,
+    latestEvent,
     startEncounter,
     nextTurn,
     endEncounter,

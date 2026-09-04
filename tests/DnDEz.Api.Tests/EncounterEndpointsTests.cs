@@ -498,6 +498,31 @@ public class EncounterEndpointsTests : IAsyncLifetime
         Assert.Equal(_fastCharacterId, body.CurrentCharacterId);
     }
 
+    /// <summary>
+    /// defect รอบ B — `turn_number` ถูกนับใน DB มาตั้งแต่งานที่ 4 แต่ไม่เคยส่งออก API ทำให้ UI
+    /// แสดง "รอบที่เท่าไร" ไม่ได้ · เทสต์นี้ยึดว่ามันต้องโผล่ใน response และเดินตามจำนวน next-turn
+    /// จริง (ไม่ใช่ค้างที่ 0) เพราะ UI คำนวณเลขรอบจากค่านี้หารจำนวนผู้ร่วมต่อสู้
+    /// </summary>
+    [Fact]
+    public async Task Active_encounter_exposes_turn_number_that_advances_with_each_next_turn()
+    {
+        var started = await StartStandardEncounterAsync();
+        Assert.Equal(0, started.TurnNumber);
+
+        var client = AuthedClient(_dmToken);
+        for (var i = 0; i < 3; i++)
+        {
+            var step = await client.PostAsync($"{EncounterUrl(started.Id)}/next-turn", null);
+            Assert.Equal(HttpStatusCode.OK, step.StatusCode);
+        }
+
+        var active = await GetActiveAsync(_dmToken);
+        Assert.NotNull(active);
+        // 3 ผู้เข้าร่วม + เดิน 3 เทิร์น = วนครบรอบพอดี → UI ต้องคำนวณได้ว่าเป็น "รอบที่ 2"
+        Assert.Equal(3, active!.TurnNumber);
+        Assert.Equal(0, active.Participants.Single(p => p.Id == active.CurrentParticipantId).TurnOrder);
+    }
+
     /// <summary>ทรัพยากรของเทิร์นใหม่ต้องเต็มเสมอ — `StartTurn` ใหม่ ไม่ใช่ state ค้างจากเทิร์นก่อน</summary>
     [Fact]
     public async Task Next_turn_resets_turn_resources_for_the_new_participant()
@@ -1077,6 +1102,7 @@ public class EncounterEndpointsTests : IAsyncLifetime
         DateTimeOffset? EndedAt,
         Guid? CurrentParticipantId,
         Guid? CurrentCharacterId,
+        int TurnNumber,
         List<ParticipantResponse> Participants,
         TurnStateResponse? TurnState);
 
