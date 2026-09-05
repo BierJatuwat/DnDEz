@@ -1,12 +1,19 @@
 # Spatial play — แผนที่ · affordance · คลังกลไก
 
-> **สถานะ**: บันทึกจากการคุยออกแบบ **2026-09-04** · ยังไม่มีโค้ดสักบรรทัด
+> **สถานะ**: บันทึกจากการคุยออกแบบ **2026-09-04 (ภาค 1)** และ **2026-09-05 (ภาค 2)**
+> · ยังไม่มีโค้ดสักบรรทัด
+>
+> - **ภาค 1 (§0–§10)** — ระบบต้องคิดอะไรให้ผู้เล่น: affordance, คลังกลไก, geometry, preset
+> - **ภาค 2 (§11–§18)** — ข้อมูลไหลยังไง ใครเห็นอะไร: API, active beat, สามมุมมอง, token, dial
 >
 > อ่าน [`PROJECT-CONTEXT.md`](./PROJECT-CONTEXT.md) ก่อนเสมอ · เอกสารนี้**ขยายและแก้**
-> [`player-side-design.md`](./player-side-design.md) §2 §3 §4 §7 — จุดที่แก้ของเดิมทำเครื่องหมาย
-> **[แก้ของเดิม]** ไว้ทุกจุด
+> [`player-side-design.md`](./player-side-design.md) §2 §3 §4 §7 §12 — จุดที่แก้ของเดิม
+> ทำเครื่องหมาย **[แก้ของเดิม]** ไว้ทุกจุด
 >
 > เอกสารนี้เป็นการ**ตัดสินใจเชิงออกแบบ** ไม่ใช่แผนการลงมือ — ลำดับงานจริงยังไม่ได้ตกลงกัน
+>
+> ⚠️ **§11 เป็นข้อบังคับทางเทคนิค ไม่ใช่ความเห็น** — ทุก route ต้องมี `/campaigns/{campaignId}`
+> นำหน้า ไม่งั้น RLS มองไม่เห็นข้อมูลเลยและล้มเหลวแบบเงียบ ๆ
 
 ---
 
@@ -471,3 +478,311 @@ DeathSave, DiceEngine, DiceExpressionParser, HitPoint resolver + SeededDiceRolle
 
 > สรุปสภาพ: **schema เกือบทั้งหมดที่ mockup ต้องใช้มีอยู่แล้วตั้งแต่ InitialSchema** —
 > ที่ขาดคือ API, UI, ข้อมูลตั้งต้น และ geometry layer
+
+---
+---
+
+# ภาค 2 — หน้าจอ DM · API · สามมุมมอง
+
+> บันทึกจากการคุยออกแบบ **2026-09-05** ต่อจากภาคแรก
+>
+> ภาคแรกตอบว่า *"ระบบต้องคิดอะไรให้ผู้เล่น"* · ภาคนี้ตอบว่า *"ข้อมูลไหลยังไง ใครเห็นอะไร"*
+
+---
+
+## 11. กฎเหล็กของ route: ทุก endpoint ต้องมี `/campaigns/{campaignId}` นำหน้า
+
+**ไม่ใช่เรื่องความสวยงามของ URL — เป็นเงื่อนไขให้ RLS ทำงาน**
+
+RLS middleware อ่าน campaign จาก **route value** โดยตรง (`Program.cs` — middleware ที่ครอบทุก request):
+
+```csharp
+context.Request.RouteValues.TryGetValue("campaignId", out var rawCampaignId)
+    && Guid.TryParse(...)  →  SET LOCAL app.campaign_id
+```
+
+และ policy ทุกตัวใน migration `RowLevelSecurity` เขียนว่า:
+
+```sql
+USING (campaign_id = app_current_campaign() AND app_is_member())
+-- app_current_campaign() = NULLIF(current_setting('app.campaign_id', true), '')::uuid
+```
+
+`current_setting(..., true)` คืนค่าว่างเมื่อไม่ได้ตั้ง → NULL → `campaign_id = NULL` →
+**NULL → กรองทุกแถวทิ้ง**
+
+> ⚠️ **route ที่ไม่มี `{campaignId}` จะไม่ error — มันจะ "ไม่เห็นข้อมูลอะไรเลย" เงียบ ๆ**
+> (fail closed ซึ่งปลอดภัย แต่ดีบักยากมาก เพราะดูเหมือนข้อมูลหาย ไม่ใช่สิทธิ์ถูกปฏิเสธ)
+
+`scenes` หนักกว่านั้นเพราะ policy อ้อมผ่าน session:
+
+```sql
+EXISTS (SELECT 1 FROM sessions s
+        WHERE s.id = scenes.session_id AND s.campaign_id = app_current_campaign())
+```
+
+**ตรวจแล้ว 2026-09-05**: endpoint ที่มีอยู่ทั้งหมด (30 route) ไม่มีข้อยกเว้นเลยแม้แต่ตัวเดียว —
+แม้แต่ `/campaigns/{cid}/encounters/{eid}/next-turn` ที่ `eid` unique ทั้งระบบอยู่แล้ว
+ก็ยังคง prefix ไว้
+
+### 11.1 API ที่ยังขาด (เติม prefix แล้ว)
+
+**story_beats** — CRUD ปกติ ยกเว้นสองตัวท้าย
+
+```
+GET    /campaigns/{cid}/beats
+POST   /campaigns/{cid}/beats
+PATCH  /campaigns/{cid}/beats/{bid}
+DELETE /campaigns/{cid}/beats/{bid}
+PATCH  /campaigns/{cid}/beats/order                   ← array ของ beat_id เรียงใหม่ทีเดียว
+POST   /campaigns/{cid}/sessions/{sid}/active-beat    ← หัวใจ ดู §12
+```
+
+**scenes** — sub-resource 3 ชั้น
+
+```
+GET    /campaigns/{cid}/sessions/{sid}/scene       ← payload ต่างกันตาม role (§13)
+POST   /campaigns/{cid}/sessions/{sid}/scene       ← สร้างจาก map_asset หรือ generate
+PATCH  /campaigns/{cid}/scenes/{scid}/grid         ← ผลจาก alignment tool
+POST   /campaigns/{cid}/scenes/{scid}/generate     ← §15
+POST   /campaigns/{cid}/scenes/{scid}/tokens
+PATCH  /campaigns/{cid}/scenes/{scid}/tokens/{tid} ← §14
+DELETE /campaigns/{cid}/scenes/{scid}/tokens/{tid}
+POST   /campaigns/{cid}/scenes/{scid}/fog/reveal   ← ส่ง region ที่เปิด
+POST   /campaigns/{cid}/scenes/{scid}/fog/hide
+```
+
+---
+
+## 12. active beat — เก็บที่ไหน
+
+**ตัดสิน: เก็บที่ `story_beats.progress` (ระดับแคมเปญ) ไม่เพิ่ม `sessions.active_beat_id`**
+
+`BeatProgress` ที่มีอยู่แล้วคือ `{ Upcoming, Active, Passed }` — **ตรงกับสามสถานะในรูปที่ 1 พอดี**:
+
+| ในรูป | enum |
+|---|---|
+| `✓ Arrival at port` | `Passed` |
+| `▶ Drowned temple` | `Active` |
+| `Spire ascent` | `Upcoming` |
+
+คนออกแบบตอนแรกตั้งใจให้ "beat ไหน active" อยู่ที่ตัว beat อยู่แล้ว
+
+| | `story_beats.progress` (เลือกอันนี้) | `sessions.active_beat_id` |
+|---|---|---|
+| migration | ไม่ต้อง | ต้อง |
+| ได้ ✓/▶ ในรูปที่ 1 | ฟรี | ต้องคำนวณเพิ่ม |
+| สอง session ของแคมเปญเดียวกัน active คนละ beat | ไม่ได้ | ได้ |
+
+ข้อเสียข้อเดียวไม่ใช่ scenario ที่โปรเจกต์รองรับ — เนื้อเรื่องของแคมเปญเดินเป็นเส้นเดียว
+session คือคืนที่เล่น ไม่ใช่เส้นเรื่องคู่ขนาน
+
+**บังคับ invariant ด้วย partial unique index** — โปรเจกต์ใช้ pattern นี้อยู่แล้วกับ `scenes`:
+
+```sql
+-- ที่มีอยู่แล้ว: ix_scenes_one_active_per_session UNIQUE (session_id) WHERE is_active = true
+-- ที่ต้องเพิ่ม:
+CREATE UNIQUE INDEX ix_story_beats_one_active_per_campaign
+    ON story_beats (campaign_id) WHERE progress = 'Active';
+```
+
+### 12.1 ทำไม active-beat ต้องเป็น endpoint เดี่ยว ไม่ใช่ PATCH ธรรมดา
+
+เปลี่ยน beat ไม่ใช่การแก้ฟิลด์ — มันเป็น **เหตุการณ์ที่ขับทั้งระบบ**:
+
+- Scene prep เปลี่ยนตาม (§13.2)
+- จอกลางเปลี่ยนหัวข้อฉาก
+- context ที่ส่งเข้า orchestrator เปลี่ยน
+- beat เดิม → `Passed` · beat ใหม่ → `Active` (สองแถวในธุรกรรมเดียว)
+
+จึงต้อง broadcast ออกทุก channel และเป็น transaction เดียว — `PATCH` ทั่วไปไม่สื่อความหมายนี้
+และเปิดช่องให้ client เผลอตั้ง `Active` สองตัวพร้อมกัน
+
+**path เป็น session-scoped** แม้ state จะอยู่ระดับแคมเปญ เพราะ *การ broadcast* ผูกกับ session
+ที่กำลังเล่นอยู่
+
+---
+
+## 13. สามมุมมอง: DM / Player / Table
+
+**คนละหน้าจอ แต่เป็น state เดียวกันที่ถูกกรองคนละแบบ** — แยกให้ชัดว่าอะไรอยู่ชั้นไหน:
+
+| ชั้น | มีกี่ชุด |
+|---|---|
+| **state** | **หนึ่งเดียว** — token positions, fog regions, HP ทุกตัว อยู่ใน DB ที่เดียว |
+| **projection** | server กรองตาม role ก่อนส่งออก |
+| **UI** | คนละหน้าจอจริง คนละ layout คนละ component |
+
+**จอกลางไม่ใช่ "จอผู้เล่นที่ขยายใหญ่"** แต่เป็น view type ที่สามที่มีบุคลิกของตัวเอง —
+ตัวอักษรใหญ่ ไม่มี input เลย และแสดง HP รวมทั้งปาร์ตี้
+
+### 13.1 ตาราง projection
+
+| | **DM view** | **Player view** | **Table view** |
+|---|---|---|---|
+| Fog | เห็นหมด | ตามที่เปิดให้ | ตามที่เปิดให้ |
+| HP ศัตรู | ตัวเลขจริง | ไม่เห็น | ไม่เห็น |
+| HP ปาร์ตี้ | ทุกคน **ตัวเลขจริง** | ทุกคน **ตัวเลขจริง** | ทุกคน **ตัวเลขจริง** |
+| Secrets | เห็น | ไม่เห็น | ไม่เห็น |
+| Input | ครบ | เฉพาะตัวเอง | **ไม่มีเลย** |
+| Auth | บัญชีเต็ม | บัญชี / quick play | credential แยก (§16) |
+
+> **[แก้สเปคที่คุยกันตอนแรก]** ช่อง "HP ปาร์ตี้" ของ Player view เดิมเสนอว่า
+> *"ของตัวเอง + เพื่อนคร่าว ๆ"* — **เปลี่ยนเป็นตัวเลขจริงทั้งหมด** เพื่อให้ตรงกับ
+> `player-side-design.md §12` ที่เขียนเหตุผลไว้แล้วว่า *"คนเล่น healer ต้องคำนวณว่าเยียวยา
+> เท่าไหร่ถึงคุ้ม"*
+>
+> **เหตุผลเชิง concept**: มือเก๋าประเมิน HP เพื่อนเอาได้จากบริบท มือใหม่ทำไม่ได้ —
+> การให้ "คร่าว ๆ" คือการผลักงานคำนวณกลับไปให้คนที่คำนวณไม่เป็น สวนทางกับหลักทั้งหมดในภาคแรก
+>
+> HP **ศัตรู** ยังซ่อนเหมือนเดิม เพราะนั่นคือความตึงเครียดของเกม ไม่ใช่เครื่องมือร่วมมือ ·
+> `campaigns.death_save_visibility` ที่มีอยู่แล้วไม่ถูกแตะ
+
+### 13.2 Scene prep = แผงที่เปิดค้าง ไม่ใช่หน้าที่ต้องเข้าไปดู
+
+**เหตุผลมาจาก use case ที่ล็อกไว้แล้ว** — โหมด in-person ที่ DM พูดเอง DM ต้องเหลือบดู AC/HP
+ระหว่างที่ผู้เล่นกำลังตัดสินใจ ถ้าต้องกดเข้าออกหน้าอื่นจะเสียจังหวะการเล่าเรื่อง
+
+- **ตำแหน่ง**: แท็บที่ 3 ในคอลัมน์ขวาของรูปที่ 1 คู่กับ AI autonomy + Pending proposals + Ask AI
+  — สลับทีละอันบนจอแคบ · ปักหมุดค้างได้ถ้าจอกว้างพอ
+- **ผูกกับ beat ที่ active อัตโนมัติ** — DM กดเปลี่ยน beat ในคอลัมน์ซ้าย เนื้อหาแผงนี้เปลี่ยนเอง
+  ไม่ต้องกดหา
+- **peek ได้** — DM กดดู beat ถัดไปล่วงหน้าได้โดย **ไม่เปลี่ยน active beat จริง**
+  (สำคัญ: peek เป็น UI state ล้วน ห้ามยิง `active-beat` endpoint)
+
+ข้อมูลที่แสดงมาจาก `story_beats.monster_refs` / `npc_refs` (uuid[]) ที่ชี้ไปหา
+`monster_stat_blocks` / `npc_profiles` — ตรงกับรูปที่ 2 ทุกช่อง
+
+### 13.3 ⚠️ การกรองต้องเกิดที่ server เท่านั้น
+
+**ห้ามส่ง HP ศัตรู / secret / ตำแหน่งใน fog ไปที่ client แล้วซ่อนด้วย CSS หรือ conditional render**
+— ผู้เล่นเปิด devtools ดูได้ทันที
+
+ในทางปฏิบัติ:
+
+- `GET .../scene` **ตัวเดียวกัน** คืน payload คนละหน้าตาตาม role ของ token ที่ยิงมา
+- **SignalR ต้องแยก group ต่อ role** ไม่ใช่ broadcast ก้อนเดียวให้ทุกคน
+
+เป็นบทเรียนเดียวกับ Sprint F งานที่ 7 ที่ต้องแก้ `HpUpdated` ให้ส่งเฉพาะ DM เมื่อเป้าเป็น NPC
+ที่ซ่อน stat — ตอนนั้นเป็นการแหกกฎ `Clients.Group(...)` เป็นครั้งแรก **ตอนนี้มันกลายเป็นกฎหลัก**
+
+---
+
+## 14. การเคลื่อน token — ephemeral กับ committed
+
+การลาก token ยิงถี่มาก (ลากทีนึงหลายสิบเฟรม) เขียน DB ทุกครั้งไม่ไหว
+
+### 14.1 ⚠️ เขียน state ผ่าน SignalR hub ไม่ได้
+
+ทางแก้ที่ดูตรงไปตรงมาที่สุดคือให้ hub รับตำแหน่งแทน HTTP — **แต่ทำไม่ได้ด้วยเหตุผลเดียวกับ §11**:
+
+> RLS middleware อ่าน `campaignId` จาก **route value** — SignalR invocation **ไม่มี route** →
+> `app.campaign_id` เป็น NULL → มองไม่เห็นแถวไหนเลย
+
+hub ปัจจุบันจึงมีแค่ `JoinCampaign` / `LeaveCampaign` (จัดการ group) ไม่เคยเขียน state เลย
+ซึ่งไม่ใช่ความบังเอิญ
+
+### 14.2 แบ่งเป็นสองอย่างที่คนละธรรมชาติ
+
+| | **ระหว่างลาก (ephemeral)** | **ตอนวาง (committed)** |
+|---|---|---|
+| ช่องทาง | broadcast ผ่าน hub | `PATCH .../tokens/{tid}` |
+| ใครเชื่อ | ไม่มีใคร — เป็น ghost preview | เป็นความจริง |
+| persist | ไม่ | ใช่ |
+| ถ้าหาย | ไม่มีผล | ผู้ใช้รู้ทันที |
+
+คนอื่นในโต๊ะเห็น token ขยับตามแบบลื่นไหล แต่ **ไม่มีใครถือว่าเฟรมระหว่างทางเป็นสถานะจริง** —
+ยิง HTTP ครั้งเดียวตอนปล่อยเมาส์
+
+### 14.3 Redis เป็นตัวลดจำนวนการเขียน ไม่ใช่ที่เก็บ
+
+**ต่างจาก turn state** ที่ล็อกไว้ว่า *"Redis หาย = รีเซ็ตเทิร์นปัจจุบัน ไม่ใช่ 500"* — ใช้ได้เพราะ
+turn state **สร้างใหม่ได้** (`StartTurn` ค่าเดิมเป๊ะ)
+
+**ตำแหน่ง token สร้างใหม่ไม่ได้** — Redis ตายกลางศึกแล้วยอมให้หาย = แผนที่ย้อนกลับไปสถานะเก่า
+ต่อหน้าทุกคน กู้เองไม่ได้
+
+ดังนั้น:
+
+- **Postgres (`scenes.tokens`) คือ source of truth เสมอ**
+- Redis เป็น write-coalescing layer — ถ้าใช้ไม่ได้ **ให้ถอยไปอ่าน-เขียน Postgres ตรง ๆ**
+  (ช้าลงแต่ถูกต้อง) พร้อม log warning ไม่ใช่ยอมให้ข้อมูลหาย
+- persist ทันทีที่จุดที่ผู้ใช้รับรู้ว่าเป็นหมุด: **เปลี่ยนเทิร์น · เปลี่ยน fog · จบ encounter ·
+  ปิด session** บวก flush ตามเวลาระหว่างนั้น
+
+---
+
+## 15. autonomy dial คุมอะไร — กฎกลาง
+
+**ตัดสิน: dial คุมเฉพาะสิ่งที่ AI ริเริ่มเอง ไม่คุมสิ่งที่มนุษย์สั่ง**
+
+ปัญหาที่เจอตอนออกแบบ `POST .../scenes/{scid}/generate`: "map-scene" เป็น 1 ใน 4 subsystem ของ dial
+และกฎที่ล็อกไว้คือ *"tool call ใน subsystem ที่ตั้งเป็น suggest จะกลายเป็น pending proposal"*
+
+แต่ถ้า **DM กดปุ่ม Generate เอง** แล้วระบบสร้าง proposal ให้ DM มาอนุมัติสิ่งที่ตัวเองเพิ่งกด
+= เพิ่มงานให้ DM โดยไม่ได้ความปลอดภัยอะไรเพิ่ม ซึ่งสวนกับเป้าหมาย *"ทำให้ DM ทำงานน้อยลง"*
+
+> **กฎกลาง (ใช้ได้ทุก subsystem ไม่ใช่แค่แผนที่):**
+> dial ตอบคำถามว่า *"AI ทำเองได้แค่ไหนโดยที่ไม่มีใครสั่ง"* —
+> ไม่ได้ตอบว่า *"มนุษย์กดปุ่มแล้วต้องขออนุญาตใครอีก"*
+
+- `Manual` = orchestrator ไม่แตะ subsystem นั้นเองเลย · ปุ่มที่ DM กดยังทำงานปกติ
+- `Suggest` = AI เสนอเข้าคิว proposal
+- `Autonomous` = AI ทำเองได้
+
+**แต่ผลลัพธ์ของ generate ต้องผ่าน preview แล้วยืนยันก่อนแทนที่ฉากจริง** — คนละเรื่องกับ proposal gate
+(อันนั้นกันไม่ให้ AI เปลี่ยน state ลับหลัง · อันนี้กันภาพที่ scale ผิดหรือใช้ไม่ได้)
+ห้าม auto-replace ฉากที่กำลังใช้อยู่เด็ดขาด
+
+---
+
+## 16. Credential ของจอกลาง
+
+`GameSession.JoinCode` มีอยู่แล้ว แต่ doc comment ระบุว่าเป็น *"รหัสสั้น 6 หลักสำหรับ join
+(สำรองจาก QR)"* — เป็นของ **ผู้เล่น**
+
+**ห้ามให้จอกลางใช้โค้ดเดียวกัน** — URL จอกลางที่หลุด (ซึ่งหลุดง่ายเพราะฉายอยู่กลางวง)
+จะกลายเป็นทางให้คนนอกเข้าโต๊ะในฐานะผู้เล่น
+
+ข้อกำหนดของ credential จอกลาง:
+
+- **read-only บังคับที่ server** ไม่ใช่แค่ UI ไม่มีปุ่ม
+- ผูกกับ **session เดียว** ไม่ใช่ทั้งแคมเปญ
+- **เพิกถอน / สร้างใหม่ได้** โดย DM
+- ไม่ผูกกับตัวละครใด และไม่สร้างแถวใน `campaign_members`
+
+---
+
+## 17. โซนแผนที่ — ปุ่มทั้ง 4
+
+บันทึกจากที่คุยกันไว้ (ยังไม่ได้ลงรายละเอียดเต็ม):
+
+| ปุ่ม | ความหมาย |
+|---|---|
+| **Upload set** | ชุดแผนที่ทั้งแคมเปญ + grid alignment (ต่อกับ `map_assets.grid_alignment`) |
+| **Generate with AI** | fallback เมื่อไม่มีแผนที่ — **ล็อก pixel-per-square ไว้** ไม่งั้น grid เพี้ยน |
+| **Fog control** | deterministic ล้วน **ไม่ผ่าน AI** |
+| **Tokens** | ผูกกับ entity จริง (`characters` / `monster_stat_blocks`) **ไม่ใช่แค่รูปวงกลม** |
+
+ข้อสุดท้ายสำคัญกับภาคแรก — token ที่ผูกกับ entity จริงคือสิ่งที่ทำให้ affordance engine
+คำนวณได้ว่า "ตัวนี้เอื้อมถึงตัวนั้นไหม" ถ้า token เป็นแค่รูป จะคำนวณอะไรไม่ได้เลย
+
+---
+
+## 18. สถานะ (ภาค 2)
+
+| เรื่อง | สถานะ |
+|---|---|
+| ทุก route ต้องมี `/campaigns/{campaignId}` | ✅ ไม่มีทางเลือก (RLS บังคับ) |
+| active beat เก็บที่ `story_beats.progress` + partial unique index | ✅ ตัดสินแล้ว |
+| `active-beat` เป็น endpoint เดี่ยวที่ broadcast | ✅ ตัดสินแล้ว |
+| Scene prep = แผงเปิดค้าง ผูก active beat · peek ไม่เปลี่ยน state | ✅ ตัดสินแล้ว |
+| HP ปาร์ตี้ = ตัวเลขจริงทั้ง 3 view (แก้สเปคแรก) | ✅ ตัดสินแล้ว |
+| กรองที่ server เท่านั้น · SignalR แยก group ต่อ role | ✅ ตัดสินแล้ว |
+| ลาก token: ghost ผ่าน hub · commit ผ่าน HTTP ตอนวาง | ✅ ตัดสินแล้ว |
+| Postgres เป็น source of truth ของ token · Redis ถอยได้ | ✅ ตัดสินแล้ว |
+| dial คุมเฉพาะสิ่งที่ AI ริเริ่ม | ✅ ตัดสินแล้ว (กฎกลาง) |
+| จอกลางใช้ credential แยก read-only เพิกถอนได้ | ✅ ตัดสินแล้ว |
+| รูปแบบ region ของ fog (polygon / grid cell / bitmap) | ⏳ ยังไม่คุย |
+| Table view เข้า SignalR group ไหน / auth ในทางเทคนิค | ⏳ ยังไม่คุย |
+| **ลำดับการลงมือ** | ❌ **ยังไม่คุยกันเลย** |
