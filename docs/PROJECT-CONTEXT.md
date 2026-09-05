@@ -1065,6 +1065,154 @@ source import, image generation, refresh token/HTTPS redirect/CI-CD/staging (เ
 
 ---
 
+### 🔜 Sprint G — ทำให้ concept จริง (spatial play) (เสนอ 2026-09-05)
+
+**อ่านก่อนเริ่ม**: [`spatial-play-design.md`](./spatial-play-design.md) ทั้ง 3 ภาค — โดยเฉพาะ
+**§19–§21 (ภาค 3)** ที่อธิบายว่า Sprint F เบี่ยงจาก concept ได้ยังไงทั้งที่ทุกเทสต์ผ่าน
+และกลไก 4 ข้อที่ต้องผูกเข้ากับทุก Part ด้านล่าง
+
+**เป้าหมายเดียว**: เปลี่ยนแอปจาก "มีแต่ช่องให้กรอก" เป็นระบบที่คำนวณให้ผู้เล่นว่า
+*"ทำอะไรได้บ้าง พร้อมราคาของแต่ละทาง"* โดยไม่ต้องรู้กฎ D&D มาก่อน — ยึด concept ตั้งต้น
+*"คนไม่เข้าใจก็เล่นและ enjoy กับ D&D ได้"* เป็นเกณฑ์ตัดสินทุกจุดที่คลุมเครือ
+
+**Definition of Done ของทุก Part (บังคับ ไม่ใช่ทางเลือก — ดู `spatial-play-design.md §20`):**
+
+1. **(ก) vertical slice เต็มเส้น** — DB → API → UI → เห็นบนจอจริง ถ้า Part ไหนเป็นฐานข้อมูล
+   ล้วนที่ยังเล่นไม่ได้ (มีแค่ Part 1) ต้องเขียนกำกับไว้ในหัวข้อ Part นั้นชัดเจน
+2. **(ข) novice check** — เขียนคำตอบของคำถาม *"คนไม่รู้กฎ D&D เจอหน้าจอนี้แล้วรู้ว่าต้องทำ
+   อะไรไหม โดยไม่ต้องพิมพ์ค่าที่ตัวเองไม่รู้"* ลงในสรุปงานเป็นข้อความ ไม่ใช่แค่คิดในหัว
+3. **(ค) orphan-table check** — ก่อนปิด Part ให้ `grep` endpoint เทียบตารางที่เกี่ยวข้อง
+   ยืนยันว่าไม่มีตารางที่สร้าง/แก้ไว้แล้วไม่มี endpoint แตะ บันทึกผลไว้ในสรุป
+4. **(ง) ลำดับ Part ห้ามสลับ** — เรียงตาม dependency ของ concept (§0 ของ design doc)
+   ไม่ใช่ตามความสะดวกทางเทคนิค ถ้าจะสลับต้องคุยกันก่อนเหมือนการตัดสินใจอื่น ๆ ที่ล็อกไว้
+
+**ห้ามทำในรอบนี้** (scope creep — ถ้าเริ่มทำให้หยุดทันที):
+- **Generate with AI (สร้างแผนที่ด้วย AI)** — ขัดกับการตัดสินใจที่ล็อกไว้แล้ว 2026-08-21
+  ว่า Claude API สร้างรูปไม่ได้ ต้องพึ่ง provider อื่นซึ่งทำให้ BYOK ซับซ้อนขึ้น
+  (ดู `spatial-play-design.md §22`) — Part 4 ใช้แผนที่ที่ DM อัปโหลดเอง + คลัง asset สำเร็จรูปเท่านั้น
+- Fully-homebrew mode, XP-based leveling, source import ของ**กฎ** (เฉพาะเนื้อเรื่องสแกนได้ตาม §4)
+- Companion mode, quick play lifecycle เต็มรูป (นอกเหนือจากที่ทำไปแล้ว)
+- Spellcasting เกินระดับ 1 / cantrip นอกชุดที่ seed ไว้ใน Part 1
+- Condition effects แบบเต็มรูป (มี tooltip อธิบายพอ ไม่ต้องมีกลไกคำนวณผลของทุก condition)
+- ตัวเลือก 💡 ที่เก็บไว้เป็นไอเดียจากภาค 1 (แสดงความน่าจะเป็น, undo ที่ DM อนุมัติ)
+
+---
+
+**Part 1 — SRD catalog + ability scores** *(⚠️ ฐานข้อมูลล้วน ยังเล่นไม่ได้จนกว่าจะถึง Part 7/9)*
+
+- ตารางใหม่ (ยึดเลนส์ Sprint B Part 2: ที่คำนวณบ่อย/ทุกตัวละครมีแน่นอน = typed หรือ catalog
+  แยก, ที่ผันแปรจริงอยู่ jsonb ต่อ) เก็บ: ชื่อ, ประเภท (อาวุธ/เวท/การเคลื่อนที่),
+  ระยะ, ราคา (action/bonus/reaction/ช่องเวท), รูปทอย, ป้ายประเภท (เช่น "โจมตีระยะไกล")
+  ตาม `spatial-play-design.md §2.3` — **ไม่ใส่รายละเอียดที่ engine ไม่ต้องใช้** (คำบรรยาย,
+  upcast) ลง jsonb แยกได้
+- เพิ่ม STR/DEX/CON/INT/WIS/CHA เป็น typed column ใน `Character` (เหตุผลเดียวกับ HP/AC —
+  ทุกตัวละครมีแน่นอน) + migration default ให้ตัวละครเดิมไม่พัง
+- Seed ข้อมูล: อาวุธพื้นฐาน (SRD 5.2) + cantrip/เวทระดับ 1 ที่ใช้บ่อย + วิธีเคลื่อนที่
+  (เดิน/กระโดด/ปีน — แต่ละอันประกาศว่า "แตะพื้นหรือไม่" ตาม §3.2)
+- **novice check**: N/A (ไม่มี UI) — ระบุเหตุผลไว้แทน
+- **orphan check**: ตารางนี้จะไม่มี endpoint จนถึง Part 7/9 — เขียนกำกับไว้ในสรุปว่า
+  "ตั้งใจเป็น orphan ชั่วคราว รอ Part 7/9" ไม่ใช่การมองข้าม
+
+**Part 2 — Story outline + active beat**
+
+- `GET/POST /campaigns/{cid}/beats`, `PATCH .../beats/{bid}`, `DELETE .../beats/{bid}`,
+  `PATCH .../beats/order`, `POST .../sessions/{sid}/active-beat` (ดู §11.1, §12)
+- Partial unique index `ix_story_beats_one_active_per_campaign`
+- UI: คอลัมน์ซ้ายของรูปที่ 1 ในหน้า DM console (list, reorder, กดตั้ง active)
+- **novice check**: DM (ไม่ใช่ผู้เล่น แต่หลักการเดียวกัน) กด beat แล้วเห็นเครื่องหมาย
+  ✓/▶ เปลี่ยนทันที ไม่ต้องเดา
+- **orphan check**: `story_beats` มี endpoint ครบแล้วหลัง Part นี้
+
+**Part 3 — Scene prep panel**
+
+- `GET` อ่าน `monster_stat_blocks` + `npc_profiles` ผูกกับ beat ที่ active (§13.2)
+- Peek beat ถัดไปได้โดยไม่เปลี่ยน active beat จริง — **เขียนเทสต์เฉพาะที่ยืนยันว่า peek
+  ไม่ยิง `active-beat` endpoint** (ป้องกันบั๊กแบบเดียวกับที่เจอใน turnNumber — เขียนเทสต์ที่
+  ล้มก่อนจริง ไม่ใช่เชื่อว่าถูกเพราะดูสมเหตุสมผล)
+- UI: แท็บที่ 3 คู่กับ AI autonomy + Pending proposals ในคอลัมน์ขวา
+- **novice check**: DM เปลี่ยน beat แล้วเห็น statblock/NPC ในแผงเปลี่ยนตามทันที
+  ไม่ต้องกดหาเอง
+- **orphan check**: `monster_stat_blocks`/`npc_profiles` มี endpoint แล้ว (เดิมมีแต่ตาราง)
+
+**Part 4 — Scene foundation (map + grid, ไม่มี token/fog)**
+
+- `POST/GET /campaigns/{cid}/sessions/{sid}/scene`, `PATCH .../scenes/{scid}/grid`
+- Upload map เข้า `map_assets` + grid alignment tool (ล็อก pixel-per-square)
+- **ตัด "Generate with AI" ออกตามที่ระบุด้านบน**
+- **novice check**: DM อัปโหลดแผนที่แล้วเห็น grid ทาบถูกสัดส่วนจริง ไม่ต้องคำนวณเอง
+- **orphan check**: `scenes`/`map_assets` เริ่มมี endpoint (ยังไม่ครบ — tokens/fog อยู่ Part 5–6)
+
+**Part 5 — Tokens (ephemeral + committed)**
+
+- `POST/PATCH/DELETE .../scenes/{scid}/tokens[/{tid}]`
+- ผูกกับ entity จริง (`characters`/`monster_stat_blocks`) ไม่ใช่แค่รูปวงกลม (§17)
+- ลาก = ghost broadcast ผ่าน hub (ไม่ persist) · วาง = `PATCH` ครั้งเดียว (§14.2)
+- Postgres เป็น source of truth · Redis ตายแล้วถอยไปอ่าน-เขียน Postgres ตรง ๆ
+  (เทสต์รูปแบบเดียวกับ `Active_encounter_falls_back...when_redis_is_unavailable` ที่มีอยู่แล้ว)
+- **novice check**: N/A ฝั่งผู้เล่น (ยังเป็นเครื่องมือ DM) — ยืนยันว่าลาก token แล้วตำแหน่ง
+  รอดหลัง refresh หน้า
+- **orphan check**: ไม่มีตารางใหม่ ใช้ `scenes.tokens` เดิม
+
+**Part 6 — Fog + สามมุมมอง + SignalR ต่อ role**
+
+- `POST .../scenes/{scid}/fog/reveal`, `.../fog/hide`
+- `GET .../scene` คืน payload ต่างกันตาม role (DM/Player/Table) — ตาราง projection ใน §13.1
+- HP ปาร์ตี้ = ตัวเลขจริงทุก view (ตัดสินแล้วใน §13.1) · HP ศัตรูซ่อนสำหรับ Player/Table
+- SignalR แยก group ต่อ role · credential แยกสำหรับ Table view (§16)
+- **⚠️ security-sensitive** — ถ้าใช้ `<tier>` ต้อง dispatch `security-reviewer`
+  (แตะ auth + external input + ข้อมูลที่ต้องซ่อนจาก client) ยึดหลัก adversarial: ยิง
+  `GET /scene` ตรงด้วย token ของผู้เล่น แล้วยืนยันว่า **ไม่มี** field ของ token ที่ยังอยู่ใน fog
+  ปนมาในเนื้อ JSON เลย ไม่ใช่แค่ UI ไม่แสดง (ตามบทเรียน Sprint F งานที่ 7)
+- **novice check**: ผู้เล่นเห็นแผนที่แต่ไม่เห็นสิ่งที่ยังไม่เปิด ไม่ต้องรู้ว่า "fog" คืออะไร
+  ก็เข้าใจได้ว่ายังมีพื้นที่ที่ไม่รู้จัก
+- **orphan check**: `scenes` มี endpoint ครบทุกฟิลด์แล้ว
+
+**Part 7 — Character preset**
+
+- API list/instantiate จาก `character_presets` (scope global/campaign, `srd_only`)
+- Seed preset **authored** 6–12 ตัว ครอบคลาสพื้นฐาน level 1 พร้อม `level_path`
+  ใช้ของจาก Part 1 (อาวุธ/เวทเริ่มต้นของแต่ละคลาส)
+- UI: ตอนสร้างตัวละคร เลือก preset แทนกรอกชื่อเปล่า ๆ
+- **novice check**: เลือก "นักรบ level 1" แล้วได้ดาบยาว+โล่+HP จริงทันที ไม่ต้องรู้ว่า
+  ดาบยาวทอย 1d8
+- **orphan check**: `character_presets` มี endpoint แล้ว (มีตารางมาตั้งแต่ InitialSchema)
+
+**Part 8 — Geometry: ต้นทุนการเคลื่อนที่**
+
+- Pathfinding จาก `scenes.grid` (พื้นเดินยาก) + ตำแหน่ง token + `speed` ของตัวละคร (Part 1)
+- แทนที่ `DefaultMovementFeet` hardcode ด้วยค่าจริงจากตัวละคร
+- วิธีเคลื่อนที่กำหนดว่าคิดผลพื้นไหม (เดิน=คิด, กระโดด/ปีน=ไม่คิด) ตาม §3.2
+- **novice check**: วาง difficult terrain ในฉากทดสอบ แล้วยืนยันว่าระยะที่เหลือลดเร็วกว่าปกติ
+  ตอนเดินผ่าน แต่ไม่ลดถ้าเลือก "กระโดดข้าม" — นี่คือตัวอย่างที่ยกไว้ตอนคุยออกแบบ (jump vs walk)
+- **orphan check**: ไม่มีตารางใหม่
+
+**Part 9 — Affordance panel**
+
+- Server คำนวณ "ทำอะไรได้บ้าง พร้อมราคา" จาก catalog (Part 1) + ตำแหน่ง (Part 5/8) +
+  ทรัพยากร (`ActionEconomyResolver` ที่มีอยู่) + `AdvantageResolver` ที่มีอยู่
+- แทนที่ช่องกรอก `1d20+5`/`1d8+3` ด้วยลิสต์ที่คำนวณมาแล้ว ตามโมเดล 3 ระดับ (§1.4)
+- **novice check**: ผู้เล่นใหม่ (ไม่รู้กฎเลย) เจอฉากที่มีก็อบลินอยู่ไกล 70 ฟุตถือดาบประชิด
+  → **ไม่เห็น**ตัวเลือกโจมตีประชิดก็อบลินตัวนั้นเลย (ไม่ใช่เห็นแล้วโดน error ทีหลัง) ·
+  ถ้ามีเวทระยะไกลและมีศัตรูอื่นประชิดตัวเอง → เห็นตัวเลือกพร้อมป้าย "ติด disadvantage"
+- **orphan check**: N/A (ไม่มีตารางใหม่ เป็น service layer)
+
+**Part 10 — Reaction / Opportunity attack**
+
+- ใช้ `campaigns.reaction_timeout_seconds` ที่มีอยู่แล้วแต่ไม่เคยถูกอ่านเลย
+- เดินออกจากระยะเอื้อมของศัตรู (จาก Part 8/9) → trigger interrupt prompt ไปหาเจ้าของสิทธิ์
+  รอ ≤ timeout วินาที → หมดเวลา = ไม่ใช้ reaction เกมเดินต่อ (ตาม `player-side-design §4`)
+- **novice check**: ผู้เล่นเดินออกจากระยะก็อบลินกลางเทิร์น → DM (คุมก็อบลิน) เห็น prompt
+  พร้อมนับถอยหลัง โดยไม่ต้องมีใครจำกฎ OA ได้เอง
+- **orphan check**: N/A
+
+---
+
+**เมื่อจบ Sprint G**: แอปควรมีทุกข้อต่อของโซ่ dependency ใน `spatial-play-design.md §0`
+ครบเป็นครั้งแรก — ตรวจสอบตอนปิด sprint ด้วยการเล่น session ทดสอบเต็มรูปโดยคนที่ไม่เคยเล่น
+D&D มาก่อนจริง ๆ (ไม่ใช่แค่ทีมพัฒนา) เป็น novice check ระดับ sprint ไม่ใช่แค่ระดับ Part
+
+---
+
 ## 5. วิธีใช้เอกสารนี้ในแชทใหม่
 
 **สำหรับแชทออกแบบต่อ**: อ่านไฟล์นี้ + `dm-side-design.md` + `player-side-design.md`
