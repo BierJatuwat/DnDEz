@@ -186,7 +186,8 @@ Sprint G Part 2 (frontend) — Story outline ในหน้า DM console
 ## สิ่งที่ต้องทำ
 คอลัมน์ซ้ายของ DM console: รายการ beat + ปุ่มเพิ่ม + ลากจัดลำดับ + กดตั้ง active
 สถานะ 3 แบบตาม BeatProgress: Passed = ✓ จาง · Active = ไฮไลต์ + ▶ · Upcoming = ปกติ
-(mockup อ้างอิง: ภาพ DM Console ของ UXPilot คอลัมน์ "STORY OUTLINE / PLOT BEATS")
+mockup อ้างอิง: `docs/mockups/uxpilot-dm-console-scene-prep.png` — คอลัมน์ซ้าย
+"STORY OUTLINE / PLOT BEATS"
 
 ## ห้ามทำ
 ห้ามทำตาม mockup ในส่วนที่อยู่นอกขอบเขต Sprint G — `Voice to DM`, `AI DM โทนเรื่อง`,
@@ -403,7 +404,8 @@ DM view / Player view / Table view — **ต้องเป็นคนละ co
 ไม่ใช่หน้าเดียวกันที่ซ่อนด้วย conditional render
 (บทเรียนจาก mockup รอบแรก: ปุ่ม 3 อันชี้ไป component เดียวกัน ตรวจพบตอนรีวิว)
 - Table view: ไม่มี input ใด ๆ, ไม่มีความลับ DM, ตัวอักษรใหญ่อ่านจาก 1-2 เมตรได้
-- mockup อ้างอิง: ภาพ Table View + Player View ของ UXPilot
+- mockup อ้างอิง: `docs/mockups/uxpilot-table-view.png` (สังเกต PARTY HEALTH รวม + ไม่มี input เลย)
+  และ `docs/mockups/uxpilot-player-view.png` (สังเกต fog บังพื้นที่ที่ยังไม่เปิด)
 
 ## DoD
 (ข) novice check: ผู้เล่นเข้าใจว่ามีพื้นที่ที่ยังไม่รู้จัก โดยไม่ต้องรู้คำว่า "fog of war"
@@ -439,7 +441,7 @@ DM view / Player view / Table view — **ต้องเป็นคนละ co
 2. Seed preset **authored** 6–12 ตัว ครอบคลาสพื้นฐาน level 1 พร้อม `level_path`
    ใช้อาวุธ/เวทจากคลังของ Part 1 (อ้างอิงด้วย id ไม่ใช่ hardcode ตัวเลขซ้ำ)
 3. Frontend: ตอนสร้างตัวละครให้เลือกจากการ์ด preset แทนกรอกชื่อเปล่า
-   (mockup อ้างอิง: ภาพ Character Prep ของ UXPilot — "CHOOSE YOUR HERO")
+   mockup อ้างอิง: `docs/mockups/uxpilot-character-prep.png` ("CHOOSE YOUR HERO")
 
 ## ⚠️ เรื่อง seed (เหมือน Part 1)
 ห้ามให้ haiku "เขียน build ของนักรบ level 1 ออกมาเอง" — ต้องมีที่มาอ้างอิงได้
@@ -562,8 +564,9 @@ Sprint G Part 9 (frontend) — พาเนลตัวเลือกของ�
 
 ## สิ่งที่ต้องทำ
 แทนที่ช่องกรอก `1d20+5`/`1d8+3` ใน `AttackCheckPanel` ด้วยรายการที่คำนวณมาแล้ว
-mockup อ้างอิง: ภาพ Player View ของ UXPilot ("คุณจะทำอะไร?") — มี 4 สถานะให้ลอก:
-ปกติ / DISADVANTAGE (ป้ายแดง + กล่องเหตุผล) / ADVANTAGE (ป้ายเขียว) / ใช้ไปแล้ว (เทาจาง)
+mockup อ้างอิง: `docs/mockups/uxpilot-player-view.png` (พาเนล "คุณจะทำอะไร?")
+— มี 4 สถานะให้ลอก: ปกติ / DISADVANTAGE (ป้ายแดง + กล่องเหตุผล) / ADVANTAGE (ป้ายเขียว)
+/ ใช้ไปแล้ว (เทาจาง)
 
 ## DoD
 (ข) novice check: ผู้เล่นใหม่ที่ไม่รู้กฎเลย เจอศัตรูอยู่ไกล 70 ฟุตถือดาบประชิด
@@ -622,6 +625,16 @@ mockup อ้างอิง: ภาพ Player View ของ UXPilot ("คุ�
 | ของค้าง | ควรกลับมาเมื่อไหร่ |
 |---|---|
 | โหมดสว่าง (mockup ยังไม่ได้ทำ) | ก่อนปิด Sprint G — ไม่ใช่ก่อนเริ่ม Part 1 |
-| label `"แสดง HP ศัตรูให้ DM เห็น"` ใน mockup Scene Prep (ความหมายกลับด้าน) | ตอนทำ Part 3 frontend |
-| ภาพ mockup ของ Part 8 (ต้นทุนการเคลื่อนที่) — **ชุด UXPilot ไม่มี แต่ชุด AIDesigner เดิมมี** | ก่อนเริ่ม Part 8 — อย่าทิ้งภาพเก่า |
+| label `"แสดง HP ศัตรูให้ DM เห็น"` ใน mockup Scene Prep (ความหมายกลับด้าน — DM ต้องเห็น HP ศัตรูเสมอ ไม่ควรมี toggle ปิดสำหรับตัว DM เอง · toggle ที่ควรมีคือ "ผู้เล่นเห็นไหม") | ตอนทำ Part 3 frontend |
 | ภาพ mockup ของ Part 10 (reaction prompt) | ก่อนเริ่ม Part 10 |
+
+## ภาพ mockup ที่เก็บไว้แล้ว (`docs/mockups/`)
+
+| ไฟล์ | ใช้กับ Part |
+|---|---|
+| `uxpilot-dm-console-scene-prep.png` | 2 (Story outline), 3 (Scene prep), 4 (แผนที่) |
+| `uxpilot-dm-console-ai-config.png` | — (autonomy dial + proposal queue ทำไว้แล้วใน Sprint F ใช้เป็นอ้างอิงเฉย ๆ) |
+| `uxpilot-player-view.png` | 6 (fog), 9 (affordance panel 4 สถานะ) |
+| `uxpilot-table-view.png` | 6 (Table view ที่ไม่มี input) |
+| `uxpilot-character-prep.png` | 7 (preset picker) |
+| `aidesigner-player-action-movement-cost.png` | **8 (ต้นทุนการเคลื่อนที่)** — ภาพเดียวที่มี `30FT (เดินปกติ)` / `60FT (วิ่ง/พื้นเดินยาก)` · ชุด UXPilot ไม่มี **ห้ามลบ** |
