@@ -488,6 +488,9 @@ app.MapDeathSaveEndpoints();
 // ── Sprint G Part 2: story_beats CRUD + active-beat (design doc §11.1, §12) — DM-only ──
 app.MapStoryBeatEndpoints();
 
+// ── Sprint G Part 3: scene-prep — monster/npc ของ beat ที่ระบุ (design doc §13.2) — DM-only ──
+app.MapScenePrepEndpoints();
+
 app.Run();
 
 // ให้ WebApplicationFactory<Program> ใน integration test มองเห็นคลาสนี้ได้
