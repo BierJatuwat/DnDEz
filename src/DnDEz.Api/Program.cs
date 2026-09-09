@@ -485,6 +485,9 @@ app.MapEncounterEndpoints();
 // ── Sprint F งานที่ 5: death save state machine (confirm-dying / roll / GET state) ──
 app.MapDeathSaveEndpoints();
 
+// ── Sprint G Part 2: story_beats CRUD + active-beat (design doc §11.1, §12) — DM-only ──
+app.MapStoryBeatEndpoints();
+
 app.Run();
 
 // ให้ WebApplicationFactory<Program> ใน integration test มองเห็นคลาสนี้ได้

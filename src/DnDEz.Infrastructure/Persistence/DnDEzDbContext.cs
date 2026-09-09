@@ -161,6 +161,10 @@ public class DnDEzDbContext(DbContextOptions<DnDEzDbContext> options) : DbContex
             e.Property(x => x.Title).HasMaxLength(200);
             e.Property(x => x.Secrets).HasColumnType(Jsonb).HasDefaultValueSql("'[]'::jsonb");
             e.HasIndex(x => new { x.CampaignId, x.Order });
+            // Sprint G Part 2 (design doc §12) — active ได้ทีละ beat ต่อแคมเปญเท่านั้น บังคับระดับ
+            // DB ไม่ใช่แค่ endpoint logic (pattern เดียวกับ ix_scenes_one_active_per_session)
+            e.HasIndex(x => x.CampaignId).IsUnique().HasFilter("progress = 'Active'")
+                .HasDatabaseName("ix_story_beats_one_active_per_campaign");
             EnumCheck<StoryBeat, BeatProgress>(e, x => x.Progress, "progress");
             EnumCheck<StoryBeat, ReviewStatus>(e, x => x.ReviewStatus, "review_status");
         });
