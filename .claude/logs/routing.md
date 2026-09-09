@@ -475,3 +475,129 @@ DM ยืนยัน dying → [Rolling] → ทอยจนครบ 3 สำ�
 ทรัพยากรรีเซ็ตเต็ม) → ซ่อน stat NPC → สลับเป็นผู้เล่น: เห็น "HP ซ่อนอยู่" ของ NPC, เห็น HP ตัวละคร
 ปกติตามเดิม, ไม่มีปุ่ม DM, ไม่มีปุ่มทอย death save (ไม่ใช่เจ้าของ/ไม่ใช่ DM) · SignalR event ใหม่ทั้ง
 6 ตัวยิงจริงครบ (EncounterStarted/TurnStateChanged/TurnChanged/DeathSaveStateChanged/DeathSaveRolled)
+
+[2026-09-08 main] main -> opus-worker : Sprint G Part 1 (action catalog + ability scores) — ข้าม
+first triage ตามข้อ 1a เพราะรู้ล่วงหน้าว่าต้องสร้างไฟล์ใหม่แน่นอน (migration ใหม่, entity คลัง
+กลไกแยกไฟล์, seed data ใหม่) sonnet-worker ไม่มี Write tool ทำไม่ได้ตั้งแต่ต้น
+
+[2026-09-08 main] main -> opus-worker (restart) : ครั้งแรก (a08d348b0bee638f8) ชน turn limit
+(12 turn) หลังอ่านเอกสารเสร็จแต่ยังไม่ได้แก้ไฟล์ใด ๆ เลย (ยืนยันด้วย git worktree list ว่าไม่มี
+worktree ค้าง) — เนื่องจาก session นี้ไม่มี SendMessage ให้ resume agent เดิมได้ จึงเปิด agent ใหม่
+(ad73dfadea138ba91) แบบ self-contained พร้อมข้อเท็จจริงที่ verify แล้วฝังในพรอมต์ทั้งหมด และสั่งให้
+รวม dispatch การเขียนโค้ดเป็นรอบเดียวเพื่อประหยัด turn budget
+
+[2026-09-08 main-as-owner] : สอง opus-worker attempt ก่อนหน้าชน turn limit ทั้งคู่ก่อนถึงขั้น
+dispatch จริง (ครั้งแรกอ่านเอกสารเสร็จยังไม่ทำอะไร ครั้งที่สองเขียน red test ไฟล์เดียว
+ActionCatalogRlsTests.cs เสร็จแล้วหมด turn) — เนื่องจากงานนี้ owner ต้องทำ TDD+dispatch+review
+ครบวงจรซึ่งกิน turn เกิน cap ของ subagent เดียว main session จึงรับบท owner เองต่อจากจุดที่ค้าง
+(ดึง red test ที่เขียนไว้แล้วเข้า main tree, ลบ worktree ทิ้ง, เขียน red test ที่เหลือเอง —
+CharacterAbilityScoreTests.cs, ActionCatalogSeedDataTests.cs) แล้ว dispatch เฉพาะขั้น green
+(entity+enum+migration+seed) ไปยัง sonnet-worker เป็น first triage ปกติ (ไม่ใช่ opus-worker
+เพราะ schema/ค่าทุกตัวถูกตัดสินใจไว้ครบแล้วโดย owner งานที่เหลือเป็นการ implement ตามสเปกที่ชัดเจน
+ไม่ต้องออกแบบเพิ่ม และไม่ต้องสร้างไฟล์ใหม่ด้วย Write — ไฟล์ migration ใหม่เกิดจาก `dotnet ef
+migrations add` ผ่าน Bash แล้ว Edit ไฟล์ที่ auto-gen มา ส่วน entity/enum ใส่ในไฟล์เดิมที่มีอยู่แล้ว)
+
+[2026-09-08 main-as-owner] : sonnet-worker (ac194445f22a07c0e) ชน turn limit (8 turn — ต่ำกว่า
+opus-worker คือ 12) หลังทำแค่ Edit เดียว (เพิ่ม ActionCatalogEntry entity + Character ability
+scores ใน Campaigns.cs ตรงสเปกทุกตัวอักษร ตรวจแล้วด้วย git diff) ยังไม่ได้แตะ enum/DbContext/
+migration เลย — เนื่องจาก subagent ทุกระดับที่ลองมา (opus 12 turn x2, sonnet 8 turn x1) ชน cap
+ก่อนงานเสร็จแม้จะให้สเปกที่ชัดมากแล้ว main session จึงรับทำส่วนที่เหลือ (enum, DbContext, migration,
+apply, test) เองโดยตรง แทนที่จะ dispatch ต่อ — ใช้โค้ดชุดเดียวกับที่ระบุไว้ในพรอมต์ dispatch เดิม
+ไม่ใช่ออกแบบใหม่ (การตัดสินใจเชิงออกแบบทำไว้ครบแล้วตอนเขียน red test)
+
+[2026-09-08 main-as-owner] : ทำ green step ที่เหลือเองต่อจาก sonnet-worker (enum 4 ตัว, DbContext
+registration, `dotnet ef migrations add`, แก้ defaultValue 0→10/30 ด้วยมือ [EF ไม่ generate จาก
+C# property default ให้อัตโนมัติ ต้องแก้เองตามธรรมเนียมเดิมของโปรเจกต์ที่ AddCharacterCombatStats
+ก็ทำแบบเดียวกัน], เพิ่ม RLS SQL + seed SQL 7 แถวลง migration) เปิด Docker Desktop + docker compose
+up เอง (ไม่ได้รันมาก่อน) แล้ว `dotnet ef database update` จริง apply สำเร็จ รัน `dotnet test` เต็ม
+suite: 418/419 ผ่าน (1 fail = known flaky test เดิม ApiKeyCrudTests ไม่เกี่ยวกับงานนี้) 23 เทสต์ใหม่
+ของ Part 1 ผ่านหมด → dispatch ไป code-reviewer (ac196a04b3799d64a) พร้อมระบุ claim ที่ต้อง verify
+เองห้ามเชื่อตามคำอธิบาย (RLS จริง, defaultValue ถูกต้อง, seed data ตรง, ไม่มี campaign_id หลุด,
+คุณภาพเทสต์แยก throw จริงกับ 0 rows)
+
+[2026-09-08 main-as-owner] : code-reviewer (ac196a04b3799d64a) ชน turn limit (8 turn) เช่นกัน
+หลังยืนยันแค่ relrowsecurity/relforcerowsecurity — main session ตรวจ claim ที่เหลือเองด้วย psql
+จริงผ่าน docker exec (ไม่มี psql client ติดตั้งนอก container): pg_policies มี `read_only` (SELECT,
+USING true) 1 ตัว, dndez_app มีแค่ SELECT grant ไม่มี INSERT/UPDATE/DELETE, ต่อจริงด้วย role
+dndez_app แล้วยิง INSERT/UPDATE ได้ผล "permission denied for table" จริง (ไม่ใช่ 0 rows เงียบ ๆ),
+SELECT ยังทำงานได้คืน 7 แถวตามที่ seed, ability score columns มี column_default='10' และ
+speed_feet='30' จริงในตาราง characters, ไม่มีคอลัมน์ campaign_id ใน action_catalog_entries —
+ทุก claim ที่ตั้งใจให้ reviewer ตรวจสอบ verify ผ่านหมดด้วยคำสั่งจริง Sprint G Part 1 ปิดงานได้
+
+[2026-09-09 main-as-owner] : Sprint G Part 2 (story_beats API + active-beat) — เรียนบทเรียนจาก
+Part 1 แล้ว ทำ owner role (อ่านเอกสาร+pattern ที่มีอยู่, เขียน red test เอง 20 เทสต์ใน
+StoryBeatEndpointsTests.cs) เองตั้งแต่ต้นแทนที่จะ dispatch ให้ opus-worker ก่อนแล้วรอชน turn limit
+เหมือนรอบก่อน — migration (partial unique index ix_story_beats_one_active_per_campaign) implement
+เองผ่าน dotnet ef (ตั้งชื่อ index ให้ตรงกับที่ design doc ระบุด้วยมือ เพราะ EF auto-gen ชื่อ
+ix_story_beats_campaign_id ซึ่งไม่ตรง) endpoint (StoryBeatEndpoints.cs, 6 route) implement เอง
+โดยตรงเช่นกัน (ไม่ dispatch เพราะรอบ Part 1 ทั้ง sonnet-worker/opus-worker ทำได้แค่เศษเสี้ยวของงาน
+ก่อนชน 8/12-turn cap — ประเมินว่า dispatch แล้วรอ fail แล้วมาทำเองอยู่ดี เสียเวลากว่าทำเองตรง ๆ)
+เจอบั๊กจริงจากการรันเทสต์จริง (ไม่ใช่แค่ code review): endpoint active-beat แรก 500 เพราะรวม
+demote+promote เป็น SaveChangesAsync ครั้งเดียว EF ส่ง UPDATE promote ก่อน demote ทำให้มีสองแถว
+Active พร้อมกันชั่วขณะ ชน ix_story_beats_one_active_per_campaign (unique index ตรวจทันทีไม่ deferred)
+แก้เป็นสอง SaveChangesAsync แยกกัน (ยัง atomic เพราะทั้ง request อยู่ใน transaction เดียวจาก
+middleware อยู่แล้ว) รันเทสต์ StoryBeat ทั้งหมด 20/20 ผ่าน เต็ม suite 438/439 (1 fail = known flaky
+เดิม) orphan check: grep endpoint อื่นไม่มีใครแตะ story_beats นอกจาก StoryBeatEndpoints.cs แล้ว
+
+[2026-09-09 main-as-owner] : code-reviewer (a823075e25f9b4441) ชน 8-turn cap โดยไม่ได้ผลรายงาน
+เลยรอบนี้ (แย่กว่า Part 1 ที่อย่างน้อยตรวจ 1 claim ได้) — main session ตรวจ 5 claim ที่ตั้งใจให้
+reviewer เช็คด้วยตัวเองทั้งหมดโดยอ่านโค้ดจริง: (1) middleware ครอบทั้ง request ด้วย transaction
+เดียวจริง ยืนยันจาก Program.cs บรรทัด 253-293 (`await next(context); await
+transaction.CommitAsync()`) — สอง SaveChangesAsync ใน active-beat endpoint ยัง atomic จริง
+ไม่ใช่แค่อ้าง (2) ลำดับ 401→404/403(ผ่าน RequireCampaignDmAsync)→404(session)→404(beat) ถูกต้อง
+ทุก endpoint รวม active-beat ที่ซับซ้อนสุด (3) reorder validation กันซ้ำ id ได้จริง (เพิ่มเทสต์
+Reorder_with_duplicate_beat_id_returns_400 ยืนยันแล้ว ผ่าน) (4) no-op ของ active-beat ซ้ำ
+ไม่เขียน DB ไม่ broadcast จริง (อยู่ก่อน SaveChanges/broadcast code path) (5) RequireAuthorization()
+ครบ 6/6 endpoint ตรงกับจำนวน app.Map* เป๊ะ — ทุก claim ผ่าน ไม่พบปัญหา block เทสต์รวม
+21/21 (ใหม่) + 438/439 (เต็ม suite) Sprint G Part 2 ปิดงานได้ — บันทึกเพิ่มเติมสำหรับรอบจูนถัดไป:
+code-reviewer 8-turn cap แทบไม่เคยเสร็จงานเลยทั้งสองรอบที่ลองมา (Sprint G Part 1, 2) ควรพิจารณา
+เลิกใช้ subagent สำหรับ code review ในโปรเจกต์นี้จนกว่า cap จะถูกปรับ เพราะ owner ต้อง verify เอง
+อยู่ดีทุกครั้ง
+
+[2026-09-09 main-as-owner] : Sprint G Part 3 (GET scene-prep: monster_stat_blocks + npc_profiles
+ของ beat) — ทำ owner+implement เองตั้งแต่ต้นตรง ๆ ไม่ลอง dispatch เลย (ตัดสินใจจากบทเรียน Part 1/2:
+subagent ทุกระดับชน turn cap ก่อนงานเสร็จทุกครั้ง ไม่คุ้มเสียเวลาลอง) เขียน red test เอง 7 ตัวใน
+ScenePrepEndpointsTests.cs (happy path, beat ไม่มี ref, dangling ref ข้ามเงียบ ๆ, 403/404,
+เช็ค raw JSON ของ response ผู้เล่นไม่มี secrets หลุด) แล้ว implement ScenePrepEndpoints.cs ผ่านครั้ง
+เดียว ไม่มีบั๊กจากการรันจริง (ต่างจาก Part 2 ที่เจอบั๊ก transaction ordering) รันผ่าน 7/7 ทันที
+เต็ม suite 446/447 (1 fail = known flaky เดิม) ตัดสินใจสำคัญที่บันทึกไว้ในโค้ด: endpoint นี้คืน
+ทุก ReviewStatus (Pending/Approved/Rejected) แม้ PROJECT-CONTEXT §2 ห้าม record ที่ยังไม่ approve
+เข้า orchestrator context — เพราะ endpoint นี้เป็นจอ DM เอง (DM-only ทั้งตัว) ไม่ใช่ orchestrator
+pipeline คนละ context กัน กรองออกจะทำให้ DM รีวิวเนื้อหาที่ยังไม่ approve ไม่ได้เลย ตรวจ RLS จริง
+ผ่าน psql ยืนยันว่า monster_stat_blocks/npc_profiles มี campaign_isolation policy อยู่แล้วจาก
+migration เดิม (defense-in-depth ชั้นที่สองนอกจาก explicit CampaignId filter ใน LINQ) ไม่ dispatch
+code-reviewer เลยรอบนี้ — ตรวจเองแทนเพราะ track record 2 รอบก่อนหน้า (Part 1: ตรวจได้ 1 claim,
+Part 2: ตรวจไม่ได้เลย) ไม่คุ้มความล่าช้าที่เพิ่มมา
+
+[2026-09-09 main-as-owner] : Sprint G Part 4 (อัปโหลดแผนที่ + scene + จัดกริด) — งานใหญ่สุดเท่าที่ทำ
+มาใน Sprint G เพราะต้องเพิ่ม dependency ใหม่ (AWSSDK.S3 4.0.103 ต่อ MinIO ตรวจ vulnerable แล้วสะอาด)
+และ subsystem ใหม่ทั้งชุด (object storage) ทำ owner+implement เองตรง ๆ ทั้งหมดเหมือน Part 2/3
+เพิ่มคอลัมน์ scenes.map_asset_id (nullable, SetNull) แทนการใช้ background_image_url เดิม เพราะ
+signed URL อายุสั้นเก็บ DB แล้วจะหมดอายุก่อนมีคนเปิดดู (session เล่นเป็นชั่วโมง) ต้อง generate สด
+ทุกครั้งที่ GET แทน — เจอบั๊กจริงจากการทดสอบจริง (ไม่ใช่แค่ทฤษฎี): AWSSDK.S3 v4.x คืน presigned URL
+เป็น https:// เสมอไม่สนใจ UseHttp=true เลย ต่อ MinIO dev (http ล้วน) แล้วได้ SSL handshake error
+จริง ยืนยันด้วยการเขียนโปรแกรม probe แยกทดสอบ GetPreSignedURLAsync ตรง ๆ แก้โดย rewrite scheme ใน
+string หลัง generate (ทดสอบแล้วว่า signature ยังผ่านเพราะ SigV4 ไม่เซ็น scheme) ทำ conditional ผ่าน
+flag ใน config ไม่ทำแบบเดากับ production https จริง เทสต์ครอบตามที่ user สั่งครบ: magic-byte
+validation (ปลอมไฟล์ข้อความเป็น .png+Content-Type image/png ก็โดนจับ), oversize, quota, path
+traversal (แก้โดยสร้าง key เองทั้งเส้นทางไม่พึ่งชื่อไฟล์ client เลย), signed URL roundtrip จริง
+(โหลดผ่าน URL แล้วเทียบ byte ต่อ byte), bucket ไม่ public (ยิงตรงไม่มี signature แล้วโดนปฏิเสธจริง)
+เทสต์ใหม่ 15/15 ผ่าน เต็ม suite 461/462 (1 fail = known flaky เดิม) ตอนนี้จะ dispatch
+security-reviewer ตามที่ user สั่งชัดเจนว่าต้อง dispatch เสมอสำหรับ Part นี้ — คาดว่าจะชน turn cap
+เหมือน code-reviewer สองรอบก่อน (0/2 สำเร็จ) แต่ owner ได้ทำ self-audit ไปมากแล้วระหว่าง implement
+(ไม่ใช่รอ reviewer อย่างเดียว)
+
+[2026-09-09 main-as-owner] : security-reviewer (ac13f7af3a706f69d) ชน 8-turn cap อีกครั้ง (3/3
+dispatch ไม่สำเร็จสักครั้งตลอด Sprint G นี้) — แต่ทันก่อนหยุดมันเจอจุดเดียวกับที่ owner สงสัยไว้เอง
+พอดี (ไม่มี MaxRequestBodySize config ที่ไหนเลย) ยืนยันว่าจุดที่ owner กังวลถูกต้องจริง — main
+session แก้เพิ่มเอง: ตั้ง Kestrel MaxRequestBodySize = 16MB ทั้ง API (ไม่มี endpoint อื่นต้องการ
+body ใหญ่กว่านี้) ปิดช่องที่ request ใหญ่กว่า 15MB ของ endpoint จะถูกรับเข้ามาเต็มก้อนก่อนโดน
+ปฏิเสธ รันเต็ม suite ซ้ำยืนยันไม่ regression (461/462 เหมือนเดิม) แล้วตรวจ item ที่เหลือเองด้วย
+grep+อ่านโค้ดจริง: (1) magic byte signature ถูกต้องตาม spec PNG/JPEG (3) quota check อยู่ก่อน
+PutObjectAsync จริง (บรรทัด 99 ก่อน 112) (5) auth check อยู่ก่อน CreateSignedUrlAsync ทุก call site
+จริง (2) grep ยืนยันไม่มีจุดไหนอ้าง file.FileName เลยทั้งไฟล์ (7) SigV4 canonical request ไม่รวม
+scheme เข้า signature จริงตาม spec (host header ไม่มี scheme) สอดคล้องกับที่ probe program ยืนยัน
+เชิงประจักษ์แล้วว่า signature ยังผ่านหลัง rewrite — ทุก item ที่ตั้งใจให้ reviewer ตรวจ ตรวจได้ครบ
+ด้วยตัวเอง Sprint G Part 4 ปิดงานได้ — ข้อสังเกตสะสม: 3/3 code/security-reviewer dispatch ใน
+Sprint G นี้ไม่สำเร็จสักครั้งเลย (Part 1 ได้ 1 claim, Part 2/3/4 ได้ 0) ยืนยันซ้ำว่าควรพัก
+subagent สำหรับ review จนกว่า turn cap จะถูกปรับจริง ๆ

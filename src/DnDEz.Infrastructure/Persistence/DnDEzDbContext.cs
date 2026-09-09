@@ -269,6 +269,9 @@ public class DnDEzDbContext(DbContextOptions<DnDEzDbContext> options) : DbContex
         {
             e.HasOne(x => x.Session).WithMany(x => x.Scenes)
                 .HasForeignKey(x => x.SessionId).OnDelete(DeleteBehavior.Cascade);
+            // Sprint G Part 4 — ลบ map asset ไม่ควรพา scene หายไปด้วย (SetNull ไม่ใช่ Cascade)
+            e.HasOne(x => x.MapAsset).WithMany()
+                .HasForeignKey(x => x.MapAssetId).OnDelete(DeleteBehavior.SetNull);
             e.Property(x => x.Name).HasMaxLength(200);
             e.Property(x => x.Grid).HasColumnType(Jsonb).HasDefaultValueSql("'{}'::jsonb");
             e.Property(x => x.Tokens).HasColumnType(Jsonb).HasDefaultValueSql("'[]'::jsonb");

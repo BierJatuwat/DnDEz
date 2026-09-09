@@ -25,6 +25,110 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
             NpgsqlModelBuilderExtensions.HasPostgresExtension(modelBuilder, "vector");
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("DnDEz.Domain.Entities.ActionCatalogEntry", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("ActionCost")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("action_cost");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<string>("Details")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("details")
+                        .HasDefaultValueSql("'{}'::jsonb");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("key");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("kind");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("name");
+
+                    b.Property<int?>("RangeLongFeet")
+                        .HasColumnType("integer")
+                        .HasColumnName("range_long_feet");
+
+                    b.Property<int?>("RangeNormalFeet")
+                        .HasColumnType("integer")
+                        .HasColumnName("range_normal_feet");
+
+                    b.Property<string>("RollKind")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("roll_kind");
+
+                    b.Property<string>("RulesSystem")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("rules_system");
+
+                    b.Property<string>("SaveAbility")
+                        .HasColumnType("text")
+                        .HasColumnName("save_ability");
+
+                    b.Property<int?>("SpellSlotLevel")
+                        .HasColumnType("integer")
+                        .HasColumnName("spell_slot_level");
+
+                    b.Property<string[]>("Tags")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text[]")
+                        .HasDefaultValue(new string[0])
+                        .HasColumnName("tags");
+
+                    b.Property<string>("TargetKind")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("target_kind");
+
+                    b.Property<bool?>("TouchesGround")
+                        .HasColumnType("boolean")
+                        .HasColumnName("touches_ground");
+
+                    b.HasKey("Id")
+                        .HasName("pk_action_catalog_entries");
+
+                    b.HasIndex("RulesSystem", "Key")
+                        .IsUnique()
+                        .HasDatabaseName("ix_action_catalog_entries_rules_system_key");
+
+                    b.ToTable("action_catalog_entries", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_action_cost_actioncatalogentry", "action_cost IN ('Action', 'BonusAction', 'Reaction', 'None')");
+
+                            t.HasCheckConstraint("ck_kind_actioncatalogentry", "kind IN ('Weapon', 'Spell', 'Movement')");
+
+                            t.HasCheckConstraint("ck_roll_kind_actioncatalogentry", "roll_kind IN ('AttackRoll', 'SavingThrow', 'None')");
+
+                            t.HasCheckConstraint("ck_target_kind_actioncatalogentry", "target_kind IN ('Enemy', 'Ally', 'Point')");
+                        });
+                });
+
             modelBuilder.Entity("DnDEz.Domain.Entities.ApiKey", b =>
                 {
                     b.Property<Guid>("Id")
@@ -273,6 +377,10 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("campaign_id");
 
+                    b.Property<int>("Charisma")
+                        .HasColumnType("integer")
+                        .HasColumnName("charisma");
+
                     b.Property<DateTimeOffset?>("ClaimExpiresAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("claim_expires_at");
@@ -280,6 +388,10 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                     b.Property<string>("ClaimToken")
                         .HasColumnType("text")
                         .HasColumnName("claim_token");
+
+                    b.Property<int>("Constitution")
+                        .HasColumnType("integer")
+                        .HasColumnName("constitution");
 
                     b.Property<bool>("ControlledByDm")
                         .HasColumnType("boolean")
@@ -314,6 +426,10 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                         .HasColumnType("text[]")
                         .HasColumnName("damage_vulnerabilities");
 
+                    b.Property<int>("Dexterity")
+                        .HasColumnType("integer")
+                        .HasColumnName("dexterity");
+
                     b.Property<bool>("HarvestConsent")
                         .HasColumnType("boolean")
                         .HasColumnName("harvest_consent");
@@ -321,6 +437,10 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                     b.Property<int>("InitiativeModifier")
                         .HasColumnType("integer")
                         .HasColumnName("initiative_modifier");
+
+                    b.Property<int>("Intelligence")
+                        .HasColumnType("integer")
+                        .HasColumnName("intelligence");
 
                     b.Property<bool>("IsOrphan")
                         .HasColumnType("boolean")
@@ -354,6 +474,18 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                         .HasColumnType("jsonb")
                         .HasColumnName("sheet")
                         .HasDefaultValueSql("'{}'::jsonb");
+
+                    b.Property<int>("SpeedFeet")
+                        .HasColumnType("integer")
+                        .HasColumnName("speed_feet");
+
+                    b.Property<int>("Strength")
+                        .HasColumnType("integer")
+                        .HasColumnName("strength");
+
+                    b.Property<int>("Wisdom")
+                        .HasColumnType("integer")
+                        .HasColumnName("wisdom");
 
                     b.HasKey("Id")
                         .HasName("pk_characters");
@@ -1487,6 +1619,10 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                         .HasColumnType("boolean")
                         .HasColumnName("is_active");
 
+                    b.Property<Guid?>("MapAssetId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("map_asset_id");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(200)
@@ -1506,6 +1642,9 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_scenes");
+
+                    b.HasIndex("MapAssetId")
+                        .HasDatabaseName("ix_scenes_map_asset_id");
 
                     b.HasIndex("SessionId")
                         .IsUnique()
@@ -1658,6 +1797,11 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_story_beats");
+
+                    b.HasIndex("CampaignId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_story_beats_one_active_per_campaign")
+                        .HasFilter("progress = 'Active'");
 
                     b.HasIndex("CampaignId", "Order")
                         .HasDatabaseName("ix_story_beats_campaign_id_order");
@@ -2054,12 +2198,20 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("DnDEz.Domain.Entities.Scene", b =>
                 {
+                    b.HasOne("DnDEz.Domain.Entities.MapAsset", "MapAsset")
+                        .WithMany()
+                        .HasForeignKey("MapAssetId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("fk_scenes_map_assets_map_asset_id");
+
                     b.HasOne("DnDEz.Domain.Entities.GameSession", "Session")
                         .WithMany("Scenes")
                         .HasForeignKey("SessionId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_scenes_sessions_session_id");
+
+                    b.Navigation("MapAsset");
 
                     b.Navigation("Session");
                 });

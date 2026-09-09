@@ -6,6 +6,7 @@
 // ⚠️ หลักที่ห้ามพัง: การกรองสิทธิ์เป็นหน้าที่ของ RLS policy ที่ชั้น DB ไม่ใช่ WHERE ในโค้ด C#
 //   endpoint จึง query แบบตรงไปตรงมาแล้วปล่อยให้ policy กรองแถวออกเอง (แถวหาย = 404 ไม่ใช่ 403)
 using System.Security.Claims;
+using Amazon.S3;
 using DnDEz.Api.Auth;
 using DnDEz.Api.Encounters;
 using DnDEz.Api.Endpoints;
@@ -24,6 +25,12 @@ using StackExchange.Redis;
 using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Sprint G Part 4 — Kestrel default MaxRequestBodySize (~30MB) ปล่อยให้ request ใหญ่กว่า endpoint
+// upload ของเราเองยอมรับ (15MB) เข้ามาเต็มก้อนก่อนจะถูกปฏิเสธ (endpoint เช็ค IFormFile.Length หลัง
+// body ถูก parse เสร็จแล้ว ไม่ได้ short-circuit ที่ชั้น transport) จำกัดเพดานทั้ง API ให้ใกล้กับที่
+// ต้องใช้จริงแทน — ไม่มี endpoint อื่นในโปรเจกต์นี้ต้องการ body ใหญ่กว่านี้เลย (ทุกอันเป็น JSON เล็ก ๆ)
+builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 16 * 1024 * 1024);
 
 // Sprint C Part 1 — hub path ที่ query-string JWT (ด้านล่าง) กับ MapHub ต้องตรงกันเป๊ะ ประกาศ
 // ค่าเดียวไว้ตรงนี้กันพิมพ์ผิดแยกกันสองที่
@@ -91,6 +98,29 @@ appDataRedisConfiguration.AbortOnConnectFail = false;
 builder.Services.AddSingleton<IConnectionMultiplexer>(
     _ => ConnectionMultiplexer.Connect(appDataRedisConfiguration));
 builder.Services.AddSingleton<IEncounterTurnStateStore, RedisEncounterTurnStateStore>();
+
+// ── Sprint G Part 4: MinIO (S3-compatible) สำหรับ map asset ที่ DM อัปโหลด ─────────────────────
+// ⚠️ ใช้ AWSSDK.S3 กับ endpoint ของ MinIO เอง (ไม่ใช่ AWS จริง) — ต้องตั้ง ForcePathStyle = true
+// เพราะ MinIO ไม่รองรับ virtual-hosted-style URL (bucket.endpoint/...) แบบ AWS จริง และปิด
+// RegionEndpoint (MinIO ไม่สนใจ region แต่ SDK ต้องการค่าอะไรสักอย่างที่ไม่ throw ตอน validate)
+var minioEndpoint = Environment.GetEnvironmentVariable("DNDEZ_MINIO_ENDPOINT") ?? "http://localhost:9000";
+var minioAccessKey = Environment.GetEnvironmentVariable("DNDEZ_MINIO_ACCESS_KEY") ?? "dndez";
+var minioSecretKey = Environment.GetEnvironmentVariable("DNDEZ_MINIO_SECRET_KEY") ?? "dndez12345";
+var minioBucket = Environment.GetEnvironmentVariable("DNDEZ_MINIO_BUCKET") ?? "dndez-map-assets";
+var minioUseHttp = minioEndpoint.StartsWith("http://", StringComparison.Ordinal);
+builder.Services.AddSingleton<IAmazonS3>(_ => new AmazonS3Client(
+    minioAccessKey,
+    minioSecretKey,
+    new AmazonS3Config
+    {
+        ServiceURL = minioEndpoint,
+        ForcePathStyle = true,
+        UseHttp = minioUseHttp,
+    }));
+// AWSSDK.S3 คืน presigned URL เป็น https:// เสมอไม่สนใจ UseHttp (ดู doc comment ของ
+// SceneEndpoints.CreateSignedUrlAsync สำหรับหลักฐาน) — rewrite เป็น http เฉพาะตอน endpoint
+// ตั้งค่าเป็น http จริง (dev/MinIO) ไม่ทำกับ endpoint https จริง (production ต่อ AWS จริง)
+builder.Services.AddSingleton(new MapAssetStorageOptions(minioBucket, RewriteSignedUrlToHttp: minioUseHttp));
 
 // ── Sprint D Part 2: Anthropic client (BYOK tool-calling loop) ─────────────
 // IAnthropicClient แยก interface ออกจาก implementation จริงตั้งใจ — ทดสอบด้วย fake ในเทสต์
@@ -232,6 +262,24 @@ static IResult InvalidCredentials() =>
     Results.Json(new AuthErrorResponse("invalid_credentials"), statusCode: StatusCodes.Status401Unauthorized);
 
 app.UseCors(FrontendCorsPolicy);
+// สร้าง bucket ของ MinIO ถ้ายังไม่มี (docker-compose ไม่ pre-create ให้) — idempotent (check แล้ว
+// ค่อยสร้าง) กัน exception ไม่ให้ crash ทั้ง process ตอน MinIO ยังไม่พร้อมตอน cold boot (เหมือน
+// AbortOnConnectFail = false ของ Redis ด้านบน) endpoint upload เองจะเจอ error ตอนใช้จริงถ้า MinIO
+// ยังไม่พร้อมจริง ๆ ซึ่งดีกว่า API ทั้งตัวขึ้นไม่ได้เพราะ dependency ที่ไม่ critical กับทุก request
+try
+{
+    var s3 = app.Services.GetRequiredService<IAmazonS3>();
+    var storageOptions = app.Services.GetRequiredService<MapAssetStorageOptions>();
+    if (!await Amazon.S3.Util.AmazonS3Util.DoesS3BucketExistV2Async(s3, storageOptions.BucketName))
+    {
+        await s3.PutBucketAsync(storageOptions.BucketName);
+    }
+}
+catch (Exception ex)
+{
+    app.Logger.LogWarning(ex, "ตรวจ/สร้าง MinIO bucket ไม่สำเร็จตอน startup — endpoint upload จะ error เองถ้าเรียกใช้จริง");
+}
+
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -490,6 +538,9 @@ app.MapStoryBeatEndpoints();
 
 // ── Sprint G Part 3: scene-prep — monster/npc ของ beat ที่ระบุ (design doc §13.2) — DM-only ──
 app.MapScenePrepEndpoints();
+
+// ── Sprint G Part 4: อัปโหลดแผนที่ + scene + จัดกริด (design doc §11.1, §22) — DM-only ──
+app.MapSceneEndpoints();
 
 app.Run();
 

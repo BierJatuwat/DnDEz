@@ -76,7 +76,20 @@ public class Scene
     public string Grid { get; set; } = "{}";
     public string Tokens { get; set; } = "[]";
     public string FogLayer { get; set; } = "{}";
+
+    /// <summary>Sprint G Part 4 — เดิมตั้งใจเก็บ URL ตรง ๆ แต่ signed URL อายุสั้น (นาที) เก็บลง DB
+    /// แล้วจะหมดอายุก่อนมีคนเปิดดูจริง (session เล่นเป็นชั่วโมง) จึง**ไม่ใช้คอลัมน์นี้ต่อ** เปลี่ยนไปเก็บ
+    /// <see cref="MapAssetId"/> แทน แล้ว generate signed URL สดทุกครั้งที่ GET (ดู ScenePrepEndpoints
+    /// TODO: ย้ายไป SceneEndpoints) — ปล่อยคอลัมน์นี้ไว้เฉย ๆ ไม่ลบ (ยังไม่คุ้มเสียเวลาทำ migration ลบ
+    /// คอลัมน์สำหรับ Part นี้)</summary>
     public string? BackgroundImageUrl { get; set; }
+
+    /// <summary>อ้างถึง map_assets ที่เป็นพื้นหลังของฉากนี้ — null = ยังไม่ตั้งแผนที่ (เช่น scene ที่สร้าง
+    /// รอไว้ก่อนอัปโหลด) ตั้งใจ nullable + ON DELETE SET NULL: ลบ map asset ทิ้งไม่ควรพา scene ทั้งฉาก
+    /// หายไปด้วย (ผู้เล่นอาจกำลังเล่นอยู่ตอนนั้น)</summary>
+    public Guid? MapAssetId { get; set; }
+    public MapAsset? MapAsset { get; set; }
+
     public bool IsActive { get; set; }
 }
 
