@@ -61,3 +61,15 @@ public enum PresetSource { Authored, Harvested }
 public enum ApiKeyStatus { Active, Invalid, Revoked }
 
 public enum ConsultRole { Dm, Ai }
+
+/// <summary>คลังกลไก (action catalog) — Sprint G Part 1, design doc §2.4: รวมอาวุธ/เวท/การเคลื่อนที่
+/// เป็นของอย่างเดียวเพราะ engine มองเหมือนกันหมด</summary>
+public enum ActionCatalogKind { Weapon, Spell, Movement }
+
+/// <summary>None = ไม่ได้หักจาก action economy (ท่าเคลื่อนที่พื้นฐาน มาจาก movement pool แยกต่างหาก)</summary>
+public enum ActionCostKind { Action, BonusAction, Reaction, None }
+
+public enum ActionTargetKind { Enemy, Ally, Point }
+
+/// <summary>None = auto-hit ไม่มีทั้งทอยโจมตีและ save (เช่น Magic Missile, ท่าเคลื่อนที่พื้นฐาน)</summary>
+public enum ActionRollKind { AttackRoll, SavingThrow, None }

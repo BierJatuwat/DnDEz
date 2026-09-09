@@ -128,6 +128,19 @@ public class Character
 
     public int Level { get; set; } = 1;
 
+    // ── ค่าความสามารถ 6 ค่า + speed — Sprint G Part 1 (design doc §2.5): "ทุกตัวละครมีแน่นอน
+    // ไม่ผันแปรตามคลาส" เหตุผลเดียวกับ HP/AC ใน AddCharacterCombatStats → typed column
+    public int Strength { get; set; } = 10;
+    public int Dexterity { get; set; } = 10;
+    public int Constitution { get; set; } = 10;
+    public int Intelligence { get; set; } = 10;
+    public int Wisdom { get; set; } = 10;
+    public int Charisma { get; set; } = 10;
+
+    /// <summary>ระยะเดินต่อเทิร์น (ฟุต) — เดิม hardcode 30 ใน EncounterEndpoints.DefaultMovementFeet
+    /// (ยังไม่แก้จุดนั้น รอ Sprint G Part 8)</summary>
+    public int SpeedFeet { get; set; } = 30;
+
     /// <summary>DM เข้าควบคุมตัวละครนี้อยู่หรือไม่ (ได้ตลอดเวลา ไม่ใช่แค่ตอนหลุด) — player-side-design §6</summary>
     public bool ControlledByDm { get; set; }
 
@@ -186,4 +199,30 @@ public class CharacterReview
 
     public Guid? ReviewedByUserId { get; set; }
     public DateTimeOffset? ReviewedAt { get; set; }
+}
+
+/// <summary>
+/// คลังกลไก (action catalog) — design doc §2.2-§2.3: เก็บ "มันคืออะไร" (ระยะ/ชนิดเป้า/ราคา action/
+/// รูปแบบการทอย) ที่ rules engine ใช้เป็นฐานคำนวณ ส่วน "แล้วยังไง" (damage dice, upcast, คำบรรยาย ฯลฯ)
+/// อยู่ engine ไม่ใช่ที่นี่ — รายละเอียดเสริมที่ไม่กระทบการคำนวณ core เก็บใน jsonb <see cref="Details"/>
+/// ไม่ผูกแคมเปญ (ไม่มี campaign_id) เพราะเป็นข้อมูลอ้างอิงระดับระบบ ดู ActionCatalogRlsTests
+/// </summary>
+public class ActionCatalogEntry
+{
+    public Guid Id { get; set; }
+    public string RulesSystem { get; set; } = null!;
+    public string Key { get; set; } = null!;
+    public string Name { get; set; } = null!;
+    public ActionCatalogKind Kind { get; set; }
+    public ActionCostKind ActionCost { get; set; }
+    public int? SpellSlotLevel { get; set; }
+    public ActionTargetKind TargetKind { get; set; }
+    public int? RangeNormalFeet { get; set; }
+    public int? RangeLongFeet { get; set; }
+    public ActionRollKind RollKind { get; set; }
+    public string? SaveAbility { get; set; }
+    public string[] Tags { get; set; } = [];
+    public bool? TouchesGround { get; set; }
+    public string Details { get; set; } = "{}";
+    public DateTimeOffset CreatedAt { get; set; }
 }

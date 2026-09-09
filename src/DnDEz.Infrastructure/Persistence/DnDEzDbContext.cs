@@ -46,6 +46,7 @@ public class DnDEzDbContext(DbContextOptions<DnDEzDbContext> options) : DbContex
     public DbSet<ExtractedCharacterSheet> ExtractedCharacterSheets => Set<ExtractedCharacterSheet>();
     public DbSet<RulesCorpusEntry> RulesCorpusEntries => Set<RulesCorpusEntry>();
     public DbSet<CharacterPreset> CharacterPresets => Set<CharacterPreset>();
+    public DbSet<ActionCatalogEntry> ActionCatalogEntries => Set<ActionCatalogEntry>();
 
     /// <summary>คอลัมน์ที่เก็บ JSON ทั้งก้อน — ใช้ jsonb เสมอ (ไม่ใช่ json/text)</summary>
     private const string Jsonb = "jsonb";
@@ -450,6 +451,22 @@ public class DnDEzDbContext(DbContextOptions<DnDEzDbContext> options) : DbContex
             e.Property(x => x.Key).HasMaxLength(100);
             e.Property(x => x.Title).HasMaxLength(200);
             e.HasIndex(x => new { x.Category, x.Key }).IsUnique();
+        });
+
+        b.Entity<ActionCatalogEntry>(e =>
+        {
+            e.ToTable("action_catalog_entries");
+            e.Property(x => x.RulesSystem).HasMaxLength(32);
+            e.Property(x => x.Key).HasMaxLength(100);
+            e.Property(x => x.Name).HasMaxLength(200);
+            e.Property(x => x.Details).HasColumnType(Jsonb).HasDefaultValueSql("'{}'::jsonb");
+            e.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+            e.Property(x => x.Tags).HasDefaultValue(new string[0]);
+            e.HasIndex(x => new { x.RulesSystem, x.Key }).IsUnique();
+            EnumCheck<ActionCatalogEntry, ActionCatalogKind>(e, x => x.Kind, "kind");
+            EnumCheck<ActionCatalogEntry, ActionCostKind>(e, x => x.ActionCost, "action_cost");
+            EnumCheck<ActionCatalogEntry, ActionTargetKind>(e, x => x.TargetKind, "target_kind");
+            EnumCheck<ActionCatalogEntry, ActionRollKind>(e, x => x.RollKind, "roll_kind");
         });
 
         b.Entity<CharacterPreset>(e =>
