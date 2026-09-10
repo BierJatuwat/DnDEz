@@ -520,11 +520,19 @@ export function AttackCheckPanel({
   combat,
   characters,
   actableCharacters,
+  showAttack = true,
 }: {
   combat: Combat;
   characters: CharacterSummary[];
   /** ตัวละครที่ผู้ใช้คนนี้สั่งได้จริง (ของตัวเอง หรือ NPC ที่ DM คุม) */
   actableCharacters: CharacterSummary[];
+  /**
+   * Sprint G Part 9 — หน้าผู้เล่นปิดส่วน "โจมตี" ทิ้ง เพราะย้ายไปใช้ `AffordancePanel` ที่ server
+   * คำนวณเป้าและข้อจำกัดมาให้แล้ว (เลือกจากรายการ ไม่ใช่เลือกเป้าจาก dropdown ของทุกตัวละคร
+   * ในแคมเปญแล้วค่อยรู้ทีหลังว่าเอื้อมไม่ถึง) · หน้า DM ยังใช้ทางเดิมอยู่ เพราะ affordance รอบนี้
+   * ทำฝั่งผู้เล่นก่อน
+   */
+  showAttack?: boolean;
 }) {
   const [attacker, setAttacker] = useState("");
   const [target, setTarget] = useState("");
@@ -541,8 +549,9 @@ export function AttackCheckPanel({
 
   return (
     <section className={sectionClass}>
-      <h2 className="font-medium">โจมตี / ทอยเช็ค</h2>
+      <h2 className="font-medium">{showAttack ? "โจมตี / ทอยเช็ค" : "ทอยเช็ค"}</h2>
 
+      {showAttack && (
       <div className="space-y-2">
         <p className="text-xs opacity-60">โจมตี</p>
         <div className="flex flex-wrap gap-2">
@@ -615,8 +624,9 @@ export function AttackCheckPanel({
           </button>
         </div>
       </div>
+      )}
 
-      <div className="space-y-2 border-t border-black/10 dark:border-white/10 pt-3">
+      <div className={showAttack ? "space-y-2 border-t border-black/10 dark:border-white/10 pt-3" : "space-y-2"}>
         <p className="text-xs opacity-60">ทอยเช็ค (vs DC)</p>
         <div className="flex flex-wrap gap-2">
           <input

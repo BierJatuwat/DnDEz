@@ -29,6 +29,17 @@ export type CampaignHubEvents = {
   onHpUpdated: (payload: unknown) => void;
   onActionMessageCreated: (payload: unknown) => void;
   onCombatEvent: (name: CombatEventName, payload: unknown) => void;
+  /** Sprint G Part 6 — DM เปิด/ปิดพื้นที่หมอก แล้วทุก role ต้องดึง scene ใหม่ (สิ่งที่มองเห็นเปลี่ยน) */
+  onFogChanged: (payload: unknown) => void;
+  /**
+   * Sprint G Part 10 — มีคนเดินออกจากระยะเอื้อมของตัวที่เราคุม เรามีสิทธิ์สวนได้
+   *
+   * ⚠️ event นี้ยิงมาที่ **กลุ่มของผู้ใช้คนเดียว** (`campaign:{id}:user:{userId}`) ไม่ใช่ทั้งแคมเปญ —
+   * ถ้ามาถึงเรา แปลว่าเรามีสิทธิ์จริง ไม่ต้องกรองซ้ำฝั่ง client
+   */
+  onReactionPrompt: (payload: unknown) => void;
+  /** Sprint G Part 10 — การเดินที่ค้างอยู่เดินต่อแล้ว (มีคนตอบ หรือหมดเวลา) → ดึง scene ใหม่ */
+  onMovementResumed: (payload: unknown) => void;
 };
 
 /**
@@ -78,6 +89,8 @@ export class CampaignHubManager {
     private readonly events: CampaignHubEvents,
   ) {
     connection.on("DiceRolled", (payload) => this.events.onDiceRolled(payload));
+    connection.on("ReactionPrompt", (payload) => this.events.onReactionPrompt(payload));
+    connection.on("MovementResumed", (payload) => this.events.onMovementResumed(payload));
     connection.on("ProposalCreated", (payload) => this.events.onProposalCreated(payload));
     // Sprint E Part 3 — HP realtime (backend broadcast มีอยู่แล้วตั้งแต่ Sprint C Part 3, ฝั่งนี้
     // แค่ไม่เคยฟังมาก่อน) + player action feed ใหม่ (ดู OrchestratorTurnRunner ฝั่ง API)
@@ -88,6 +101,10 @@ export class CampaignHubManager {
     for (const name of COMBAT_EVENT_NAMES) {
       connection.on(name, (payload) => this.events.onCombatEvent(name, payload));
     }
+
+    // Sprint G Part 6 — server ยิงเข้า role-group แยก (dm/player) แต่ฝั่ง client ไม่ต้องรู้ว่าตัวเอง
+    // อยู่ group ไหน: ได้รับเมื่อไหร่แปลว่า "สิ่งที่เรามองเห็นเปลี่ยนแล้ว" ให้ดึง scene ใหม่เท่านั้น
+    connection.on("FogChanged", (payload) => this.events.onFogChanged(payload));
 
     connection.onreconnecting(() => {
       this.started = false;

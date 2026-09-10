@@ -601,3 +601,427 @@ scheme เข้า signature จริงตาม spec (host header ไม่�
 ด้วยตัวเอง Sprint G Part 4 ปิดงานได้ — ข้อสังเกตสะสม: 3/3 code/security-reviewer dispatch ใน
 Sprint G นี้ไม่สำเร็จสักครั้งเลย (Part 1 ได้ 1 claim, Part 2/3/4 ได้ 0) ยืนยันซ้ำว่าควรพัก
 subagent สำหรับ review จนกว่า turn cap จะถูกปรับจริง ๆ
+
+[2026-09-09 main-as-owner] : Sprint G Part 5 (token บนแผนที่ ephemeral+committed) — งานใหญ่ที่สุด
+เท่าที่ทำมาใน Sprint G (write-coalescing layer ใหม่ทั้งชุด + hub method ใหม่ + hook เข้า endpoint
+เดิม 2 จุด) ทำ owner+implement เองตรง ๆ ทั้งหมดตั้งแต่ต้น ไม่ลอง dispatch เลย (บทเรียนสะสมจาก
+Part 1-4: subagent ไม่เคยจบงานสำเร็จในสโคปขนาดนี้) ออกแบบ RedisSceneTokenStore (คนละ policy จาก
+IEncounterTurnStateStore เดิม — อ่านไม่ได้ต้องคืน false ไม่ fallback เงียบ ๆ เพราะตำแหน่ง token
+สร้างใหม่ไม่ได้ต่างจาก turn state) + SceneTokenFlusher (ต้องเปิด RLS context เองแบบเดียวกับ
+CampaignHub.IsMemberAsync เพราะเรียกจาก background timer/endpoint อื่นที่ context เป็นของคนละ
+แคมเปญ — แก้ chicken-and-egg ของการรู้ campaignId/userId ที่จะ impersonate โดยให้ endpoint ที่เขียน
+pending บันทึก SceneFlushMetadata ไว้ตั้งแต่ตอนนั้นเลย ไม่ต้อง lookup ย้อนหลัง) + hub method
+MoveTokenGhost (เช็คสิทธิ์ผ่าน CampaignGroupRegistry in-memory ไม่ query DB เพราะเรียกถี่มากตอนลาก)
+
+**เจอ conflict จริงระหว่าง spec กับคำสั่งที่ให้มา** (ไม่ใช่แค่ทฤษฎี — เทสต์ล้ม 403 จริง 7 ตัว):
+สเปกบอกให้ใช้ CampaignAuthorization.RequireCharacterActorAsync ที่มีอยู่แล้ว แต่ helper ตัวนั้น
+ให้ DM override เฉพาะ ControlledByDm=true (ออกแบบมาสำหรับคุมบทพูด NPC) ขณะที่สเปกบอกตรง ๆ ว่า
+"DM ขยับได้ทุกตัว" แบบไม่มีเงื่อนไข (จัดตำแหน่ง token เป็น logistics คนละแกนกับคุมเชิงเล่าเรื่อง)
+ถ้าใช้ helper เดิมตรง ๆ DM จะขยับ token ของตัวละครผู้เล่นทั่วไปไม่ได้เลย (ControlledByDm=false
+เป็นดีฟอลต์ของตัวละครผู้เล่นทุกตัว) → เขียนเช็คสิทธิ์ใหม่เฉพาะจุดนี้แทน ไม่ใช้ helper ตามที่สั่ง
+บันทึกเหตุผลไว้ในโค้ดชัดเจนว่าเบี่ยงจากคำสั่งเพราะอะไร
+
+เทสต์ 17 ตัวผ่านหมด (ครอบ auth ทุก combination, Redis-unavailable fallback แบบเดียวกับ
+EncounterEndpointsTests, flush โดยตรง, novice check ผ่าน GET scene, hub ghost-move ทั้งกรณีสำเร็จ
+และกรณี throw) เต็ม suite 478/479 (1 fail = known flaky เดิม) ไม่ dispatch security-reviewer รอบนี้
+(ไม่ได้ระบุบังคับใน spec ต่างจาก Part 4 และ track record 0/3 ที่ผ่านมา) ตรวจ auth ordering +
+RequireAuthorization coverage เองแทน ครบ 3/3 endpoint
+
+[2026-09-09 main-as-owner] : Sprint G Part 6 (fog + projection ต่อ role + SignalR group ต่อ role)
+— ทำ owner+implement เองตรง ๆ ตั้งแต่ต้น เขียน red test ก่อน (รวม adversarial test ที่สั่งไว้ชัดเจน:
+ยิง raw JSON ด้วย token ผู้เล่นตรง ๆ ยืนยันไม่มี field/guid ของ token ที่ควรซ่อนปนมาเลย ไม่ใช่แค่
+deserialize แล้วเช็ค property) ออกแบบ fog model เอง (ไม่มีในสเปก): วงกลมที่เปิดแล้ว
+{id,x,y,radius} เก็บใน scenes.fog_layer jsonb เดิม (ไม่ต้อง migration) เพราะยังไม่มี grid/geometry
+engine จริง (รอ Part 8) — token มองเห็นได้ถ้าอยู่ในวงไหนวงหนึ่ง คำนวณจาก dx²+dy²<=radius²
+เปิด GET .../scene จาก DM-only (Part 4 เดิม) เป็นสมาชิกทุกคนเรียกได้ พร้อม projection เต็มรูป:
+DM เห็นทุก token/HP จริงเสมอ, Player เห็นเฉพาะ token ในหมอกที่เปิด + HP ตัวละครผู้เล่นจริงเสมอ +
+HP ตัวละคร NPC (ControlledByDm=true) ผ่าน CharacterStatsVisibility.IsVisibleTo เดิม (reuse ตามที่
+สั่ง ใช้ได้ตรง ๆ รอบนี้ไม่มี conflict เหมือน Part 5) เพิ่ม SignalR role-group จริง (CampaignHub
+JoinCampaign เข้า group ย่อยตาม isDm ที่คำนวณจาก DB ไม่ใช่ client ส่งมา) FogChanged broadcast
+เข้าทั้งสอง role-group เทสต์ 14/14 ผ่าน (รวมเคสขอบที่เพิ่มเอง: token ที่ระยะห่างเท่ากับรัศมีเป๊ะ
+ต้องมองเห็นได้ — ยืนยัน <= เป็นพฤติกรรมตั้งใจไม่ใช่ off-by-one) เต็ม suite 491/492 (1 fail=flaky เดิม)
+Table view (จอกลาง, credential แยก §16) ยังไม่ทำตามที่ dispatch อนุญาตให้เลื่อนได้ถ้าเวลาไม่พอ —
+ของค้างที่ยังไม่มีเจ้าของ dispatch security-reviewer ตามที่สั่งบังคับ (mandatory) พร้อม audit เอง
+คู่ขนาน (ยืนยัน isDm/role-group ไม่มีทางถูก client spoof ได้เลยจากทั้งสองไฟล์)
+
+[2026-09-09 main-as-owner] : security-reviewer (ad138bfa41bee7a52) ชน 8-turn cap อีกครั้ง (4/4
+dispatch ไม่สำเร็จตลอด Sprint G นี้) — ก่อนหยุดยืนยันได้ 1 จุด: RequireCampaignDmAsync ถูกเรียก
+ก่อนแตะ DB จริงทั้งสอง branch ของ fog reveal/hide (ตรงกับที่เขียนไว้) กำลังจะตรวจ CampaignHub ต่อ
+แต่หมด turn — main session ตรวจ CampaignHub เองแล้วก่อนหน้านี้ (grep ยืนยัน isDm/RoleGroupName
+คำนวณจาก DB เสมอ ไม่มีทาง client ส่งมา spoof ได้) และเพิ่มเทสต์เคสขอบของ fog circle เอง (ยืนยัน
+<= เป็นพฤติกรรมตั้งใจ) ครบทุกจุดที่ตั้งใจให้ reviewer ตรวจ Sprint G Part 6 ปิดงานได้ — สรุปสถิติ
+รวม Sprint G: code/security-reviewer dispatch 4 ครั้ง (Part 1,2,4,6) สำเร็จเต็มรูป 0/4 ได้ผลบางส่วน
+1/4 (Part 1 ตรวจ RLS ได้ 1 claim) เสนอให้ปรับ turn cap ก่อนเริ่ม Part ถัดไปถ้าจะใช้ subagent review
+อีก ไม่งั้นควรข้ามการ dispatch ไปเลยแล้วให้ owner ตรวจเองตั้งแต่ต้นเพื่อประหยัดเวลา
+
+[2026-09-09 main] : Sprint G Part 6 (frontend) — สามมุมมองคนละ component จริง · ไม่มี <tier>
+(ตรงกับกฎ CLAUDE.md อยู่แล้วว่างาน UI ที่ layout-state-design ต้องสอดคล้องกันทั้งหน้าให้ทำเองรวดเดียว)
+โครงที่มีอยู่แล้วช่วยไว้มาก: DmConsole/PlayerView แยกไฟล์กันตั้งแต่ Sprint F พร้อม doc comment อธิบาย
+เหตุผลว่าทำไมแยก "ข้อมูล (hook)" ออกจาก "การนำเสนอ (component)" — เพิ่ม TableView.tsx เป็นตัวที่สาม
+ตามแบบเดียวกัน + route /campaigns/{id}/table
+
+**TableView ตั้งใจไม่เรียก useCampaignWorkspace/useCombatActions** ทั้งที่จะสั้นกว่า เพราะ hook สองตัว
+นั้นสร้าง mutation ติดมาเสมอ — ช่อง Input ของจอกลางใน §13.1 คือ "ไม่มีเลย" การไม่เรนเดอร์ปุ่มแต่ยังถือ
+mutation ไว้แปลว่า "ไม่มี input" เป็นแค่เรื่องที่เผลอลืมใส่ปุ่มได้ตลอด · ประกาศ query อ่านอย่างเดียวเอง
+ทั้งหมดแทน ยืนยันด้วย DOM จริงในเบราว์เซอร์: querySelectorAll('button,a,input,textarea,select,...')
+= **0 ตัว**
+
+**เจอปัญหาจริงตอนเปิดดูในเบราว์เซอร์ ไม่ใช่ตอนอ่านโค้ด**: layout ของ /campaigns/{id} มี chrome
+sticky ที่มีปุ่ม "ออกจากระบบ" ลอยทับจอกลาง — บนทีวีกลางโต๊ะที่ทุกคนเอื้อมถึงคือปุ่มที่ใครเผลอชนแล้ว
+จอหลุดออกจากระบบกลางเกม (และขัดสเปก "ไม่มี input") แก้ด้วย usePathname() ใน layout (ยืนยันกับ
+node_modules/next/dist/docs ของ Next 16 เองก่อนใช้ว่าเป็น pattern ที่ยังถูกต้อง) ให้ route /table
+ข้าม chrome แต่ยังใช้ด่าน auth ร่วมกัน
+
+ทดสอบจริงครบวงจรผ่านเบราว์เซอร์ + API + Postgres จริง (seed แคมเปญ/ฉาก/หมอก/token 4 ตัว):
+ผู้เล่นได้ token 3 ตัว (ตัวที่อยู่นอกหมอกไม่อยู่ใน JSON เลย ยืนยันทั้ง DOM และ raw payload) ·
+HP ปาร์ตี้จริง 28/32, 14/18 · HP ของ NPC ที่ซ่อนเป็น null · DM ได้ครบ 4 ตัวโดยตัวนอกหมอกขึ้นเส้นประ ·
+กดเปิดหมอกรอบตัวที่ซ่อน → payload ของผู้เล่นเปลี่ยนจาก 3 เป็น 4 ตัวทันที แต่ HP ของ NPC ยังซ่อนอยู่
+(สองแกนแยกกันจริงตามที่ออกแบบ) · กดปิดกลับ → กลับเป็น 3 ตัว
+tsc/lint/test(68)/build เขียวหมด
+
+[2026-09-09 main] : Sprint G Part 7 — คลัง preset ตัวละคร + seed ชุดแรก · ไม่มี <tier>
+(งาน backend มี migration/endpoint/entity ใหม่ที่เข้าเงื่อนไข 1a แต่เลือกทำเองต่อจาก pattern
+"owner ทำเอง" ที่ตั้งไว้ตลอด Sprint G เพราะ dispatch จริง 4 ครั้งใน Part 1,2,4,6 สำเร็จเต็มรูป 0/4)
+
+**schema ตรงกับดีไซน์ 100%**: ตรวจ `character_presets` (ตาราง+RLS policy `preset_visibility`+
+check constraint `ck_presets_global_must_be_srd_only`/`ck_presets_scope_campaign`) ก่อนเขียนโค้ด
+พบว่ามีครบจากไมเกรชันก่อนหน้าแล้ว ไม่ต้องแก้ schema เลย — ทำ pure-data migration เดียว (ไม่มี
+schema change จึงไม่เข้าเงื่อนไขกฎ "ตารางใหม่ต้องเปิด RLS เอง" เพราะไม่ใช่ตารางใหม่)
+
+**ขยาย action catalog เอง 3 รายการ** (Greataxe/Sacred Flame/Cure Wounds) เพราะ Part 1 มีแค่ 4
+รายการไม่พอครอบ 6 คลาส — ยึด pattern เดิมของ Part 1 เป๊ะ: เลข SRD ที่ owner ตรวจเองทั้งหมด ไม่ให้
+haiku "เขียนสเปกนักรบ level 1 จากความจำ" (กฎ 4a) เพราะเลขผิดจะกลายเป็นตัวละครจริงที่ผู้เล่นใช้เล่น
+จริง — คำนวณ ability score จาก standard array (15,14,13,12,10,8) + HP = max hit die + CON mod
+(ไม่ทอย/เฉลี่ย) ยืนยันด้วยมือทีละคลาส
+
+**ขยาย endpoint ที่ล็อกด้วยเทสต์เดิมอย่างปลอดภัย**: `POST .../characters` ถูกล็อกพฤติกรรมเดิมไว้ด้วย
+`CharacterCrudTests.cs` ("ห้ามแก้เทสต์เพื่อให้ผ่าน") — แทนที่จะแทรก logic preset เข้าไปในโค้ดเดิม
+เพิ่ม early-return แยกไปเมธอด `CreateFromPresetAsync` ต่างหาก ไม่แตะเส้นทางเดิมเลยแม้แต่บรรทัดเดียว
+`PresetId`/8 field ใหม่ใน response ต่อท้ายแบบ optional ทั้งหมด (ปลอดภัยเพราะเทสต์เดิม deserialize
+ด้วย record ของตัวเอง ฟิลด์เกินไม่ error)
+
+**เจอ auth conflict เดิมซ้ำจาก Part 5 ไม่มี** — endpoint นี้ไม่ต้องใช้ CampaignAuthorization ตัวไหน
+เป็นพิเศษ เพราะ preset list เปิดให้สมาชิกทุกคน (ไม่ใช่ DM-only) และ create-from-preset ใช้ auth
+เดิมของ POST characters อยู่แล้ว
+
+ทดสอบจริงครบวงจร: backend 11/11 preset tests ใหม่ + full suite 503/504 (เหลือ ApiKeyCrudTests
+flake เดิมที่รู้อยู่แล้วว่าไม่เกี่ยวกับงานนี้) · orphan check ผ่าน (grep `character_presets` เจอแค่ใน
+CharacterEndpoints.cs + CharacterPresetEndpoints.cs) · frontend tsc/lint/test(74, เพิ่มจาก 68)/build
+เขียวหมด · เบราว์เซอร์จริงผ่าน API+Postgres จริง: เลือกการ์ด "นักรบ (Fighter)" → ตั้งชื่อ "ทดสอบ นักรบ"
+→ กดยืนยัน → ตัวละครขึ้นในทั้ง "ตัวละครของฉัน" และ "ทุกคนในโต๊ะ" ทันที ไม่ต้อง refresh · ยืนยันสถิติ
+ตรงสเปกทั้งเส้นทาง (UI → API JSON → query Postgres ตรง): STR15/DEX13/CON14/INT12/WIS10/CHA8, HP12,
+AC18, sheet.equipment=["เกราะโซ่ (Chain Mail)","โล่ (Shield)","ดาบยาว (Longsword)"],
+actionCatalogRefs ชี้ Longsword ถูกต้อง — novice check (ข) ผ่านจริง ไม่ใช่แค่โค้ดอ่านแล้วดูถูก
+
+[2026-09-09 main] -> opus-worker : Sprint G Part 8 — implementation ของ MovementCostResolver
+ข้าม first triage ตามข้อ 1a (ต้องสร้างไฟล์ใหม่ใน src/DnDEz.Rules/ ซึ่ง sonnet-worker ไม่มี Write tool)
+และ dispatch ไป **ตัวเดียว** ตามคำสั่งเฉพาะของ Part นี้ที่ห้ามหั่น algorithm ให้หลายคนทำคนละส่วน
+(pathfinding + ต้นทุนพื้น + โหมดเคลื่อนที่ เกี่ยวพันกันหมด) · owner เขียนเทสต์ red เองก่อนแล้ว
+(MovementCostResolverTests.cs 24 เทสต์ + MovementReachabilityTests.cs 9 เทสต์ ยืนยัน red จริงด้วย
+dotnet build = CS0246 ทุกตัว) ตามข้อ 4 ของ TDD flow ที่ห้าม owner เขียน implementation ของเทสต์ตัวเอง
+
+[2026-09-09 main] : Sprint G Part 8 — ต้นทุนการเคลื่อนที่บนกริด (DnDEz.Rules) · ใช้ tier ตามที่สั่ง
+
+**สิ่งที่ได้จากการ "เปิด SRD จริงก่อนเขียน" ตามที่ dispatch สั่ง — คุ้มมาก** ดาวน์โหลด SRD 5.2 ฉบับ CC
+(SRD_CC_v5.2.pdf) แล้ว pdftotext อ่านตัวบทจริง ไม่ใช่พึ่งความจำ/ผลค้นเว็บมือสอง พบว่า **design doc
+§3.2 เดาโครงสร้างไว้ผิด 2 ข้อ**:
+1. §3.2 เขียนว่า "กระโดด/ปีน/บิน → ไม่คิด [ผลพื้น]" แต่ SRD "Climbing" บอกตรงข้ามว่าปีนเสีย
+   1 ฟุตเพิ่มต่อฟุต และ **2 ฟุตเพิ่มในพื้นเดินยาก** (ปีนในหนองน้ำ = 3 เท่า แพงกว่าเดินด้วยซ้ำ)
+   → มีแค่ Jump กับ Fly ที่ไม่คิดผลพื้นจริง · ผลคือ engine ต้องคิดราคาจาก MovementMode ไม่ใช่จาก
+   boolean `touches_ground` ตัวเดียวอย่างที่ §3.2 วางไว้ (catalog seed climb ไว้ touches_ground=false
+   ซึ่งถ้าเขียนกฎตามตัวอักษรจะได้ "ปีนในพื้นเดินยากฟรี") — เขียน doc comment กำกับใน MovementMode
+   กันคนรุ่นหลังแก้กลับด้าน **ไม่ได้แก้ seed ของ Part 1** เพราะเป็นการตัดสินใจเรื่องข้อมูล ควรให้
+   เจ้าของโปรเจกต์ตัดสินตอน Part 9
+2. §3.3 ถามว่าพื้นสองแหล่งรวมกันยังไง — SRD ตอบชัดว่า *"Difficult Terrain isn't cumulative; either
+   a space is Difficult Terrain or it isn't"* (ย้ำอีกรอบในหมวด Combat) → รวมด้วย **OR ห้ามคูณ/บวก**
+   ถ้าเดาเองน่าจะเขียนเป็น ×2 × ×2 = ×4 ซึ่งจะเป็นบั๊กที่เจอเฉพาะตอนซวยซ้อนแล้วไม่มีใครจับได้
+
+**คำถามที่ dispatch แขวนไว้ว่า "กระโดดข้ามพื้นเดินยากคิดยังไงตอนลงพื้น" มีคำตอบแล้ว**: SRD "Long Jump"
+— *"If you land in Difficult Terrain, you must succeed on a DC 10 Dexterity (Acrobatics) check or have
+the Prone condition."* คือ **ไม่ใช่เรื่องราคา แต่เป็นผลที่ตามมา** engine จึงคิดราคาฟุตต่อฟุตเท่าเดิม
+แล้วยกธง RequiresLandingCheck ให้ชั้นบนไปทอยเอง (ไม่ฉีด IDiceRoller เพราะการคิดราคาไม่ใช้เต๋าเลย)
+เกร็ดที่ยืนยันเพิ่ม: กริด SRD ทแยงราคาเท่าตรง (Chebyshev) — กฎสลับ 5/10 ฟุตเป็น optional variant
+ที่ไม่ได้อยู่ใน SRD
+
+**ผล tier**: owner เขียนเทสต์ red เอง 35 ตัว (2 ไฟล์) ยืนยัน red จริงด้วย dotnet build ก่อน แล้ว
+dispatch implementation ออกตัวเดียวตามที่สั่ง → **opus-worker ชนเพดาน 12 turn** โดยเอา turn ไป
+re-dispatch ต่อแทนที่จะเขียนเอง เหลือโค้ดที่คอมไพล์ไม่ผ่าน (frontier ของ Dijkstra ใส่ 3-tuple ลง
+SortedSet ที่รับ 2-tuple) → วินิจฉัยเองแล้ว dispatch ต่อให้ sonnet-worker แก้จุดเดียว = 256/256 เขียว
+· ส่วน EncounterEndpoints (เลิก hardcode 30 → อ่าน speed จริง) เขียนเทสต์ red 4 ตัวเอง (เห็น
+"Expected 40, Actual 30" จริง) แล้ว dispatch → **sonnet-worker ชนเพดาน 8 turn** ทำได้ 4 จาก 5 จุด
+owner ต่อจุดสุดท้ายเอง (GET active) + ตรวจ diff ทั้งหมดเอง
+
+**สถิติสะสม Sprint G: dispatch 8 ครั้ง ชนเพดาน 6 ครั้ง** · build นี้ไม่มี SendMessage ให้ resume
+subagent ที่ชนเพดาน (ToolSearch หาไม่เจอ) จึงต่องานเองทุกครั้งที่ชน — ยืนยันข้อเสนอเดิมจาก Part 6
+ว่าถ้าจะใช้ subagent ต่อ ต้องขยาย turn cap ก่อน ไม่งั้น owner ทำเองตั้งแต่ต้นคุ้มกว่า
+
+**เจอเทสต์ flaky ของ Part 5 (ไม่เกี่ยวกับ Part นี้)**: SceneTokenEndpointsTests
+`Move_updates_pending_and_get_scene_reflects_new_position_immediately` ยืนยันว่า Postgres ยังไม่มี
+ตำแหน่งใหม่ก่อน flush แต่ SceneTokenFlushService เดิน timer ทุก 20 วิ — ถ้า test class รันนานเกิน
+20 วิ flusher จะแทรกแล้วเทสต์ตก · รันเดี่ยวผ่าน รันรวมตก (ยืนยันทั้งสองทางแล้ว) ไม่ได้แก้ในรอบนี้
+เพราะนอกขอบเขต Part 8 — แยกเป็นงานต่างหาก
+
+[2026-09-09 main] : Sprint G Part 9 (backend) — affordance ต่อผู้ดูแต่ละคน · ใช้ tier ตามที่สั่ง
+
+**ความปลอดภัยทำเป็น "รูปร่างของ API" ไม่ใช่ "วินัยของคนเขียน"** — §1.2 บอกว่ารายการ action เป็น
+ช่องรั่วในตัวมันเอง (บอกว่า "โจมตีก็อบลินได้" = บอกว่ามีก็อบลิน) วิธีที่เลือกคือให้ core อยู่ใน
+`DnDEz.Rules/AffordanceResolver.cs` ที่ **ไม่มี DbContext ไม่มีสถานะโลกทั้งใบ** รับได้แค่ลิสต์เป้าที่
+กรองหมอกมาแล้ว → มันจึง *ไม่มีทาง* พูดถึงสิ่งที่มองไม่เห็นได้เลยเชิงโครงสร้าง ไม่ใช่ "คำนวณครบแล้ว
+อย่าลืมกรองตอนส่ง" ซึ่งเป็นแพทเทิร์นที่ Sprint F งานที่ 7 เคยพลาดมาแล้ว · เทสต์ adversarial อ่าน
+**raw JSON** ตรง ๆ ว่าไม่มี id/ชื่อของศัตรูที่อยู่ในหมอกเลย (ไม่ใช่ deserialize แล้วดูเฉพาะ field
+ที่นึกออก เพราะช่องรั่วที่อันตรายที่สุดคือช่องที่ไม่ได้นึกถึงตอนเขียน assertion)
+
+**กฎ "มองเห็นไหม" ถูกยุบให้เหลือที่เดียวทั้งระบบ** — เดิม `IsWithinArea` เป็น private อยู่ใน
+SceneEndpoints ถ้าคัดลอกมาใช้ที่ Part 9 อีกสำเนา วันหนึ่งมีคนแก้อันเดียวอีกอันจะรั่วเงียบ ๆ ต่อไป
+จึงย้ายขึ้นเป็น `FogLayerSerialization.IsWithinArea/IsVisibleTo` แล้วให้ SceneEndpoints เรียกตัวเดียวกัน
+· ยืนยันว่าย้ายแล้วพฤติกรรมไม่เปลี่ยนด้วยเทสต์ scene/fog/token เดิม 45/46 เขียว (ที่ตกคือ flake
+timing ของ Part 5 ที่บันทึกไว้แล้ว ไม่เกี่ยวกัน) และ grep ยืนยันว่าสูตรวงกลมเหลือที่เดียวจริง
+
+**กฎ SRD ที่ใช้ ตรวจกับตัวบทจริงก่อนเขียนทั้งคู่** (ต่อจาก Part 8 ที่ extract SRD_CC_v5.2.pdf ไว้):
+1. *"Your attack roll has Disadvantage when your target is beyond normal range, and you can't attack
+   a target beyond long range"* → เข้าโมเดล 3 ระดับพอดี: เกินระยะไกลสุด = ระดับ 1 (หายไปเลย),
+   ระหว่างระยะปกติกับไกลสุด = ระดับ 2 (อยู่ในรายการ + ป้ายเหตุผล)
+2. *"When you make a ranged attack roll with a weapon, a spell, or some other means, you have
+   Disadvantage on the roll if you are within 5 feet of an enemy..."* → กฎผูกกับ **การทอยโจมตี
+   ระยะไกล** ไม่ใช่ "เวท" · ถ้าเขียนตามคำบรรยายลอย ๆ ว่า "เวทระยะไกล + ประชิด = disadvantage"
+   Magic Missile (auto-hit ไม่มีทอยโจมตี) จะโดนโทษที่กฎไม่ได้กำหนด — มีเทสต์คุมเคสนี้โดยเฉพาะ
+
+**tags ใน catalog ว่างทุกแถว** (Part 1 seed ไม่เคยใส่) แต่ไม่เป็นปัญหา เพราะ engine หา "นี่ท่าระยะไกล
+ไหม" จาก `RangeNormalFeet > 5` และ "ต้องทอยโจมตีไหม" จาก `RollKind` ได้อยู่แล้ว — ตรงกับที่ dispatch
+สั่งว่ากฎทั่วไปต้องอยู่ใน engine ไม่ใช่เขียนเงื่อนไขซ้ำในทุกแถวของ catalog · ไม่ต้องเพิ่มคอลัมน์ใหม่เลย
+
+**ข้อสมมติที่ต้องให้เจ้าของโปรเจกต์ยืนยัน**: Part 5 ไม่เคยนิยามหน่วยของพิกัด token (เป็น double เฉย ๆ)
+Part 9 ตีความว่าเป็น "ช่อง" แล้วคิดระยะแบบ Chebyshev × 5 ฟุต ตาม SRD และให้เข้ากับกริดของ Part 8 ·
+รวมการแปลงหน่วยไว้ที่ฟังก์ชันเดียว (`DistanceInFeet`) ถ้าตกลงกันว่าเป็นพิกเซลให้แก้ที่เดียว
+
+**ผล tier — แย่ที่สุดตั้งแต่เริ่ม Sprint G**: dispatch 3 ครั้งใน Part นี้ ชนเพดาน 2
+· Rules core: opus-worker ทำสำเร็จเต็มรูป (ครั้งแรกของ Sprint G ที่ dispatch จบในรอบเดียว) และจับได้เอง
+  ว่า owner นับจำนวนเทสต์ใน brief ผิด (บอก 17 จริง 15) — verify แล้วว่า 15 จริง
+· API endpoint: opus-worker ชนเพดานโดยใช้ 22 tool call ไปกับการอ่านอย่างเดียว **ไม่ได้ไฟล์เลย**
+  → owner เขียนเองทั้งไฟล์
+· security-reviewer (บังคับตาม dispatch): ชนเพดานหลังยืนยันได้แค่ข้อ 4 (RLS/injection — ยืนยันว่า
+  middleware ครอบ transaction + SET LOCAL ให้ทุก endpoint รวมตัวใหม่ ไม่มีอะไร bypass)
+  → owner ตรวจข้อ 1/2/3/5 เองต่อ เหมือนที่ทำใน Part 6
+
+**ผลตรวจ security ที่ owner ทำต่อเอง** (ไม่ใช่รับคำ reviewer มาเขียน):
+- ข้อ 1 ไล่ทุกค่าใน response กลับไปหาต้นทาง — มาจาก `visibleTargets` ทางเดียว · `actorToken` ที่
+  จงใจหาจากลิสต์ที่ยังไม่กรอง ใช้เป็นจุดตั้งต้นวัดระยะเท่านั้น ไม่เคยโผล่ใน response (response
+  ไม่มีฟิลด์พิกัดเลย) และเข้าถึงได้เฉพาะตัวละครที่ผ่าน RequireCharacterActorAsync มาแล้ว
+- ข้อ 2 คุมด้วยเทสต์จริง: ผู้เล่นขอตัวละครคนอื่น = 403 · คนนอกแคมเปญ = 404 (ไม่ใช่ 403 ซึ่งจะยืนยัน
+  ว่าแคมเปญมีอยู่)
+- ข้อ 3 grep ยืนยัน `isDm` คำนวณจาก `campaign.OwnerUserId == callerUserId` ฝั่ง server ทั้งสอง
+  endpoint ไม่มี query/header ให้ client ส่งมา
+- ข้อ 5 **เจอของจริง**: `JsonElement.TryGetProperty` **โยน** InvalidOperationException ถ้า root ของ
+  `sheet` ไม่ใช่ object (ไม่ได้คืน false) → 500 บน endpoint ที่ไวต่อความปลอดภัย · วันนี้ยังไม่มีทาง
+  ให้ผู้ใช้เขียน sheet ดิบ (ตรวจแล้วทุกจุดที่เขียนเป็น server เขียนเอง) แต่คอลัมน์เป็น jsonb อิสระ
+  ที่ไม่มีอะไรบังคับรูปร่าง จึงกันไว้ที่ขอบเขต · **พิสูจน์แบบ red-before-green จริงตามกฎ**: ถอด guard
+  ออก → เทสต์ตก 500 พร้อม stack trace ชี้ TryGetProperty · ใส่กลับ → เขียว
+  (เกร็ด: ตอนใส่กลับด้วย `mv` ครั้งแรก mtime ของไฟล์เก่ากว่า DLL ทำให้ MSBuild ไม่ rebuild แล้ว
+  เทสต์ยังตกอยู่ — ต้อง touch ก่อน ระวังตอนใช้วิธี backup/restore แบบนี้)
+
+รวมทั้งโปรเจกต์: Rules 271/271 · Api 517/518 (ที่ตกคือ flake เดิมของ ApiKeyCrudTests ไม่เกี่ยวกัน)
+
+[2026-09-10 main] : Sprint G Part 9 (frontend) — พาเนล "คุณจะทำอะไร?" · ไม่มี <tier> (ตามที่สั่ง
+และตรงกับกฎ CLAUDE.md อยู่แล้วว่างาน UI ที่ layout-state-design ต้องสอดคล้องกันให้ทำเองรวดเดียว)
+
+**ข้อขัดแย้งระหว่าง mockup กับ design doc ที่ต้องตัดสิน**: mockup มีการ์ดสถานะที่ 4 "ใช้ไปแล้ว
+(เทาจาง)" แต่ §1.4 กำหนดว่าท่าที่ทรัพยากรหมดคือ "ระดับ 1 = ไม่อยู่ในรายการเลย" และ backend Part 9
+ตัดทิ้งตั้งแต่ต้นทางจริง (มีเทสต์ `Options_costing_a_spent_resource_are_not_offered` ล็อกไว้) →
+ลิสต์ที่มาถึง client จึงไม่มีทางบอกได้ว่า "เมื่อกี้มีท่าอะไรหายไปเพราะใช้ action ไปแล้ว"
+**ทางออก**: เรนเดอร์สถานะที่ 4 จาก **turn state** แทน (actionAvailable/bonusActionAvailable/
+reactionAvailable) ซึ่งเป็นข้อมูลของตัวเอง ไม่ใช่ความลับ และเป็นคำอธิบายที่ผู้เล่นต้องการพอดีเมื่อ
+เห็นรายการหดลง — ได้ผลเหมือน mockup โดยไม่ต้องให้ server ส่งของที่ทำไม่ได้ออกมา (ซึ่งจะขัด §1.2)
+
+**ยังกรอกสูตรเต๋าอยู่ และเป็นข้อจำกัดที่รู้ตัว ไม่ใช่ลืมทำ**: mockup มีบรรทัด "สร้างดาเมจ 1d8+3"
+แต่ **catalog ไม่มีข้อมูลดาเมจเลย** — §2.3 ระบุสิ่งที่ catalog เก็บไว้ชัดเจน (ระยะ/ชนิดเป้า/ราคา/
+รูปทอย/ป้ายประเภท) ดาเมจไม่อยู่ในนั้น และค่าโจมตีก็ต้องรู้ว่าท่าไหนใช้ STR/DEX ซึ่ง catalog ไม่ได้บอก
+→ เลือก **ไม่แต่งตัวเลขขึ้นมาเอง** (กฎข้อ 4a ของ CLAUDE.md ว่าด้วยการแต่งตัวเลขที่ไม่ได้วัดจริง
+ใช้กับกรณีนี้ตรง ๆ) · สิ่งที่ Part นี้แก้ได้จริงคือ "เลือกอะไรกับใคร" ซึ่งย้ายไปให้ server คำนวณครบแล้ว
+ส่วนช่องตัวเลขเหลือเป็นของรองที่โผล่หลังเลือกการ์ด รอ Part ที่เพิ่มดาเมจ/ability ลง catalog
+
+เพิ่ม `Cost` + `DistanceFeet` ใน response ของ affordance endpoint เพื่อให้การ์ดแสดง "1 Action"
+ตาม mockup ได้ — ทั้งคู่มาจากค่าที่คำนวณไปแล้วในฟังก์ชันเดิม ไม่ query เพิ่ม และไม่ใช่ข้อมูลลับ
+(ราคาเป็นของท่าตัวเอง ระยะเป็นของเป้าที่ผู้ดูมองเห็นอยู่แล้ว)
+
+**สถานะการตรวจสอบ (แก้จากบันทึกแรกที่เขียนตอน Docker ยังพัง — ตอนนี้ตรวจครบแล้ว)**: Docker Desktop บนเครื่องนี้ค้างตั้งแต่บูต (log ยืนยันว่ามันเปิด
+error dialog แบบ always-on-top ตอน startup แล้วไม่ไปต่อ · WSL distro `docker-desktop` หยุดอยู่
+บูตเองแล้วแต่ named pipe ก็ยังไม่ขึ้น · restart Docker Desktop ใหม่แล้วก็ยังเหมือนเดิม) จึง**รัน
+integration test ที่ต้องใช้ Postgres/Redis ไม่ได้เลยในรอบนี้**
+- ตรวจแล้วจริง: frontend tsc/lint สะอาด · vitest 87/87 (เพิ่ม 13 ตัวใหม่) · production build ผ่าน
+  ครบ 5 route · โค้ดฝั่ง .NET คอมไพล์ผ่าน 0 warning
+- **ยังไม่ได้ตรวจ**: การเพิ่ม Cost/DistanceFeet ใน response ยังไม่ได้รัน AffordanceEndpointsTests ซ้ำ
+  (คอมไพล์ผ่านอย่างเดียว — เทสต์นิยาม record ของตัวเองที่ไม่มีสองฟิลด์นี้ ซึ่ง System.Text.Json
+  ควรจะข้ามฟิลด์เกินให้ แต่ **ยังไม่ได้พิสูจน์**) และยังไม่ได้เปิดเบราว์เซอร์ดูของจริง
+- novice check (ข) ของ Part นี้ถูกล็อกไว้แล้วที่ระดับ engine ตั้งแต่ backend rounds
+  (`Melee_attack_on_distant_enemy_is_not_offered_at_all`) ที่เหลือคือยืนยันภาพจริงบนหน้าจอ
+
+[2026-09-10 main] : Part 9 (frontend) — ตรวจครบแล้ว (ต่อจากบันทึกข้างบนที่ค้างไว้เพราะ Docker พัง)
+
+Docker Desktop กลับมาเองหลังบูต WSL distro `docker-desktop` ด้วยมือ (`wsl -d docker-desktop`)
+แล้ว engine ขึ้นตามมาในภายหลัง — สาเหตุเดิมคือ distro ไม่ได้ถูกสตาร์ต ไม่ใช่ error dialog อย่างที่
+เดาไว้ตอนแรก (dialog ที่เห็นใน log น่าจะเป็นผลพวง ไม่ใช่ต้นเหตุ) · **บันทึกไว้เพราะเดาสาเหตุผิด
+รอบแรก** — ถ้าเจออีกให้ลอง `wsl -l -v` ก่อนเลย ถ้า distro Stopped ให้บูตเอง
+
+ผลตรวจ:
+- `AffordanceEndpointsTests` 10/10 ผ่านหลังเพิ่ม Cost/DistanceFeet (ยืนยันว่าเทสต์เดิมที่นิยาม record
+  ของตัวเองไม่พังเพราะฟิลด์เกิน — System.Text.Json ข้ามให้จริงตามที่คาด แต่รอบนี้พิสูจน์แล้ว)
+- ทั้งโปรเจกต์: Rules 271/271 · Api 516/518 (ตกสองตัวคือ flake เดิมทั้งคู่ — ApiKeyCrudTests และ
+  SceneTokenEndpointsTests.Move_updates_pending ที่บันทึกไว้แล้วว่าแข่งกับ background flusher)
+- **novice check (ข) ยืนยันบนหน้าจอจริง**: seed ฉากตามโจทย์ (ฮีโร่ถือดาบยาว 5ft + ธนูสั้น 80/320,
+  ก็อบลินประชิดที่ 5 ฟุต, ก็อบลินอีกตัวที่ **70 ฟุต**) แล้วเข้าหน้า /play ด้วยบัญชีผู้เล่นจริง
+  → การ์ด **LONGSWORD มีเป้าเดียวคือก็อบลินประชิด (5 ฟุต)** · ก็อบลินที่ 70 ฟุตโผล่เฉพาะใต้การ์ด
+  SHORTBOW เท่านั้น · ตรวจแบบไล่ทีละการ์ดใน DOM ไม่ใช่ regex กวาดทั้งพาเนล (regex รอบแรกให้ผลบวกลวง
+  เพราะคร่อมข้ามการ์ด — เกือบรายงานผ่านด้วยหลักฐานผิด)
+- สถานะการ์ดครบตาม mockup: LONGSWORD ปกติไม่มีป้าย · SHORTBOW ทั้งสองเป้าได้ป้าย DISADVANTAGE แดง
+  พร้อมกล่องเหตุผลไทยที่อธิบายกลไกให้ด้วย ("ทอย 2 ลูก เอาลูกที่แย่กว่า") · กดการ์ดแล้วแถบลงมือโผล่จริง
+- console error มีแต่ 403 ของ `/proposals` ซึ่งเป็น endpoint DM-only ที่หน้าผู้เล่นยิงมาตั้งแต่ก่อน
+  Part นี้ (ไม่เกี่ยวกัน) · `/affordances/...` = 200 OK
+
+[2026-09-10 main] : Sprint G Part 10 — OA + reaction timeout · **ทำได้ 2 ใน 4 ส่วน ยังไม่จบ Part**
+
+**ประเมินขนาดงานก่อน แล้วเลือกไม่ฝืนทำรวดเดียว** ตามที่ dispatch สั่งว่า "ห้ามฝืนทำเองแล้วได้ของ
+ครึ่ง ๆ กลาง ๆ" · Part นี้จริง ๆ มี 4 ส่วนที่แยกกันได้: (ก) กฎ OA แบบ deterministic (ข) endpoint
+เตือนก่อนกด (ค) กลไก interrupt หยุด-ถาม-รอ-เดินต่อ (ง) frontend prompt + นับถอยหลัง ·
+รอบนี้ปิด (ก) กับ (ข) แบบสมบูรณ์พร้อมเทสต์ ส่วน (ค)/(ง) ยังไม่แตะ — **ไม่ได้เขียนค้างไว้ครึ่งทาง**
+
+**ไม่ escalate ขึ้น fable-worker** แม้ dispatch เปิดช่องไว้ เพราะไม่ใช่งานที่เกินความเข้าใจ แต่เป็น
+งานที่ใหญ่เกินหนึ่งรอบ · และสถิติของ sprint นี้ (dispatch 13 ครั้ง ชนเพดาน 8) บอกว่า agent ที่เริ่มจาก
+ศูนย์มักเผา turn ไปกับการสำรวจแล้วไม่ได้ของ — ซึ่งจะกลายเป็น "ของครึ่ง ๆ กลาง ๆ" ที่ dispatch ห้ามพอดี
+· dispatch เฉพาะแกน pure ของ (ก) ให้ opus-worker **สำเร็จเต็มรูปในรอบเดียว** (ครั้งที่ 2 ของ sprint
+ที่สำเร็จ — ทั้งสองครั้งเป็น "ไฟล์เดียว pure ระบุ API ครบ" เหมือนกัน = รูปแบบ dispatch ที่เวิร์คจริง)
+
+**ตัวบท SRD 5.2 ที่เปิดอ่านจริงก่อนเขียน** (หมวด Combat "Opportunity Attacks") มี 3 จุดที่เดาผิดง่าย:
+1. trigger คือ **"ออกจาก" ระยะ** ไม่ใช่เข้ามาใกล้ และไม่ใช่เดินอยู่ในระยะ
+2. *"The attack occurs right before it leaves your reach"* → โจมตีเกิดที่ **ช่องสุดท้ายที่ยังอยู่
+   ในระยะ** ไม่ใช่ช่องปลายทาง — **นี่คือจุดที่การเคลื่อนที่ต้องหยุดค้างไว้รอ reaction** ถ้าหยุดผิดช่อง
+   ระยะโจมตีจะผิดตามไปด้วย
+3. *"a creature **that you can see**"* → ผูกกับหมอกของ Part 6 โดยตรง
+
+**เจอว่า Part 8 เป็น orphan**: grep แล้วไม่มี endpoint ไหนเรียก `MovementCostResolver` เลย —
+Part 5 ขยับ token แบบ teleport (ตั้งพิกัดตรง ๆ) ไม่มีเส้นทาง ไม่มีราคา · `movement/preview` ของ
+รอบนี้เป็นที่แรกที่ geometry engine ถูกต่อเข้ากับ endpoint จริง
+
+**ช่องรั่วที่กันไว้**: คำเตือนบอกชื่อศัตรู ถ้าเตือนถึงตัวที่ยังอยู่ในหมอกก็เท่ากับบอกว่ามีมันอยู่
+(บทเรียนเดียวกับ Part 9) → เตือนเฉพาะศัตรูที่เปิดหมอกแล้ว · ผลข้างเคียงที่ตั้งใจและถูกทั้งสองทาง:
+นักซุ่มโจมตีจะไม่โผล่ในคำเตือน ซึ่งการซุ่มโจมตี *ควร* เซอร์ไพรส์อยู่แล้ว
+
+**ข้อสมมติที่เลือกแบบ "เตือนเกินดีกว่าเตือนขาด"** (ทิศเดียวกับ Part 9 ตอนเจอ Incapacitated):
+`ReactionAvailable = true` เสมอ เพราะ turn state ที่มีเก็บทรัพยากรของ *เจ้าของเทิร์นปัจจุบัน* คนเดียว
+ยังไม่มีทางรู้ว่าศัตรูแต่ละตัวใช้ reaction ไปหรือยัง · และ `ReachFeet` = 5 คงที่เพราะยังไม่มีคอลัมน์
+reach ในสคีมา (engine รองรับค่าอื่นแล้ว มีเทสต์คุมเคส 10 ฟุต — ขาดที่เก็บข้อมูล ไม่ใช่ขาดกฎ)
+
+## แบบของกลไก interrupt ที่ออกแบบไว้แล้วแต่ยังไม่ได้สร้าง (ส่วน ค)
+
+**state เก็บที่ไหน**: Redis คีย์ `dndez:encounter:{id}:pending-reaction` TTL = `reaction_timeout_seconds`
++ grace · เก็บ moverCharacterId, เส้นทางที่เหลือ, index ที่หยุด, threatCharacterId/userId, deadline (UTC)
+
+**ทำไมปลอดภัย — ข้อสังเกตหลักของการออกแบบนี้**: `EncounterTurnStateStore` วางนโยบายไว้แล้วว่า
+"อ่านไม่ได้ = fail closed เป็นค่าที่สร้างใหม่ได้" และ "TTL หมดต้องให้พฤติกรรมเดียวกับ Redis ล่มเป๊ะ" ·
+สำหรับ pending reaction ทั้งสองกรณีนี้**ตรงกับกฎของเกมที่ล็อกไว้แล้วพอดี** (player-side-design §4:
+หมดเวลา = ถือว่าไม่ใช้ reaction แล้วเดินต่อ) → **Redis ล่ม / TTL หมด / ผู้เล่นไม่กด ทั้งสามทางจบที่
+ผลลัพธ์เดียวกัน** คือการเคลื่อนที่เดินต่อโดยไม่มี OA · ไม่มี failure path ใหม่ให้ออกแบบเลย
+
+**เดินต่อเองโดยไม่ค้าง** ต้องมีสองชั้นคู่กัน: (1) lazy — ทุก request ที่แตะ encounter เช็ค deadline
+ก่อนทำอย่างอื่น ทำให้ไม่มีทางอ่านเจอ state ที่ค้างเกินเวลา (2) `BackgroundService` + `PeriodicTimer`
+กวาดตัวที่หมดเวลาแล้ว resolve + broadcast (ลอกแพทเทิร์น `SceneTokenFlushService` ของ Part 5) —
+ชั้นนี้จำเป็นเพราะ DoD บอกว่าต้องเดินต่อได้เองแม้ไม่มีใครยิง request เข้ามาเลย
+
+**client หลุดกลางทาง**: ไม่ต้องทำอะไรพิเศษ — deadline เป็นเวลาสัมบูรณ์ฝั่ง server คนที่หลุดก็แค่
+ไม่เห็น prompt แล้ว sweeper ปิดให้เป็น "ไม่ใช้ reaction" · ต่อกลับมาทันก่อน deadline ก็ยังกดได้
+
+**แจ้งเฉพาะเจ้าของสิทธิ์**: เพิ่มกลุ่มต่อผู้ใช้ `campaign:{id}:user:{userId}` ใน `JoinCampaign`
+(รูปแบบเดียวกับ role group ของ Part 6) แทนการใช้ `Clients.User()` ที่ต้องผูก `IUserIdProvider`
+กับ claim ของ JWT เพิ่ม
+
+เทสต์รวมทั้งโปรเจกต์หลังรอบนี้: Rules 284/284 · Api 527/527 (รอบนี้ flake เดิมสองตัวไม่ขึ้นเลย)
+
+[2026-09-10 main] : Sprint G Part 10 (ค)+(ง) — กลไก interrupt + UI · ปิด Part 10 ครบทั้ง 4 ส่วนแล้ว
+
+**(ค) กลไก interrupt** — สร้าง 3 ไฟล์: `PendingReactionStore` (Redis), `PendingReactionSweeper`
+(+ `PendingReactionSweepService` background timer 5 วิ), `MovementCommitEndpoints` (commit + respond)
+· เพิ่ม `CampaignHub.UserGroupName` เพื่อยิง prompt หาคนเดียว (ข้อ 3 ของ dispatch) — เลือกทำเป็น
+group แทน `Clients.User()` เพราะตัวนั้นต้องผูก `IUserIdProvider` กับ claim ของ JWT เพิ่ม ส่วน group
+ใช้กลไกเดียวกับ role-group ที่มีอยู่แล้วเป๊ะ
+
+**ข้อสังเกตหลักของการออกแบบที่ทำให้ไม่ต้องมี failure path ใหม่เลย**: "การรอ reaction ที่หายไป"
+มีความหมายที่ถูกต้องอยู่แล้วคือ "ไม่มีใครสวน แล้วเดินต่อ" ตรงกับ player-side-design §4 เป๊ะ →
+**ผู้ถือสิทธิ์กดไม่สวน / หมดเวลา / Redis ล่ม-คีย์หมดอายุ จบเหมือนกันหมด** · ต่างจาก
+`ISceneTokenStore` ที่ตำแหน่ง token หายไม่ได้เด็ดขาด — เขียน doc comment เทียบสองนโยบายไว้แล้ว
+· `ResumeAsync` เป็นโค้ดชุดเดียวที่ใช้ทั้งทาง "กดตอบ" และทาง "sweeper ปิดให้" จงใจ ไม่แยกเขียน
+เพราะสองทางต้องให้ผลเหมือนกันตลอดไป
+
+**(ง) UI** — `ReactionPrompt` (นับถอยหลังจาก **deadline สัมบูรณ์ของ server** ไม่ใช่นับเองจาก
+timeoutSeconds เพื่อให้ตัวเลขบนจอตรงกับตัวที่ sweeper ใช้ตัดสินจริงแม้ผู้ใช้เพิ่งต่อกลับมา),
+`MovementPlanner`, `reaction-prompt.ts` (13 เทสต์) · ติดตั้งทั้งหน้า DM และหน้าผู้เล่น
+
+**⚠️ ความขัดแย้งเรื่องหน่วยพิกัดที่ยังไม่ถูกตัดสิน (ต้องให้เจ้าของโปรเจกต์เคาะ)**: `SceneMap`
+เรนเดอร์โดยถือว่า x/y ของ token เป็น **พิกเซลบนรูปแผนที่** (มี comment ระบุชัดในไฟล์) แต่ engine
+ของ Part 8/9/10 คิดระยะโดยถือว่าเป็น **ช่องกริด** · จึงจงใจ **ไม่ทำ UI คลิกเลือกเส้นทางบนแผนที่**
+ในรอบนี้ เพราะจะเป็นการล็อกข้อสมมติที่ขัดกันเองลงไปอีกชั้น — ให้กรอกพิกัดเป็นช่องตรง ๆ ไปก่อน
+
+**บทเรียนจากการดีบัก (เกือบสรุปสาเหตุผิด)**: prompt ไม่ขึ้นจอทั้งที่ payload มาถึงและ normalize ผ่าน
+— ตั้งสมมติฐานว่าเป็นเพราะเขียนลง `useState` จาก callback ของ hub แล้วโดน stale closure จึงย้ายไป
+zustand · **ของจริงคือ Turbopack เสิร์ฟ chunk ค้างจากตอนที่ไฟล์ยังแก้ไม่เสร็จ** (console มี
+`ReferenceError: reactionPrompt is not defined` ทั้งที่ grep ทั้ง repo แล้วไม่มีจุดไหนอ้างผิดเลย
+และ tsc/lint เขียว) — `rm -rf .next` + restart dev server แล้วขึ้นทันที · **แก้ doc comment ที่เขียน
+อ้างสาเหตุผิดออกแล้ว** เพราะขัดกฎ "ห้ามเขียนคำยืนยันที่ยังไม่ได้พิสูจน์" โดยตรง · การย้ายไป zustand
+ยังเก็บไว้เพราะตรงกับ realtime state ตัวอื่นทั้งหมดและได้ cascade-clear ตอนสลับเซสชันฟรี แต่
+**ไม่ใช่ตัวแก้บั๊ก** · เกร็ดที่ควรจำ: ถ้า console ฟ้อง ReferenceError ของ identifier ที่ grep แล้ว
+ไม่มีจริง ให้สงสัย build cache ก่อนสงสัยตรรกะ
+
+**ทดสอบจริงครบวงจรบนเบราว์เซอร์ + API + Postgres + Redis จริง**:
+- preview: ราคา 15 ฟุต + คำเตือนชื่อก็อบลินเป็นภาษาคน
+- commit: `AwaitingReaction` · token **ค้างที่ (2,0)** = ช่องสุดท้ายที่ยังอยู่ในระยะ ตามตัวบท SRD
+  *"The attack occurs right before it leaves your reach"* ไม่ใช่ช่องปลายทาง
+- ผู้เล่นที่กำลังถูกสวนกดตอบแทนก็อบลิน → **403**
+- DM (เจ้าของสิทธิ์) กดสวน → `Completed`, reactionUsed=true, token ไปถึง (3,0)
+- **หมดเวลาจริงโดยไม่มีใครกดอะไรและไม่มี request ใด ๆ เข้ามา** (ตั้ง timeout 5 วิ) → sweeper ปิดให้เอง
+  token เดินจาก (2,0) ไป (3,0) เอง = ข้อ 4 ของ dispatch ผ่านจริง ไม่ใช่แค่ unit test
+- UI: prompt ขึ้นเฉพาะจอ DM พร้อมนับถอยหลังเดินจริง (281→277) แถบเวลา 92% ปุ่มสวนกลับ/ปล่อยไป
+  และบรรทัด "ไม่กดอะไรภายในเวลา = ปล่อยไป แล้วเกมเดินต่อเอง" · กดปล่อยไป → prompt หาย + token ถึง (3,0)
+
+เทสต์รวม: Rules 284/284 · Api 537/537 (รวม MovementCommit 10 ตัวใหม่) · frontend 100/100 · build เขียว
+
+[2026-09-10 main] : Sprint G Part 10 — ลาก token เดินตามกฎ (ตามที่เจ้าของโปรเจกต์สั่งให้เคาะเอง)
+
+**เคาะเรื่องหน่วยพิกัดแล้ว: เก็บ token เป็น "ช่อง" ไม่ใช่พิกเซล** — เจ้าของโปรเจกต์มอบให้ตัดสินเอง
+เหตุผล: กฎต้องเป๊ะ ช่องเป็นจำนวนเต็มคิด Chebyshev แล้วไม่มีปัดเศษ · ตรงกับ engine Part 8/9/10 ที่มี
+อยู่แล้วทั้งหมด · design doc พูดเป็นช่องทั้งเล่ม · แก้ที่เดียว (SceneMap) แทนที่จะต้องแก้ทุก endpoint
+ที่แตะระยะ · **hex/isometric จะต้องกลับมาทบทวนข้อนี้** แต่ยังไม่มีในแผน
+
+**สิ่งที่เอามาจาก Owlbear Rodeo** (อ่าน SDK docs จริง ไม่ใช่เดา): ของเขาเก็บเป็น **พิกเซล** จริง
+(`getDistance` ระบุ "position in pixels") + มี `dpi`, `scale` ("5ft"), `measurement`
+(CHEBYSHEV/ALTERNATING/EUCLIDEAN/MANHATTAN) เป็น **ข้อมูล** ไม่ใช่ hardcode · เขาเลือกพิกเซลเพราะ
+ต้องรองรับ hex/isometric ที่ไม่มีพิกัดช่องจำนวนเต็ม **และเพราะเขาไม่ใช่ rules engine** (ไม่มี
+pathfinding/ต้นทุนพื้น/OA) · บทเรียนจริงที่เอามาใช้ไม่ใช่ "ใช้พิกเซล" แต่คือ **"ต้องมีจุดแปลงหน่วย
+จุดเดียว"** — ทุกคนของเขาเรียก `grid.getDistance()` ตัวเดียว ไม่มีใครคิดเลขเอง · ของเราจึงให้
+`SceneMap.cellToPx` เป็นจุดเดียวที่แปลง
+
+**ของใหม่**: `GET .../movement/reachable/{characterId}` (6 เทสต์) — ต่อ `MovementCostResolver.Reachable`
+ของ Part 8 เข้า endpoint เป็นครั้งแรก · คืน **เส้นทางที่ถูกที่สุดมาพร้อมทุกช่อง** เพื่อให้ตอนปล่อย
+token client ส่งเส้นทางของ server กลับมา commit ได้เลย — **client ไม่ประกอบเส้นทางเอง** ซึ่งกันไม่ให้
+ส่งทางที่เลี่ยง OA หรือลัดผ่านสิ่งกีดขวางเข้ามา · มีเทสต์ยึดสองฝั่ง (เส้นทางจาก reachable ต้องผ่าน
+commit เสมอ) เพราะถ้าไม่ตรงกัน ผู้เล่นจะลากไปวางในที่ที่ไฮไลต์ว่าไปได้แล้วโดนปฏิเสธ
+
+**บั๊กที่เจอจากการเปิดดูจริง ไม่ใช่จากเทสต์**: `sceneBounds` มี `padding = 40` ที่เขียนไว้ตอนยัง
+ตีความ x/y เป็นพิกเซล พอเปลี่ยนเป็นช่อง มันกลายเป็น "เผื่อขอบ 40 ช่อง" = 2000 พิกเซล → viewBox
+กลายเป็น -2300..2700 token เล็กจนมองไม่เห็น · แก้เป็น 1 ช่อง (เทสต์เดิมส่ง padding มาเองทุกตัว
+จึงไม่กระทบ) · **บทเรียน: ค่าคงที่ที่ผูกกับหน่วยต้องตามไปแก้ด้วยทุกครั้งที่เปลี่ยนหน่วย**
+
+**อีกบั๊ก**: commit invalidate แค่ `scene`/`affordances` ไม่ได้ invalidate `reachable` → ขยับแล้ว
+ขอบเขตยังเป็นของตำแหน่งเก่า ครั้งต่อไปผู้เล่นจะลากไปวางในที่ที่ commit ปฏิเสธ · แก้แล้ว
+
+**ทดสอบจริงบนเบราว์เซอร์ครบวงจร** (ลากด้วย PointerEvent จริงผ่าน CTM ของ SVG):
+- ลาก token ตัวเอง → ไฮไลต์ 169 ช่อง (= speed 30 ฟุต = 6 ช่องทุกทิศ ตรงกับที่เทสต์ backend ยึดไว้)
+- ลากไป (5,2) → **Postgres ยืนยันว่า token ย้ายจริง**
+- ลากเกินระยะ (8 ช่อง) → วงตัวอย่างเป็น **แดง** และ **token ไม่ขยับเลย**
+- ลากหนีก็อบลินที่ประชิด → เกิด pending reaction จริงใน Redis · DM กดสวน → Completed → token ถึง (8,2)
+  · **เกือบรายงานว่าเป็นบั๊ก**: คาดว่า token จะหยุดที่ (7,2) แต่หยุดที่ (5,2) — ที่จริง Dijkstra เลือก
+  เส้นทางอ้อมผ่าน (6,1) ซึ่งราคาเท่ากัน แล้วเส้นทางนั้น**หลุดระยะตั้งแต่ก้าวแรก** attack square จึงเป็น
+  จุดเริ่มพอดี ถูกต้องตามกฎแล้ว — ตรวจ payload ใน Redis ถึงเห็นว่าเส้นทางไม่ใช่เส้นตรงอย่างที่เดา
+
+เทสต์: Rules 284/284 · Api 543 (เพิ่ม reachable 6 ตัว, ตกแค่ flake เดิม 2 ตัว) · frontend 100/100 · build เขียว
+
+**ยังค้าง (บันทึกไว้ไม่ให้ลืม)**: `pixelsPerSquare` จาก `scenes.grid` ยังไม่ได้ต่อเข้า SceneMap จริง
+(ใช้ดีฟอลต์ 50) · `feetPerSquare`/`measurement` ยังเป็น hardcode ไม่ได้ย้ายเป็นข้อมูลแบบ Owlbear ·
+พื้นเดินยาก/กำแพงยังไม่มีที่เก็บ (TerrainField.Empty ทุกที่) — engine รองรับแล้ว ขาดแค่ข้อมูล

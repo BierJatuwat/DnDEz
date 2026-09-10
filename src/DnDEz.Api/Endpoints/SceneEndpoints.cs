@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Amazon.S3;
 using Amazon.S3.Model;
 using DnDEz.Api.Auth;
+using DnDEz.Api.Realtime;
 using DnDEz.Domain.Entities;
 using DnDEz.Domain.Enums;
 using DnDEz.Infrastructure.Persistence;
@@ -209,13 +210,18 @@ public static class SceneEndpoints
         // ── อ่าน scene ที่ active ของ session ─────────────────────────────────
         // DM-only ใน Part นี้โดยตั้งใจ — payload ที่ต่างกันตาม role (DM/Player/Table, §13) เป็นงาน
         // ของ Sprint G Part 6 (fog + 3 มุมมอง) ยังไม่ทำที่นี่ ไม่ใช่ลืม
+        // Sprint G Part 6 (design doc §13.1/§13.3) — เปิดให้สมาชิกทุกคนเรียกได้ (ไม่ใช่ DM-only แล้ว)
+        // payload กรองต่างกันตาม role ที่ชั้นนี้เอง ไม่ใช่ปล่อยให้ client กรองเอง (§13.3)
+        // ⚠️ Table view (จอกลาง, credential แยกตาม §16) **ยังไม่ทำในรอบนี้** — ของค้างที่ยังไม่มีเจ้าของ
+        // ตามที่ dispatch อนุญาตให้เลื่อนได้ถ้าเวลาไม่พอ รองรับแค่ DM/Player สองมุมมองก่อน
         app.MapGet("/campaigns/{campaignId:guid}/sessions/{sessionId:guid}/scene", async (
             Guid campaignId,
             Guid sessionId,
             ClaimsPrincipal principal,
             DnDEzDbContext db,
             IAmazonS3 s3,
-            MapAssetStorageOptions storage) =>
+            MapAssetStorageOptions storage,
+            ISceneTokenStore tokenStore) =>
         {
             var callerUserId = principal.GetUserId();
             if (callerUserId is null)
@@ -223,11 +229,12 @@ public static class SceneEndpoints
                 return Results.Unauthorized();
             }
 
-            var (_, failure) = await CampaignAuthorization.RequireCampaignDmAsync(db, campaignId, callerUserId.Value);
-            if (failure is not null)
+            var campaign = await db.Campaigns.SingleOrDefaultAsync(c => c.Id == campaignId);
+            if (campaign is null)
             {
-                return failure;
+                return Results.NotFound();
             }
+            var isDm = campaign.OwnerUserId == callerUserId.Value;
 
             var session = await db.Sessions.SingleOrDefaultAsync(s => s.Id == sessionId && s.CampaignId == campaignId);
             if (session is null)
@@ -250,7 +257,9 @@ public static class SceneEndpoints
                 ? null
                 : await CreateSignedUrlAsync(s3, storage, scene.MapAsset.StorageKey);
 
-            return Results.Ok(ToResponse(scene, imageUrl));
+            var pendingPositions = await tokenStore.GetPendingPositionsAsync(scene.Id);
+            var response = await BuildProjectedResponseAsync(db, scene, imageUrl, pendingPositions, isDm);
+            return Results.Ok(response);
         }).RequireAuthorization();
 
         // ── จัดกริด (ล็อก pixel-per-square) ───────────────────────────────────
@@ -355,8 +364,94 @@ public static class SceneEndpoints
         return storage.RewriteSignedUrlToHttp ? url.Replace("https://", "http://", StringComparison.Ordinal) : url;
     }
 
-    private static SceneResponse ToResponse(Scene scene, string? imageUrl) => new(
-        scene.Id, scene.SessionId, scene.Name, scene.Grid, scene.MapAssetId, imageUrl, scene.IsActive);
+    private static SceneResponse ToResponse(Scene scene, string? imageUrl) =>
+        ToResponse(scene, imageUrl, pendingPositions: null);
+
+    /// <summary>
+    /// Sprint G Part 5 — <paramref name="pendingPositions"/> คือตำแหน่งที่ยังไม่ flush ลง Postgres
+    /// (มาจาก Redis) เอาไว้ทับตำแหน่งใน `scene.Tokens` ก่อนส่งออก **เฉพาะตอน GET** — ถ้าไม่ทับตรงนี้
+    /// การ refresh หน้าทันทีหลังลาก token จะเห็นตำแหน่งเก่า (ยังไม่ flush) ซึ่งขัด novice check ของ
+    /// Part นี้ตรง ๆ ("ลาก token แล้วตำแหน่งรอดหลัง refresh หน้า")
+    /// </summary>
+    private static SceneResponse ToResponse(
+        Scene scene, string? imageUrl, IReadOnlyDictionary<Guid, TokenPosition>? pendingPositions)
+    {
+        var tokens = SceneTokenSerialization.Parse(scene.Tokens);
+        if (pendingPositions is { Count: > 0 })
+        {
+            for (var i = 0; i < tokens.Count; i++)
+            {
+                if (pendingPositions.TryGetValue(tokens[i].Id, out var pos))
+                {
+                    tokens[i] = tokens[i] with { X = pos.X, Y = pos.Y };
+                }
+            }
+        }
+
+        var fogAreas = FogLayerSerialization.ParseRevealedAreas(scene.FogLayer)
+            .Select(a => new FogAreaResponse(a.Id, a.X, a.Y, a.Radius)).ToList();
+
+        return new SceneResponse(
+            scene.Id, scene.SessionId, scene.Name, scene.Grid, scene.MapAssetId, imageUrl, scene.IsActive,
+            tokens.Select(t => new TokenResponse(t.Id, t.EntityType, t.EntityId, t.X, t.Y)).ToList(),
+            fogAreas);
+    }
+
+    /// <summary>
+    /// Sprint G Part 6 (design doc §13.1, §13.3) — ใช้เฉพาะ GET scene (endpoint เดียวที่ไม่ใช่
+    /// DM-only) จุดเดียวที่ทำ projection ตาม role ทั้งหมด:
+    ///  1. token ที่อยู่นอกพื้นที่หมอกที่เปิดแล้ว **ถูกตัดออกจาก list เลย** (ไม่ใช่ส่งไปแล้วซ่อนที่
+    ///     client — §13.3 ห้ามตรง ๆ) DM เห็นทุก token เสมอไม่สนใจหมอก
+    ///  2. HP ของ token ที่ผูกกับ Character: ตัวละครผู้เล่นปกติ (ControlledByDm=false) เห็นค่าจริง
+    ///     เสมอทั้ง DM/Player (design doc §13.1 "HP ปาร์ตี้ = ตัวเลขจริงทั้ง 3 มุมมอง") ส่วน NPC
+    ///     (ControlledByDm=true) ใช้ <see cref="CharacterStatsVisibility.IsVisibleTo"/> เดิมเป๊ะ ๆ
+    ///     (เกณฑ์เดียวกับที่ CharacterEndpoints ใช้ กันสองจุดเพี้ยนจากกัน) token ที่ผูกกับ Monster
+    ///     ไม่มี HP ให้แสดง (monster_stat_blocks ไม่มี current-hp tracking เลย เก็บแค่ stat block นิ่ง)
+    /// </summary>
+    private static async Task<SceneResponse> BuildProjectedResponseAsync(
+        DnDEzDbContext db, Scene scene, string? imageUrl,
+        IReadOnlyDictionary<Guid, TokenPosition> pendingPositions, bool isDm)
+    {
+        var tokens = SceneTokenSerialization.Parse(scene.Tokens);
+        for (var i = 0; i < tokens.Count; i++)
+        {
+            if (pendingPositions.TryGetValue(tokens[i].Id, out var pos))
+            {
+                tokens[i] = tokens[i] with { X = pos.X, Y = pos.Y };
+            }
+        }
+
+        var fogAreas = FogLayerSerialization.ParseRevealedAreas(scene.FogLayer);
+        var visibleTokens = isDm
+            ? tokens
+            // กฎ "มองเห็นไหม" อยู่ที่ FogLayerSerialization ที่เดียวทั้งระบบ (Part 9 ใช้ตัวเดียวกัน
+            // กรองเป้าก่อนคำนวณ affordance) — ห้ามคัดลอกสูตรวงกลมมาไว้ที่นี่อีกสำเนา
+            : tokens.Where(t => FogLayerSerialization.IsVisibleTo(t.X, t.Y, fogAreas, isDm: false)).ToList();
+
+        var characterIds = visibleTokens.Where(t => t.EntityType == "Character").Select(t => t.EntityId).ToList();
+        var characters = characterIds.Count == 0
+            ? []
+            : await db.Characters.Where(c => characterIds.Contains(c.Id)).ToListAsync();
+        var charactersById = characters.ToDictionary(c => c.Id);
+
+        var tokenResponses = visibleTokens.Select(t =>
+        {
+            if (t.EntityType != "Character" || !charactersById.TryGetValue(t.EntityId, out var character))
+            {
+                return new TokenResponse(t.Id, t.EntityType, t.EntityId, t.X, t.Y);
+            }
+
+            var hpVisible = CharacterStatsVisibility.IsVisibleTo(character.ControlledByDm, character.NpcStatsVisibleToParty, isDm);
+            return hpVisible
+                ? new TokenResponse(t.Id, t.EntityType, t.EntityId, t.X, t.Y, character.CurrentHp, character.MaxHp)
+                : new TokenResponse(t.Id, t.EntityType, t.EntityId, t.X, t.Y);
+        }).ToList();
+
+        return new SceneResponse(
+            scene.Id, scene.SessionId, scene.Name, scene.Grid, scene.MapAssetId, imageUrl, scene.IsActive,
+            tokenResponses, fogAreas.Select(a => new FogAreaResponse(a.Id, a.X, a.Y, a.Radius)).ToList());
+    }
+
 }
 
 internal record UploadErrorResponse(string Reason);
@@ -368,4 +463,5 @@ internal record CreateSceneRequest(string? Name, Guid MapAssetId);
 internal record UpdateGridRequest(double? PixelsPerSquare, double? OffsetX, double? OffsetY);
 
 internal record SceneResponse(
-    Guid Id, Guid SessionId, string Name, string Grid, Guid? MapAssetId, string? ImageUrl, bool IsActive);
+    Guid Id, Guid SessionId, string Name, string Grid, Guid? MapAssetId, string? ImageUrl, bool IsActive,
+    List<TokenResponse> Tokens, List<FogAreaResponse> RevealedAreas);

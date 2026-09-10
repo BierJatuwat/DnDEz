@@ -77,6 +77,12 @@ public sealed class CampaignGroupRegistry
         }
     }
 
+    /// <summary>เช็คเร็ว ๆ ว่า connection นี้อยู่ group ของแคมเปญนี้ไหม (in-memory ไม่แตะ DB) —
+    /// Sprint G Part 5 ใช้กันสแปม hub method ที่ยิงถี่มาก (ghost token move ระหว่างลาก) ไม่ให้ต้อง
+    /// query DB ทุกเฟรม (ผิดจุดประสงค์ของ ephemeral broadcast ทั้งหมดถ้าต้องพึ่ง DB round-trip)</summary>
+    public bool Contains(string connectionId, Guid campaignId) =>
+        _subscriptions.ContainsKey(Key(connectionId, campaignId));
+
     public IReadOnlyCollection<CampaignGroupSubscription> Snapshot() => _subscriptions.Values.ToList();
 
     public IReadOnlyCollection<CampaignGroupSubscription> SnapshotFor(Guid campaignId, Guid userId) =>

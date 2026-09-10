@@ -6,6 +6,19 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "frontend", "run", "dev"],
       "port": 3001
+    },
+    {
+      "name": "api",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": [
+        "run",
+        "--project",
+        "src/DnDEz.Api",
+        "--urls",
+        "http://localhost:5080"
+      ],
+      "env": { "ASPNETCORE_ENVIRONMENT": "Development" },
+      "port": 5080
     }
   ]
 }

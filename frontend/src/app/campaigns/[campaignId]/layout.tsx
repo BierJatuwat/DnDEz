@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, usePathname, useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
@@ -18,6 +18,17 @@ export default function CampaignLayout({ children }: { children: React.ReactNode
   const router = useRouter();
   const params = useParams<{ campaignId: string }>();
   const campaignId = params.campaignId;
+  const pathname = usePathname();
+
+  /**
+   * Sprint G Part 6 — จอกลาง (`/table`) ใช้ด่าน auth ร่วมกับหน้าอื่น แต่**ไม่เอา chrome**
+   *
+   * ไม่ใช่เรื่องความสวยงาม: ตาราง projection §13.1 ระบุว่าช่อง Input ของจอกลางคือ "ไม่มีเลย"
+   * แต่ chrome ชุดนี้มีปุ่ม **ออกจากระบบ** กับลิงก์ย้อนกลับติดมาด้วย — บนทีวี/แท็บเล็ตที่วางกลางโต๊ะ
+   * ให้ทุกคนเอื้อมถึง นั่นคือปุ่มที่ใครเผลอชนแล้วจอกลางหลุดออกจากระบบกลางเกม · เจอตอนเปิดดูจริง
+   * ในเบราว์เซอร์ (แถบ sticky ลอยทับแผนที่) ไม่ใช่ตอนอ่านโค้ด
+   */
+  const isTableView = pathname?.endsWith("/table") ?? false;
 
   const token = useAuthStore((s) => s.token);
   const ready = useAuthStore((s) => s.hasHydrated);
@@ -42,6 +53,10 @@ export default function CampaignLayout({ children }: { children: React.ReactNode
         <p className="opacity-50 text-sm">กำลังโหลด...</p>
       </main>
     );
+  }
+
+  if (isTableView) {
+    return <main className="flex-1 w-full">{children}</main>;
   }
 
   return (

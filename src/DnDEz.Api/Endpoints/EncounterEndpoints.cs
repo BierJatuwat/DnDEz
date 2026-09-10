@@ -19,15 +19,19 @@ namespace DnDEz.Api.Endpoints;
 public static class EncounterEndpoints
 {
     /// <summary>
-    /// ระยะเคลื่อนที่ต่อเทิร์นที่ระบบใช้เป็นดีฟอลต์
+    /// ระยะเคลื่อนที่ fallback เมื่อหา "ความเร็วของ participant ที่ถึงตาเดินอยู่" ไม่ได้จริง ๆ —
+    /// เช่น <see cref="Encounter.CurrentParticipantId"/> เป็น null หรือ encounter กำลังถูก
+    /// teardown กลางอากาศจนไม่มีผู้เข้าร่วมคนไหนตรงกับ id นั้นแล้ว **ไม่ใช่ค่าที่ใช้กับทุกตัวละคร
+    /// อีกต่อไป** (ชื่อเดิม <c>DefaultMovementFeet</c> ทำให้เข้าใจผิดแบบนั้น)
     ///
-    /// ⚠️ **นี่คือค่า hardcode ชั่วคราว ไม่ใช่ค่าที่อ่านจากตัวละคร** — สคีมา <c>Character</c> และ
-    /// คอลัมน์ <c>sheet</c> ยังไม่มีฟิลด์ speed ใด ๆ เลย (ตรวจทั้ง repo แล้ว 2026-09-03) จึงใช้
-    /// 30 ฟุตซึ่งเป็นดีฟอลต์ของสายพันธุ์ส่วนใหญ่ใน SRD ไปก่อน · เมื่อมีฟิลด์ speed จริงเมื่อไหร่
-    /// ต้องเปลี่ยนมาอ่านค่าต่อตัวละคร (และรองรับ effect ที่ทำให้ speed เปลี่ยนกลางเทิร์น ซึ่งเป็น
-    /// เหตุผลที่ <see cref="ActionEconomyResolver.StartTurn"/> รับ maxMovementFeet ใหม่ทุกครั้ง)
+    /// เดิม (Sprint F งานที่ 4) ค่านี้ hardcode ใช้กับทุกตัวละครเพราะสคีมายังไม่มีฟิลด์ speed เลย —
+    /// Sprint G Part 1 เพิ่ม <see cref="Character.SpeedFeet"/> แล้ว (คอลัมน์ <c>speed_feet</c>,
+    /// default 30) Sprint G Part 8 (รอบนี้) จึงเปลี่ยนทุกจุดให้อ่านความเร็วจริงของ participant
+    /// ที่ถึงตาเดิน (อ่านสดทุกเทิร์น ไม่ snapshot — รองรับ effect ที่ทำให้ speed เปลี่ยนกลางเทิร์น
+    /// ซึ่งเป็นเหตุผลที่ <see cref="ActionEconomyResolver.StartTurn"/> รับ maxMovementFeet ใหม่
+    /// ทุกครั้ง) ค่าคงที่นี้จึงเหลือไว้เฉพาะกรณีขอบที่ไม่มีผู้เข้าร่วมให้อ่านค่าได้จริง
     /// </summary>
-    private const int DefaultMovementFeet = 30;
+    private const int FallbackMovementFeet = 30;
 
     /// <summary>เพดานจำนวนผู้เข้าร่วมต่อ encounter — กัน payload ใหญ่ผิดปกติและกันการทอยเต๋าจำนวนมากต่อ request เดียว</summary>
     private const int MaxParticipants = 20;
@@ -155,7 +159,11 @@ public static class EncounterEndpoints
             encounter.CurrentParticipantId = participants[0].Id;
             await db.SaveChangesAsync();
 
-            if (!await turnStateStore.TrySetAsync(encounter.Id, 0, ActionEconomyResolver.StartTurn(DefaultMovementFeet)))
+            // ผู้เข้าร่วมคนแรกในลำดับ initiative คือคนที่ถือเทิร์นแรก — งบเคลื่อนที่ของเทิร์นแรกจึง
+            // ต้องมาจากความเร็วของตัวละครคนนั้นจริง ๆ (Sprint G Part 8) ไม่ใช่ค่าคงที่เดียวกันทุกคน
+            var firstTurnMovementFeet = charactersById[participants[0].CharacterId].SpeedFeet;
+
+            if (!await turnStateStore.TrySetAsync(encounter.Id, 0, ActionEconomyResolver.StartTurn(firstTurnMovementFeet)))
             {
                 // การอ่านครั้งหน้า fail closed เป็น StartTurn ค่าเดียวกันเป๊ะอยู่แล้ว จึงไม่มีอะไรเสียหาย
                 // — ต่างจาก endpoint spend ที่ต้อง 503 เพราะที่นั่นมี state ที่เขียนไปแล้วก่อนหน้าเสี่ยงหาย
@@ -163,7 +171,7 @@ public static class EncounterEndpoints
             }
 
             var response = BuildEncounterResponse(
-                encounter, participants, charactersById, ActionEconomyResolver.StartTurn(DefaultMovementFeet));
+                encounter, participants, charactersById, ActionEconomyResolver.StartTurn(firstTurnMovementFeet));
 
             try
             {
@@ -183,7 +191,8 @@ public static class EncounterEndpoints
             ClaimsPrincipal principal,
             DnDEzDbContext db,
             IEncounterTurnStateStore turnStateStore,
-            IHubContext<CampaignHub> hubContext) =>
+            IHubContext<CampaignHub> hubContext,
+            SceneTokenFlusher tokenFlusher) =>
         {
             var callerUserId = principal.GetUserId();
             if (callerUserId is null)
@@ -210,6 +219,7 @@ public static class EncounterEndpoints
             }
 
             var participants = await db.EncounterParticipants
+                .Include(p => p.Character)
                 .Where(p => p.EncounterId == encounterId)
                 .OrderBy(p => p.TurnOrder)
                 .ToListAsync();
@@ -230,7 +240,9 @@ public static class EncounterEndpoints
             encounter.TurnNumber += 1;
             await db.SaveChangesAsync();
 
-            var newState = ActionEconomyResolver.StartTurn(DefaultMovementFeet);
+            // เทิร์นใหม่เป็นของ nextParticipant — งบเคลื่อนที่ต้องอ่านความเร็วสดของตัวละครคนนี้
+            // (Sprint G Part 8) ไม่ใช่ค่าคงที่เดียวกันทุกคน
+            var newState = ActionEconomyResolver.StartTurn(nextParticipant.Character.SpeedFeet);
             if (!await turnStateStore.TrySetAsync(encounterId, encounter.TurnNumber, newState))
             {
                 // เขียนล้มตรงนี้ปล่อยผ่านได้อย่างปลอดภัย เพราะ key ของ turn state ผูกกับเลขเทิร์น
@@ -254,6 +266,10 @@ public static class EncounterEndpoints
                 logger.LogWarning(ex, "Failed to broadcast TurnChanged for encounter {EncounterId}", encounterId);
             }
 
+            // Sprint G Part 5 (design doc §14.3) — เปลี่ยนเทิร์นเป็นจุด persist ตำแหน่ง token ที่
+            // ผู้ใช้รับรู้ว่าเป็นหมุด — best-effort เหมือน broadcast ด้านบน ห้ามทำให้ next-turn ล้มเหลว
+            await FlushSceneTokensForSessionAsync(db, tokenFlusher, encounter.SessionId, logger);
+
             return Results.Ok(response);
         }).RequireAuthorization();
 
@@ -263,7 +279,8 @@ public static class EncounterEndpoints
             ClaimsPrincipal principal,
             DnDEzDbContext db,
             IEncounterTurnStateStore turnStateStore,
-            IHubContext<CampaignHub> hubContext) =>
+            IHubContext<CampaignHub> hubContext,
+            SceneTokenFlusher tokenFlusher) =>
         {
             var callerUserId = principal.GetUserId();
             if (callerUserId is null)
@@ -304,6 +321,9 @@ public static class EncounterEndpoints
             {
                 logger.LogWarning(ex, "Failed to broadcast EncounterEnded for encounter {EncounterId}", encounterId);
             }
+
+            // Sprint G Part 5 (design doc §14.3) — จบ encounter เป็นอีกจุด persist ตำแหน่ง token
+            await FlushSceneTokensForSessionAsync(db, tokenFlusher, encounter.SessionId, logger);
 
             return Results.Ok(response);
         }).RequireAuthorization();
@@ -366,6 +386,12 @@ public static class EncounterEndpoints
                 return authFailure;
             }
 
+            // currentParticipant ถูก query ด้วย .Include(p => p.Character) ไว้แล้วข้างบน (บรรทัดที่ดึง
+            // currentParticipant) และตรงกับ encounter.CurrentParticipantId เสมอ (เช็คแล้วก่อนหน้านี้) —
+            // คำนวณครั้งเดียวนอก retry loop ด้านล่าง ไม่ query ซ้ำทุกรอบ attempt
+            var fallbackMovementFeet = CurrentParticipantMovementFeet(
+                encounter.CurrentParticipantId, new[] { currentParticipant });
+
             if (request.Resource is not ("Action" or "BonusAction" or "Reaction" or "Movement"))
             {
                 return Results.BadRequest();
@@ -384,7 +410,7 @@ public static class EncounterEndpoints
             for (var attempt = 0; attempt < MaxSpendAttempts; attempt++)
             {
                 var snapshot = await turnStateStore.GetSnapshotAsync(
-                    encounterId, encounter.TurnNumber, ActionEconomyResolver.StartTurn(DefaultMovementFeet));
+                    encounterId, encounter.TurnNumber, ActionEconomyResolver.StartTurn(fallbackMovementFeet));
 
                 ActionEconomyState newState;
                 try
@@ -476,8 +502,14 @@ public static class EncounterEndpoints
 
             var charactersById = participants.ToDictionary(p => p.CharacterId, p => p.Character);
 
+            // participants ข้างบน query ด้วย .Include(p => p.Character) ไว้แล้ว จึงอ่าน speed ได้เลย
+            // ไม่ต้อง round trip เพิ่ม — ค่า fallback นี้ถูกใช้จริงเมื่อ Redis ไม่มีค่าให้อ่าน (เช่น Redis
+            // หาย) ต้องได้งบเท่ากับที่เทิร์นนั้นควรมีตั้งแต่ต้น ไม่ใช่ 30 คงที่ทุกคน
             var state = (await turnStateStore.GetSnapshotAsync(
-                encounter.Id, encounter.TurnNumber, ActionEconomyResolver.StartTurn(DefaultMovementFeet))).State;
+                encounter.Id,
+                encounter.TurnNumber,
+                ActionEconomyResolver.StartTurn(
+                    CurrentParticipantMovementFeet(encounter.CurrentParticipantId, participants)))).State;
 
             var response = BuildEncounterResponse(encounter, participants, charactersById, state);
             return Results.Ok(response);
@@ -517,12 +549,67 @@ public static class EncounterEndpoints
             ToTurnStateResponse(turnState));
     }
 
+    /// <summary>
+    /// ความเร็วของผู้เข้าร่วมที่ตรงกับ <paramref name="currentParticipantId"/> ใน
+    /// <paramref name="participants"/> (ต้องผ่าน <c>.Include(p =&gt; p.Character)</c> มาก่อนแล้ว —
+    /// ฟังก์ชันนี้ไม่ query เพิ่มเอง เพื่อไม่ให้เกิด lazy load/round trip ซ้ำ) ใช้เป็นค่า fallback
+    /// ตอน turn state store (Redis) ไม่มีค่าให้อ่าน (เช่น Redis หาย) — ต้องสร้างงบเดียวกับที่เทิร์นนั้น
+    /// ควรจะมีตั้งแต่ต้น ไม่ใช่ 30 คงที่ทุกคน (Sprint G Part 8)
+    ///
+    /// คืน <see cref="FallbackMovementFeet"/> เมื่อ <paramref name="currentParticipantId"/> เป็น null
+    /// หรือไม่ตรงกับใครใน <paramref name="participants"/> เลย (เช่น encounter กำลังถูก teardown
+    /// กลางอากาศ) — endpoint ต้องไม่ 500 เพราะเหตุนี้
+    /// </summary>
+    private static int CurrentParticipantMovementFeet(
+        Guid? currentParticipantId, IEnumerable<EncounterParticipant> participants)
+    {
+        if (currentParticipantId is null)
+        {
+            return FallbackMovementFeet;
+        }
+
+        foreach (var participant in participants)
+        {
+            if (participant.Id == currentParticipantId)
+            {
+                return participant.Character.SpeedFeet;
+            }
+        }
+
+        return FallbackMovementFeet;
+    }
+
     private static TurnStateResponse ToTurnStateResponse(ActionEconomyState state) => new(
         state.ActionAvailable,
         state.BonusActionAvailable,
         state.ReactionAvailable,
         state.MovementRemainingFeet,
         state.MaxMovementFeet);
+
+    /// <summary>
+    /// Sprint G Part 5 — flush ตำแหน่ง token ที่ยัง pending ของ scene ที่ active ของ session นี้
+    /// (ถ้ามี) เข้า Postgres จริง เรียกจาก next-turn/end (design doc §14.3) — best-effort เหมือน
+    /// broadcast: session อาจไม่มี scene เลย (ยังไม่ถึง Sprint G Part 4 ของโต๊ะนั้น) ซึ่งไม่ใช่ error
+    /// </summary>
+    private static async Task FlushSceneTokensForSessionAsync(
+        DnDEzDbContext db, SceneTokenFlusher tokenFlusher, Guid sessionId, ILogger logger)
+    {
+        try
+        {
+            var activeSceneId = await db.Scenes
+                .Where(s => s.SessionId == sessionId && s.IsActive)
+                .Select(s => (Guid?)s.Id)
+                .SingleOrDefaultAsync();
+            if (activeSceneId is not null)
+            {
+                await tokenFlusher.FlushAsync(activeSceneId.Value);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "flush token position ของ session {SessionId} ไม่สำเร็จตอนเปลี่ยนเทิร์น/จบ encounter", sessionId);
+        }
+    }
 }
 
 // ── response contracts ──────────────────────────────────────────────────────

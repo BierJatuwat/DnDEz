@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { appendActionMessage, type ActionMessage } from "./action-feed";
+import type { ReactionPrompt } from "./reaction-prompt";
 
 export type HubStatus = "disconnected" | "connecting" | "connected";
 export type LogEntry = { at: string; text: string };
@@ -18,6 +19,7 @@ type ConsoleState = {
   consultMessages: ConsultMessage[];
   actionInput: string;
   actionFeed: ActionMessage[];
+  reactionPrompt: ReactionPrompt | null;
   setSelectedCampaignId: (id: string | null) => void;
   setSelectedSessionId: (id: string | null) => void;
   setJoinedCampaignId: (id: string | null) => void;
@@ -28,6 +30,15 @@ type ConsoleState = {
   appendConsultMessage: (role: ConsultRole, text: string) => void;
   setActionInput: (value: string) => void;
   appendActionFeedMessage: (message: ActionMessage) => void;
+  /**
+   * Sprint G Part 10 — prompt "จะสวนไหม" ที่มาจาก SignalR
+   *
+   * เก็บใน store ไม่ใช่ `useState` ของ component ให้เหมือน realtime state ตัวอื่นทั้งหมดในไฟล์นี้
+   * (log/action feed/consult) — callback ของ hub ถูกผูกไว้ครั้งเดียวตอนสร้าง manager ค่าที่เขียนผ่าน
+   * store จึงไม่ผูกกับ instance ไหนเป็นพิเศษ และรอดตอน component remount · ได้ cascade-clear ตอน
+   * สลับเซสชัน/แคมเปญฟรีไปด้วย (prompt ของเซสชันเก่าต้องไม่ค้างข้ามเซสชัน)
+   */
+  setReactionPrompt: (prompt: ReactionPrompt | null) => void;
 };
 
 /** UI state ของ DM console (ไม่ใช่ server state) ตาม PROJECT-CONTEXT §3 —
@@ -43,6 +54,7 @@ export const useConsoleStore = create<ConsoleState>((set) => ({
   consultMessages: [],
   actionInput: "",
   actionFeed: [],
+  reactionPrompt: null,
   setSelectedCampaignId: (id) =>
     set({
       selectedCampaignId: id,
@@ -52,6 +64,7 @@ export const useConsoleStore = create<ConsoleState>((set) => ({
       consultInput: "",
       actionFeed: [],
       actionInput: "",
+      reactionPrompt: null,
     }),
   setSelectedSessionId: (id) =>
     set({
@@ -82,6 +95,7 @@ export const useConsoleStore = create<ConsoleState>((set) => ({
       ].slice(-50),
     })),
   setActionInput: (value) => set({ actionInput: value }),
+  setReactionPrompt: (prompt) => set({ reactionPrompt: prompt }),
   appendActionFeedMessage: (message) =>
     set((state) => ({ actionFeed: appendActionMessage(state.actionFeed, message) })),
 }));

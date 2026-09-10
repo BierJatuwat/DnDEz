@@ -6,7 +6,10 @@ import { apiFetch, ApiError } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { useCampaignWorkspace } from "@/lib/use-campaign-workspace";
 import { useCombatActions } from "@/lib/use-combat-actions";
+import { useScene } from "@/lib/use-scene";
 import type { ApiKeyInfo, CampaignMember } from "@/lib/campaign-types";
+import { SceneMap } from "./SceneMap";
+import { ReactionPrompt } from "./ReactionPrompt";
 import {
   AttackCheckPanel,
   DeathSavePanel,
@@ -53,6 +56,14 @@ export function DmConsole({ campaignId }: { campaignId: string }) {
   });
   const [npcVisible, setNpcVisible] = useState(true);
   const [joinCodeCopied, setJoinCodeCopied] = useState(false);
+
+  // Sprint G Part 6 — แผนที่ + คุมหมอก · ค่าพิกัดเป็นช่องกรอกตรง ๆ ไปก่อน (การลากเปิดหมอกบนแผนที่
+  // ต้องรู้ระบบพิกัด/กริดจริงซึ่งเป็นงานของ Part 8) — ตรงนี้ทำให้ฟีเจอร์ใช้งานได้จริงก่อน ไม่ใช่ UI สุดท้าย
+  const scene = useScene(campaignId, ws.selectedSessionId);
+  const nameOf = (entityId: string) => ws.characters.find((c) => c.id === entityId)?.name;
+  const [fogX, setFogX] = useState("0");
+  const [fogY, setFogY] = useState("0");
+  const [fogRadius, setFogRadius] = useState("120");
 
   const campaignQuery = useQuery({
     queryKey: ["campaign", campaignId],
@@ -184,6 +195,17 @@ export function DmConsole({ campaignId }: { campaignId: string }) {
   return (
     <>
       <HubStatusPanel hubStatus={ws.hubStatus} joinedCampaignId={ws.joinedCampaignId} />
+
+      {/* Sprint G Part 10 — DM เป็นคนคุม NPC เกือบทั้งหมด จึงเป็นคนที่ได้ prompt นี้บ่อยที่สุด
+          (DoD: "ผู้เล่นเดินออกจากระยะก็อบลิน → คนคุมก็อบลินเห็น prompt พร้อมนับถอยหลัง") */}
+      {ws.reactionPrompt && ws.selectedSessionId && (
+        <ReactionPrompt
+          campaignId={campaignId}
+          sessionId={ws.selectedSessionId}
+          prompt={ws.reactionPrompt}
+          onResolved={ws.clearReactionPrompt}
+        />
+      )}
 
       <WorkspaceGrid>
         {/* คอลัมน์ 1 — ตั้งค่าโต๊ะ: ของที่ตั้งครั้งเดียวแล้วแทบไม่แตะอีกระหว่างเล่น */}
@@ -412,6 +434,95 @@ export function DmConsole({ campaignId }: { campaignId: string }) {
           )}
           {ws.selectedSessionId && (
             <>
+              <section className={sectionClass}>
+                <h2 className="font-medium">แผนที่</h2>
+                {scene.noScene ? (
+                  <p className="text-sm opacity-50">
+                    ยังไม่มีแผนที่ในเซสชันนี้ — อัปโหลดแผนที่แล้วสร้างฉากก่อน
+                  </p>
+                ) : (
+                  <>
+                    <SceneMap
+                      tokens={scene.tokens}
+                      revealedAreas={scene.revealedAreas}
+                      imageUrl={scene.scene?.imageUrl ?? null}
+                      nameOf={nameOf}
+                      fogStyle="translucent"
+                      emptyHint="ยังไม่มีอะไรบนแผนที่"
+                    />
+                    {/* DM เห็น token ครบทุกตัวจาก server อยู่แล้ว — เส้นประรอบ token คือคำเตือนว่า
+                        "ตัวนี้ผู้เล่นยังไม่เห็น" ไม่ใช่การปิดบังจาก DM */}
+                    <p className="text-sm opacity-60">
+                      พื้นที่คลุมเทาคือส่วนที่ผู้เล่นยังมองไม่เห็น · token เส้นประ = ผู้เล่นยังไม่เห็นตัวนี้
+                    </p>
+
+                    <div className="flex flex-wrap items-end gap-2">
+                      <label className="text-sm">
+                        <span className="mr-1 opacity-60">เปิดพื้นที่รอบจุด x</span>
+                        <input
+                          type="number"
+                          value={fogX}
+                          onChange={(e) => setFogX(e.target.value)}
+                          className="w-20 rounded border border-black/20 dark:border-white/20 bg-transparent px-2 py-1"
+                        />
+                      </label>
+                      <label className="text-sm">
+                        <span className="mr-1 opacity-60">y</span>
+                        <input
+                          type="number"
+                          value={fogY}
+                          onChange={(e) => setFogY(e.target.value)}
+                          className="w-20 rounded border border-black/20 dark:border-white/20 bg-transparent px-2 py-1"
+                        />
+                      </label>
+                      <label className="text-sm">
+                        <span className="mr-1 opacity-60">รัศมี</span>
+                        <input
+                          type="number"
+                          value={fogRadius}
+                          onChange={(e) => setFogRadius(e.target.value)}
+                          className="w-20 rounded border border-black/20 dark:border-white/20 bg-transparent px-2 py-1"
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          scene.revealFog.mutate({
+                            x: Number(fogX),
+                            y: Number(fogY),
+                            radius: Number(fogRadius),
+                          })
+                        }
+                        disabled={scene.revealFog.isPending || Number(fogRadius) <= 0}
+                        className="rounded bg-indigo-600 px-3 py-1.5 text-white disabled:opacity-50"
+                      >
+                        เปิดให้ผู้เล่นเห็น
+                      </button>
+                    </div>
+
+                    {scene.revealedAreas.length > 0 && (
+                      <ul className="space-y-1 text-sm">
+                        {scene.revealedAreas.map((a) => (
+                          <li key={a.id} className="flex items-center justify-between gap-2">
+                            <span className="opacity-70 tabular-nums">
+                              รอบ ({a.x}, {a.y}) รัศมี {a.radius}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => scene.hideFog.mutate(a.id)}
+                              disabled={scene.hideFog.isPending}
+                              className="rounded border border-black/20 dark:border-white/20 px-2 py-0.5 text-xs hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-50"
+                            >
+                              ปิดกลับ
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
+                )}
+              </section>
+
               <EncounterPanel
                 combat={combat}
                 characters={ws.characters}

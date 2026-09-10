@@ -12,6 +12,7 @@ import {
   removeProposal,
   type Proposal,
 } from "./proposal-queue";
+import { normalizeReactionPrompt } from "./reaction-prompt";
 import { normalizeActionMessageCreated } from "./action-feed";
 import type {
   AutonomySetting,
@@ -52,6 +53,8 @@ export function useCampaignWorkspace(campaignId: string) {
   const consultMessages = useConsoleStore((s) => s.consultMessages);
   const actionInput = useConsoleStore((s) => s.actionInput);
   const actionFeed = useConsoleStore((s) => s.actionFeed);
+  const reactionPrompt = useConsoleStore((s) => s.reactionPrompt);
+  const setReactionPrompt = useConsoleStore((s) => s.setReactionPrompt);
   const setSelectedCampaignId = useConsoleStore((s) => s.setSelectedCampaignId);
   const setSelectedSessionId = useConsoleStore((s) => s.setSelectedSessionId);
   const setJoinedCampaignId = useConsoleStore((s) => s.setJoinedCampaignId);
@@ -312,6 +315,29 @@ export function useCampaignWorkspace(campaignId: string) {
         void queryClient.invalidateQueries({ queryKey: ["characters"] });
       }
     },
+    onFogChanged: () => {
+      // Sprint G Part 6 — DM เปิด/ปิดพื้นที่ แปลว่า "รายการ token ที่เรามีสิทธิ์เห็นเปลี่ยนไปแล้ว"
+      // ต้องดึงใหม่จาก server เท่านั้น ห้ามคำนวณเองจาก payload (payload บอกแค่ขอบเขตหมอก ไม่ได้บอกว่า
+      // มีใครอยู่ในนั้น — การเดาเองฝั่ง client คือการสร้างข้อมูลที่ server ตั้งใจไม่ส่งมา)
+      appendLog("realtime FogChanged — ดึงแผนที่ใหม่");
+      void queryClient.invalidateQueries({ queryKey: ["scene"] });
+    },
+    onReactionPrompt: (payload) => {
+      // Sprint G Part 10 — event นี้ยิงมาที่กลุ่มของผู้ใช้คนเดียว ถ้ามาถึงเราแปลว่าเรามีสิทธิ์จริง
+      // (ไม่ต้องกรองซ้ำที่นี่) · เก็บไว้ใน state ให้ component เด้ง prompt ขึ้นมา
+      const prompt = normalizeReactionPrompt(payload);
+      if (!prompt) {
+        appendLog("ได้รับ ReactionPrompt ที่ข้อมูลไม่ครบ ข้ามไป");
+        return;
+      }
+      appendLog(`realtime ReactionPrompt — ${prompt.threatName} มีสิทธิ์สวน`);
+      setReactionPrompt(prompt);
+    },
+    onMovementResumed: () => {
+      // การเดินที่ค้างอยู่ไปต่อแล้ว (มีคนตอบ หรือ sweeper ปิดให้เพราะหมดเวลา) → ตำแหน่ง token เปลี่ยน
+      appendLog("realtime MovementResumed — ดึงแผนที่ใหม่");
+      void queryClient.invalidateQueries({ queryKey: ["scene"] });
+    },
     onActionMessageCreated: (payload) => {
       const message = normalizeActionMessageCreated(payload);
       if (!message) {
@@ -341,6 +367,8 @@ export function useCampaignWorkspace(campaignId: string) {
 
   return {
     userId,
+    reactionPrompt,
+    clearReactionPrompt: () => setReactionPrompt(null),
     // server state
     sessions: sessionsQuery.data ?? [],
     characters,

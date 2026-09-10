@@ -78,6 +78,9 @@ function makeEvents() {
     onHpUpdated: vi.fn(),
     onActionMessageCreated: vi.fn(),
     onCombatEvent: vi.fn(),
+    onFogChanged: vi.fn(),
+    onReactionPrompt: vi.fn(),
+    onMovementResumed: vi.fn(),
   };
 }
 
@@ -213,6 +216,21 @@ describe("CampaignHubManager", () => {
 
     expect(events.onActionMessageCreated).toHaveBeenCalledWith(payload);
     expect(events.onProposalCreated).not.toHaveBeenCalled();
+  });
+
+  it("forwards FogChanged events to onFogChanged (Sprint G Part 6)", async () => {
+    await manager.start();
+    const payload = {
+      sceneId: "scene-1",
+      revealedAreas: [{ id: "a-1", x: 0, y: 0, radius: 10 }],
+    };
+
+    connection.emit("FogChanged", payload);
+
+    expect(events.onFogChanged).toHaveBeenCalledWith(payload);
+    // ต้องไม่ไหลไปเข้า callback อื่น — server ยิง FogChanged เข้า role-group แยก การส่งผิดช่องทาง
+    // จะทำให้หน้าจอ invalidate ผิด query แล้วหมอกไม่อัปเดตตามจริง
+    expect(events.onCombatEvent).not.toHaveBeenCalled();
   });
 
   it(

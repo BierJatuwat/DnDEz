@@ -59,6 +59,20 @@ builder.Services.AddSingleton<CampaignGroupRegistry>();
 builder.Services.AddSingleton<CampaignGroupRevalidator>();
 builder.Services.AddHostedService<CampaignGroupRevalidationService>();
 
+// ── Sprint G Part 5: token position — write-coalescing ผ่าน Redis + flush เข้า Postgres จริง
+// (design doc §14.3) ใช้ IConnectionMultiplexer ตัวเดียวกับ IEncounterTurnStateStore ด้านล่าง
+// (AbortOnConnectFail = false ตัวเดียวกัน — "app data" Redis แยกจาก SignalR backplane) ────────────
+builder.Services.AddSingleton<ISceneTokenStore, RedisSceneTokenStore>();
+builder.Services.AddSingleton<SceneTokenFlusher>();
+builder.Services.AddHostedService<SceneTokenFlushService>();
+
+// ── Sprint G Part 10: การเดินที่ค้างรอ reaction + ตัวกวาดที่ปิดให้เองเมื่อหมดเวลา ──
+// sweeper ต้องเป็น hosted service จริง ไม่ใช่เช็คตอนมี request เข้ามาเท่านั้น เพราะถ้าทุกคนปิดจอรอ
+// ก็จะไม่มี request ให้เช็ค แล้วการเดินจะค้างถาวร (dispatch ข้อ 4: "เดินต่อได้เองโดยไม่ค้าง")
+builder.Services.AddSingleton<IPendingReactionStore, RedisPendingReactionStore>();
+builder.Services.AddSingleton<PendingReactionSweeper>();
+builder.Services.AddHostedService<PendingReactionSweepService>();
+
 // ── Sprint D Part 1: BYOK — Data Protection key ring ────────────────────────
 // key ring เก็บใน Redis ตัวเดียวกับ SignalR backplane (multiplexer แยกต่างหาก — SignalR ผูก
 // connection ของตัวเองไว้ภายใน AddStackExchangeRedis ไม่ได้ expose ให้ share ใช้ซ้ำ) เหตุผลเดียวกับ
@@ -502,6 +516,9 @@ app.MapCampaignEndpoints();
 app.MapSessionEndpoints();
 app.MapCharacterEndpoints();
 
+// ── Sprint G Part 7: คลัง preset ตัวละคร (design doc §5) — สมาชิกทุกคนใช้ได้ ไม่ใช่ DM-only ──
+app.MapCharacterPresetEndpoints();
+
 // ── Sprint F งานที่ 1: join campaign flow ───────────────────────────────────
 app.MapCampaignMembershipEndpoints();
 
@@ -541,6 +558,19 @@ app.MapScenePrepEndpoints();
 
 // ── Sprint G Part 4: อัปโหลดแผนที่ + scene + จัดกริด (design doc §11.1, §22) — DM-only ──
 app.MapSceneEndpoints();
+
+// ── Sprint G Part 5: token บนแผนที่ — DM ทุกตัว, ผู้เล่นเฉพาะตัวละครตัวเอง (design doc §14) ──
+app.MapSceneTokenEndpoints();
+
+// ── Sprint G Part 6: fog reveal/hide (DM-only) — projection ตาม role อยู่ใน GET scene (design doc §13) ──
+app.MapSceneFogEndpoints();
+
+// ── Sprint G Part 9: "ทำอะไรได้บ้าง" คำนวณต่อผู้ดูแต่ละคน — deterministic ล้วน ไม่แตะ AI (§1.3) ──
+app.MapAffordanceEndpoints();
+
+// ── Sprint G Part 10: บอกราคา+การโดนสวนของเส้นทาง **ก่อน** ผู้เล่นกด (§3.4) — ไม่เปลี่ยน state ──
+app.MapMovementPreviewEndpoints();
+app.MapMovementCommitEndpoints();
 
 app.Run();
 

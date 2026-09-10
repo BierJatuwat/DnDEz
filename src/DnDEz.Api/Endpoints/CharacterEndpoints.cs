@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Text.Json;
 using DnDEz.Api.Auth;
 using DnDEz.Domain.Entities;
 using DnDEz.Infrastructure.Persistence;
@@ -53,6 +54,14 @@ public static class CharacterEndpoints
             ClaimsPrincipal principal,
             DnDEzDbContext db) =>
         {
+            // Sprint G Part 7 — เส้นทางแยกต่างหากทั้งหมด ไม่แตะ logic เดิมด้านล่างเลยแม้แต่บรรทัดเดียว
+            // (contract เดิมของ endpoint นี้ถูกล็อกด้วย CharacterCrudTests.cs) ตั้งใจแยกเป็นเมธอดของ
+            // ตัวเองแทนการแทรก if/else กระจายเข้าไปในของเดิม เพื่อให้ path ไหนพังก็ไม่ลากอีก path ไปด้วย
+            if (request.PresetId is not null)
+            {
+                return await CreateFromPresetAsync(campaignId, request, principal, db);
+            }
+
             var name = request.Name;
             var level = request.Level ?? 1;
 
@@ -302,6 +311,109 @@ public static class CharacterEndpoints
 
     private static bool AreValidDamageTypes(IEnumerable<string> values) =>
         values.All(v => Enum.TryParse<DnDEz.Rules.DamageType>(v, out _));
+
+    /// <summary>
+    /// Sprint G Part 7 — สร้างตัวละครจาก preset (design doc §5) novice check ของ Part นี้: เลือก
+    /// "นักรบ level 1" แล้วได้ดาบยาว+โล่+HP จริงทันที ไม่ต้องรู้ว่าดาบยาวทอย 1d8 — ผู้เล่นแค่ส่ง
+    /// PresetId + Name เท่านั้น ทุกอย่างอื่น (ability score/HP/AC/speed/อาวุธ) มาจาก preset ล้วน ๆ
+    ///
+    /// ⚠️ **ไม่ทำ auto-level** — preset ที่ seed ไว้ตอนนี้มีแค่ level 1 (ดู doc comment ของ migration
+    /// `SeedActionCatalogAdditionsAndCharacterPresets`) endpoint นี้ใช้ `preset.Level`/`build`
+    /// ตรง ๆ เสมอ ไม่คำนวณเลื่อนระดับจาก `level_path` (เป็น scaffold รอ Part ในอนาคต ไม่ใช่ของจริง)
+    /// </summary>
+    private static async Task<IResult> CreateFromPresetAsync(
+        Guid campaignId, CreateCharacterRequest request, ClaimsPrincipal principal, DnDEzDbContext db)
+    {
+        var name = request.Name;
+        if (string.IsNullOrWhiteSpace(name) || name.Length > MaxNameLength)
+        {
+            return Results.BadRequest();
+        }
+
+        if (!await CampaignVisibility.IsVisibleAsync(db, campaignId))
+        {
+            return Results.NotFound();
+        }
+
+        var callerUserId = principal.GetUserId();
+        if (callerUserId is null)
+        {
+            return Results.Unauthorized();
+        }
+
+        // RLS (`preset_visibility`) กรองให้เห็นเฉพาะ Global + Campaign ของแคมเปญนี้อยู่แล้ว — 404
+        // ถ้าไม่เจอครอบทั้งสองเคส "ไม่มีจริง" กับ "มีแต่มองไม่เห็น" เหมือนกันหมด (กัน enumeration
+        // ตาม convention เดิมของทั้งโปรเจกต์)
+        var preset = await db.CharacterPresets.SingleOrDefaultAsync(p => p.Id == request.PresetId);
+        if (preset is null)
+        {
+            return Results.NotFound();
+        }
+
+        var build = PresetBuildSerialization.TryParse(preset.Build);
+        if (build is null)
+        {
+            // ข้อมูล seed พังเอง ไม่ใช่ error ของ caller — แต่ก็ไม่ควรเงียบเป็น 500 ที่อ่านไม่ออก
+            return Results.Problem("preset build ข้อมูลเสีย อ่านไม่ได้", statusCode: 500);
+        }
+
+        var character = new Character
+        {
+            Id = Guid.NewGuid(),
+            CampaignId = campaignId,
+            OwnerUserId = callerUserId.Value,
+            Name = name,
+            Level = preset.Level,
+            // Sheet เก็บ equipment/class/race ไว้แสดงผล — ยังไม่มีคอลัมน์ typed สำหรับพวกนี้
+            // (ตรงกับ convention เดิมของ Sheet ที่บอกไว้แล้วว่า "ของที่เหลือ/schema เปลี่ยนบ่อย")
+            Sheet = JsonSerializer.Serialize(new
+            {
+                race = build.Race,
+                @class = build.Class,
+                equipment = build.Equipment,
+                actionCatalogRefs = build.ActionCatalogRefs,
+                presetId = preset.Id,
+            }),
+            CurrentHp = build.HitPoints,
+            MaxHp = build.HitPoints,
+            CurrentTempHp = 0,
+            ArmorClass = build.ArmorClass,
+            Strength = build.AbilityScores.Strength,
+            Dexterity = build.AbilityScores.Dexterity,
+            Constitution = build.AbilityScores.Constitution,
+            Intelligence = build.AbilityScores.Intelligence,
+            Wisdom = build.AbilityScores.Wisdom,
+            Charisma = build.AbilityScores.Charisma,
+            SpeedFeet = build.SpeedFeet,
+            // Initiative modifier = Dex modifier มาตรฐาน 5e — สูตร (score-10)/2 ปัดลง
+            InitiativeModifier = (int)Math.Floor((build.AbilityScores.Dexterity - 10) / 2.0),
+            DamageResistances = request.DamageResistances ?? [],
+            DamageVulnerabilities = request.DamageVulnerabilities ?? [],
+            DamageImmunities = request.DamageImmunities ?? [],
+            ControlledByDm = false,
+            NpcStatsVisibleToParty = true,
+            HarvestConsent = false,
+            IsOrphan = false,
+            CreatedAt = DateTimeOffset.UtcNow,
+        };
+
+        db.Characters.Add(character);
+        // นับความนิยม (player-side-design §19 ข้อ 4 ของแถม) — ไม่ block การสร้างตัวละครถ้านับพลาด
+        // แต่ที่นี่อยู่ transaction เดียวกับ SaveChanges อยู่แล้วจึง atomic ไปด้วยกันโดยธรรมชาติ
+        preset.PopularityCount += 1;
+        await db.SaveChangesAsync();
+
+        return Results.Created(
+            $"/campaigns/{campaignId}/characters/{character.Id}",
+            new CharacterCreatedResponse(
+                character.Id, character.CampaignId, character.Name, character.Level,
+                character.OwnerUserId, character.ControlledByDm, character.NpcStatsVisibleToParty,
+                character.CurrentHp, character.MaxHp, character.CurrentTempHp, character.ArmorClass,
+                character.DamageResistances, character.DamageVulnerabilities, character.DamageImmunities,
+                character.Strength, character.Dexterity, character.Constitution,
+                character.Intelligence, character.Wisdom, character.Charisma, character.SpeedFeet,
+                build.Equipment));
+    }
 }
 
 internal record CreateCharacterRequest(
@@ -317,7 +429,11 @@ internal record CreateCharacterRequest(
     // Sprint F งานที่ 7 — DM เท่านั้นที่ตั้ง IsNpc=true ได้ (403 ถ้าไม่ใช่) StatsVisibleToParty มีผล
     // เฉพาะตอน IsNpc=true เท่านั้น (default true ถ้าไม่ส่งมา)
     bool? IsNpc,
-    bool? StatsVisibleToParty);
+    bool? StatsVisibleToParty,
+    // Sprint G Part 7 — มีค่า = สร้างจาก preset ทั้งหมด (Level/MaxHp/CurrentHp/ArmorClass ด้านบน
+    // ถูกละเว้นทั้งหมด ไม่ผสมกับ preset) เหลือแค่ Name ที่ยังต้องส่งมา (preset ไม่มีชื่อเฉพาะบุคคล
+    // ตามกฎ player-side-design §19 ข้อ 2 — เก็บแค่ "โครง" ไม่ใช่ตัวตน)
+    Guid? PresetId);
 
 internal record SetNpcVisibilityRequest(bool Visible);
 
@@ -337,7 +453,17 @@ internal record CharacterCreatedResponse(
     int ArmorClass,
     string[] DamageResistances,
     string[] DamageVulnerabilities,
-    string[] DamageImmunities);
+    string[] DamageImmunities,
+    // Sprint G Part 7 — มีค่าเฉพาะตอนสร้างจาก preset (null ทั้งชุดถ้าไม่ใช่ path นี้ — เส้นทางกรอกเอง
+    // แบบเดิมไม่มีแนวคิดค่าความสามารถให้ตอบเลย ไม่ใช่แค่ไม่ได้ใส่)
+    int? Strength = null,
+    int? Dexterity = null,
+    int? Constitution = null,
+    int? Intelligence = null,
+    int? Wisdom = null,
+    int? Charisma = null,
+    int? SpeedFeet = null,
+    string[]? Equipment = null);
 
 // Sprint E Part 3 — เพิ่ม HP fields เข้า list (Sheet jsonb เต็มยังไม่ส่งเหมือนเดิม แค่คอลัมน์ HP
 // ที่ promote ออกมาแล้วตั้งแต่ Sprint B Part 2 ราคาถูกพอจะส่งใน list ได้) ให้ frontend แสดง HP

@@ -6,7 +6,15 @@ import { apiFetch } from "@/lib/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { useCampaignWorkspace } from "@/lib/use-campaign-workspace";
 import { useCombatActions } from "@/lib/use-combat-actions";
+import { useScene } from "@/lib/use-scene";
+import { useReachable } from "@/lib/use-reachable";
+import { useMovement } from "@/lib/use-movement";
 import type { CampaignMember } from "@/lib/campaign-types";
+import { SceneMap } from "./SceneMap";
+import { CharacterPresetPicker } from "./CharacterPresetPicker";
+import { AffordancePanel } from "./AffordancePanel";
+import { ReactionPrompt } from "./ReactionPrompt";
+import { MovementPlanner } from "./MovementPlanner";
 import {
   AttackCheckPanel,
   DeathSavePanel,
@@ -64,9 +72,37 @@ export function PlayerView({ campaignId }: { campaignId: string }) {
     enabled: !!token,
   });
 
+  // Sprint G Part 6 — แผนที่ที่ server กรองมาแล้วตาม role (ผู้เล่นได้เฉพาะ token ในพื้นที่ที่เปิด)
+  const scene = useScene(campaignId, ws.selectedSessionId);
+  const nameOf = (entityId: string) => ws.characters.find((c) => c.id === entityId)?.name;
+
+  // Sprint G Part 10 — ลาก token ของตัวเองได้ ภายในขอบเขตที่กฎอนุญาต
+  const activeCharacterId = actingCharacterId ?? ws.ownCharacters[0]?.id ?? null;
+  const reachable = useReachable(campaignId, ws.selectedSessionId, activeCharacterId);
+  const movement = useMovement(campaignId, ws.selectedSessionId);
+
+  /** ปล่อย token ลงช่องไหน → ใช้ **เส้นทางที่ server คำนวณมาให้** ของช่องนั้นส่งไป commit ตรง ๆ
+   *  client ไม่ประกอบเส้นทางเอง (กันการส่งทางที่เลี่ยง OA หรือลัดผ่านสิ่งกีดขวาง) */
+  const handleDropCell = (cell: { x: number; y: number }) => {
+    const square = reachable.squares.find((s) => s.x === cell.x && s.y === cell.y);
+    if (!square || !activeCharacterId) return;
+    movement.commit.mutate({ characterId: activeCharacterId, path: square.path, disengage: false });
+  };
+
   return (
     <>
       <HubStatusPanel hubStatus={ws.hubStatus} joinedCampaignId={ws.joinedCampaignId} />
+
+      {/* Sprint G Part 10 — prompt "จะสวนไหม" เด้งบนสุดเหนือทุกอย่าง เพราะมีเวลาจำกัดและเป็น
+          จังหวะที่เกมทั้งโต๊ะกำลังรออยู่ · ผู้เล่นก็ได้ prompt นี้ได้ถ้าคุมตัวที่มีสิทธิ์สวน */}
+      {ws.reactionPrompt && ws.selectedSessionId && (
+        <ReactionPrompt
+          campaignId={campaignId}
+          sessionId={ws.selectedSessionId}
+          prompt={ws.reactionPrompt}
+          onResolved={ws.clearReactionPrompt}
+        />
+      )}
 
       <WorkspaceGrid>
         {/* คอลัมน์ 1 — โต๊ะ: เซสชันที่ DM เปิด + ใครอยู่ในโต๊ะบ้าง */}
@@ -80,10 +116,14 @@ export function PlayerView({ campaignId }: { campaignId: string }) {
           <CharacterRosterPanel
             title="ตัวละครของฉัน"
             characters={ws.ownCharacters}
-            onCreate={(name) => ws.createCharacter.mutate(name)}
-            creating={ws.createCharacter.isPending}
-            emptyLabel="ยังไม่มีตัวละครของคุณ — สร้างก่อนถึงจะส่ง action ได้"
+            emptyLabel="ยังไม่มีตัวละครของคุณ — เลือก preset ด้านล่างก่อนถึงจะส่ง action ได้"
           />
+
+          {/* Sprint G Part 7 — เลือกจากการ์ด preset แทนกรอกชื่อเปล่า (design doc §5) */}
+          <section className={sectionClass}>
+            <h2 className="font-medium">สร้างตัวละครใหม่</h2>
+            <CharacterPresetPicker campaignId={campaignId} />
+          </section>
 
           <CharacterRosterPanel title="ทุกคนในโต๊ะ" characters={ws.characters} />
 
@@ -117,6 +157,48 @@ export function PlayerView({ campaignId }: { campaignId: string }) {
           )}
           {ws.selectedSessionId && (
             <>
+              <section className={sectionClass}>
+                <h2 className="font-medium">แผนที่</h2>
+                {scene.noScene ? (
+                  <p className="text-sm opacity-50">DM ยังไม่ได้วางแผนที่ของฉากนี้</p>
+                ) : (
+                  <>
+                    <SceneMap
+                      tokens={scene.tokens}
+                      revealedAreas={scene.revealedAreas}
+                      imageUrl={scene.scene?.imageUrl ?? null}
+                      nameOf={nameOf}
+                      fogStyle="opaque"
+                      emptyHint="ยังไม่มีอะไรบนแผนที่"
+                      reachable={reachable.squares}
+                      draggableEntityId={activeCharacterId ?? undefined}
+                      onDropCell={handleDropCell}
+                    />
+                    <p className="text-xs opacity-50">
+                      ลาก token ของคุณเพื่อเดิน — พื้นที่เขียวคือระยะที่ไปถึงได้ในเทิร์นนี้
+                      ({reachable.budgetFeet} ฟุต)
+                    </p>
+                    {/* novice check ของ Part นี้ — ผู้เล่นต้องเข้าใจว่ามีพื้นที่ที่ยังไม่รู้จัก โดยไม่ต้อง
+                        รู้จักคำว่า "fog of war" · บอกทั้ง "มันคืออะไร" และ "ทำยังไงถึงจะเห็นเพิ่ม" */}
+                    <p className="text-sm opacity-60">
+                      พื้นที่มืดคือที่ที่ยังไม่มีใครไปถึง — พาตัวละครไปสำรวจแล้วจะเห็นเพิ่มขึ้นเอง
+                    </p>
+                  </>
+                )}
+              </section>
+
+              {ws.ownCharacters.length > 0 && (
+                <MovementPlanner
+                  campaignId={campaignId}
+                  sessionId={ws.selectedSessionId}
+                  characterId={actingCharacterId ?? ws.ownCharacters[0].id}
+                  characterName={
+                    ws.ownCharacters.find((c) => c.id === (actingCharacterId ?? ws.ownCharacters[0].id))
+                      ?.name ?? "ตัวละครของคุณ"
+                  }
+                />
+              )}
+
               <EncounterPanel
                 combat={combat}
                 characters={ws.characters}
@@ -131,10 +213,28 @@ export function PlayerView({ campaignId }: { campaignId: string }) {
                 isDm={false}
                 userId={ws.userId}
               />
+              {/* Sprint G Part 9 — พาเนลตัวเลือกที่ server คำนวณมาแล้ว แทนฟอร์มเลือกเป้า+กรอกสูตรเดิม
+                  (§1.1: ศัตรูที่ไกลเกินไม่ปรากฏในลิสต์ตั้งแต่แรก ไม่ใช่เลือกได้แล้วค่อยเด้ง error) */}
+              {ws.ownCharacters.length > 0 && (
+                <AffordancePanel
+                  campaignId={campaignId}
+                  sessionId={ws.selectedSessionId}
+                  characterId={actingCharacterId ?? ws.ownCharacters[0].id}
+                  characterName={
+                    ws.ownCharacters.find((c) => c.id === (actingCharacterId ?? ws.ownCharacters[0].id))
+                      ?.name ?? "ตัวละครของคุณ"
+                  }
+                  combat={combat}
+                />
+              )}
+
+              {/* ทอยเช็ค vs DC ยังเป็นการกรอกเอง — ยังไม่มีคลังของ "สกิล/เช็ค" ให้คำนวณตัวเลือกได้
+                  เหมือนฝั่งโจมตี (catalog รอบนี้มีแค่อาวุธ/เวท/การเคลื่อนที่) */}
               <AttackCheckPanel
                 combat={combat}
                 characters={ws.characters}
                 actableCharacters={ws.ownCharacters}
+                showAttack={false}
               />
 
               <DicePanel

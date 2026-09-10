@@ -22,6 +22,9 @@ export function useCampaignHub({
   onHpUpdated,
   onActionMessageCreated,
   onCombatEvent,
+  onFogChanged,
+  onReactionPrompt,
+  onMovementResumed,
 }: UseCampaignHubOptions) {
   const managerRef = useRef<CampaignHubManager | null>(null);
 
@@ -38,6 +41,9 @@ export function useCampaignHub({
       onHpUpdated,
       onActionMessageCreated,
       onCombatEvent,
+      onFogChanged,
+      onReactionPrompt,
+      onMovementResumed,
     });
     managerRef.current = manager;
     void manager.start();
@@ -46,7 +52,7 @@ export function useCampaignHub({
       void manager.stop();
       managerRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- callback ทั้งหมด (onStatusChange/onJoinedChange/onLog/onDiceRolled/onProposalCreated/onHpUpdated/onActionMessageCreated/onCombatEvent) เป็น zustand action/closure อ้างอิงคงที่พอในทางปฏิบัติ ไม่ต้องใส่
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- callback ทั้งหมด (onStatusChange/onJoinedChange/onLog/onDiceRolled/onProposalCreated/onHpUpdated/onActionMessageCreated/onCombatEvent/onFogChanged) เป็น zustand action/closure อ้างอิงคงที่พอในทางปฏิบัติ ไม่ต้องใส่
   }, [token]);
 
   useEffect(() => {
