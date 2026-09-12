@@ -116,7 +116,7 @@ public static class AffordanceEndpoints
                 .ToList();
 
             var visibleTargets = await BuildVisibleTargetsAsync(db, actor!, actorToken, visibleTokens);
-            var options = await BuildOptionsAsync(db, actor!);
+            var (options, entries) = await BuildOptionsAsync(db, actor!);
             var economy = await GetEconomyAsync(db, turnStateStore, sessionId, actor!);
 
             var affordances = AffordanceResolver.Resolve(economy, options, visibleTargets);
@@ -128,29 +128,58 @@ public static class AffordanceEndpoints
             var costByOptionId = options.ToDictionary(o => o.Id, o => o.Cost);
             var distanceByTargetId = visibleTargets.ToDictionary(t => t.Id, t => t.DistanceFeet);
 
+            // ประเภทของเป้า (Character/Monster) มาจาก token ชุดเดียวกับที่ใช้สร้าง visibleTargets —
+            // ไม่ query เพิ่ม เพราะรู้อยู่แล้วจาก EntityType ของ token ที่ผ่านตัวกรองหมอกมา
+            var entityTypeByTargetId = visibleTokens
+                .Where(t => t.EntityType is "Character" or "Monster")
+                .ToDictionary(t => t.EntityId, t => t.EntityType);
+
+            // Sprint H Part 4 — สูตรทอยโจมตี/DC/ดาเมจ/การรักษาต่อ "ตัวเลือก" (ไม่ใช่ต่อเป้า) เพราะ
+            // ขึ้นกับผู้กระทำ + แถว catalog เท่านั้น ไม่เคยแตะสถานะของเป้าเลยแม้แต่บรรทัดเดียว จึงไม่เพิ่ม
+            // พื้นผิวรั่วข้อมูลเหนือโมเดลหมอกด้านบน (หมอกกรอง "มีอะไรอยู่" ส่วนนี้แค่คำนวณ "ทำอะไรได้"
+            // จากของที่ผู้เล่นรู้เกี่ยวกับตัวเองอยู่แล้ว)
+            var formulaByOptionId = BuildFormulas(entries, actor!);
+
             return Results.Ok(new AffordanceResponse(
                 characterId,
-                affordances.Select(a => new AffordanceItemResponse(
-                    a.OptionId,
-                    a.OptionName,
-                    a.TargetId,
-                    a.TargetName,
-                    a.AdvantageMode.ToString(),
-                    costByOptionId[a.OptionId].ToString(),
-                    a.TargetId is not null && distanceByTargetId.TryGetValue(a.TargetId.Value, out var feet)
-                        ? feet
-                        : null,
-                    a.Notes.Select(n => new AffordanceNoteResponse(n.Code.ToString(), n.Message)).ToList()))
-                    .ToList()));
+                affordances.Select(a =>
+                {
+                    formulaByOptionId.TryGetValue(a.OptionId, out var formula);
+                    entries.TryGetValue(a.OptionId, out var entry);
+
+                    return new AffordanceItemResponse(
+                        a.OptionId,
+                        a.OptionName,
+                        a.TargetId,
+                        a.TargetName,
+                        a.AdvantageMode.ToString(),
+                        costByOptionId[a.OptionId].ToString(),
+                        a.TargetId is not null && distanceByTargetId.TryGetValue(a.TargetId.Value, out var feet)
+                            ? feet
+                            : null,
+                        a.Notes.Select(n => new AffordanceNoteResponse(n.Code.ToString(), n.Message)).ToList(),
+                        formula?.Ability?.ToString(),
+                        formula?.AttackExpression,
+                        formula?.SaveDc,
+                        entry?.SaveAbility,
+                        formula?.DamageExpression,
+                        formula?.DamageType?.ToString(),
+                        formula?.HealingExpression,
+                        a.TargetId is not null && entityTypeByTargetId.TryGetValue(a.TargetId.Value, out var entityType)
+                            ? entityType
+                            : null);
+                })
+                .ToList()));
         }).RequireAuthorization();
     }
 
     /// <summary>
     /// แปลง token ที่ผู้ดูมองเห็นแล้วให้เป็นเป้าที่ engine กินได้
     ///
-    /// token ที่ผูกกับ Monster ข้ามไปก่อนในรอบนี้ — <c>monster_stat_blocks</c> เป็นตารางแยกที่ยังไม่มี
-    /// การ join เข้ามาที่ไหนเลย (§2.4 บอกว่าสุดท้ายต้องรวมเป็นคลังเดียวกัน แต่นั่นเป็นงานคนละรอบ)
-    /// ไม่เดา join เองที่นี่
+    /// รับ Character และ Monster ทั้งคู่ — มอนสเตอร์คุมโดย DM เสมอ จึงใช้แกน "ใครคุม" เดียวกับตัวละคร
+    /// (ศัตรูของผู้กระทำ ก็ต่อเมื่อผู้กระทำไม่ใช่ฝ่าย DM) ⚠️ รับเฉพาะ <paramref name="visibleTokens"/>
+    /// ที่กรองหมอกมาแล้วเท่านั้น ห้าม query อะไรนอกเหนือจาก id ในลิสต์นี้ — เมธอดนี้พูดถึงสิ่งที่ไม่ได้
+    /// รับมาไม่ได้เชิงโครงสร้าง (ดู doc comment บนสุดของไฟล์)
     /// </summary>
     private static async Task<List<AffordanceTarget>> BuildVisibleTargetsAsync(
         DnDEzDbContext db, Character actor, SceneTokenRecord actorToken, List<SceneTokenRecord> visibleTokens)
@@ -161,30 +190,57 @@ public static class AffordanceEndpoints
             .Distinct()
             .ToList();
 
-        if (characterIds.Count == 0)
+        var monsterIds = visibleTokens
+            .Where(t => t.EntityType == "Monster")
+            .Select(t => t.EntityId)
+            .Distinct()
+            .ToList();
+
+        if (characterIds.Count == 0 && monsterIds.Count == 0)
         {
             return [];
         }
 
-        var characters = await db.Characters
-            .Where(c => characterIds.Contains(c.Id))
-            .ToDictionaryAsync(c => c.Id);
+        var characters = characterIds.Count == 0
+            ? []
+            : await db.Characters.Where(c => characterIds.Contains(c.Id)).ToDictionaryAsync(c => c.Id);
+
+        var monsters = monsterIds.Count == 0
+            ? []
+            : await db.MonsterStatBlocks.Where(m => monsterIds.Contains(m.Id)).ToDictionaryAsync(m => m.Id);
 
         var targets = new List<AffordanceTarget>();
         foreach (var token in visibleTokens)
         {
-            if (token.EntityType != "Character" || !characters.TryGetValue(token.EntityId, out var character))
+            if (token.EntityType == "Character")
             {
-                continue;
-            }
+                if (!characters.TryGetValue(token.EntityId, out var character))
+                {
+                    continue;
+                }
 
-            targets.Add(new AffordanceTarget(
-                Id: character.Id,
-                Name: character.Name,
-                // โมเดลฝ่ายอย่างง่ายในรอบนี้: ยังไม่มีตาราง faction/พันธมิตร จึงใช้แกน "ใครคุม" แทน —
-                // ตัวละครผู้เล่นมองว่า NPC ที่ DM คุมเป็นศัตรู และ NPC ก็มองผู้เล่นเป็นศัตรูแบบสมมาตร
-                IsEnemy: character.ControlledByDm != actor.ControlledByDm,
-                DistanceFeet: DistanceInFeet(actorToken, token)));
+                targets.Add(new AffordanceTarget(
+                    Id: character.Id,
+                    Name: character.Name,
+                    // โมเดลฝ่ายอย่างง่ายในรอบนี้: ยังไม่มีตาราง faction/พันธมิตร จึงใช้แกน "ใครคุม" แทน —
+                    // ตัวละครผู้เล่นมองว่า NPC ที่ DM คุมเป็นศัตรู และ NPC ก็มองผู้เล่นเป็นศัตรูแบบสมมาตร
+                    IsEnemy: character.ControlledByDm != actor.ControlledByDm,
+                    DistanceFeet: DistanceInFeet(actorToken, token)));
+            }
+            else if (token.EntityType == "Monster")
+            {
+                if (!monsters.TryGetValue(token.EntityId, out var monster))
+                {
+                    continue;
+                }
+
+                targets.Add(new AffordanceTarget(
+                    Id: monster.Id,
+                    Name: monster.Name,
+                    // มอนสเตอร์เป็นของ DM เสมอ — ศัตรูของผู้กระทำก็ต่อเมื่อผู้กระทำไม่ใช่ฝ่าย DM
+                    IsEnemy: !actor.ControlledByDm,
+                    DistanceFeet: DistanceInFeet(actorToken, token)));
+            }
         }
 
         return targets;
@@ -213,19 +269,22 @@ public static class AffordanceEndpoints
     /// parse แบบไม่ไว้ใจข้อมูลเลย — <c>sheet</c> เป็น jsonb อิสระ ตัวละครเก่าที่สร้างก่อน Part 7
     /// ไม่มีคีย์นี้ และอาจเป็น null/ไม่ใช่ array/guid พัง ทุกกรณีต้องได้ลิสต์ว่าง ไม่ใช่ 500
     /// </summary>
-    private static async Task<List<AffordanceOption>> BuildOptionsAsync(DnDEzDbContext db, Character actor)
+    private static async Task<(List<AffordanceOption> Options, Dictionary<Guid, ActionCatalogEntry> Entries)>
+        BuildOptionsAsync(DnDEzDbContext db, Character actor)
     {
         var refs = ParseCatalogRefs(actor.Sheet);
         if (refs.Count == 0)
         {
-            return [];
+            return ([], []);
         }
 
         var entries = await db.ActionCatalogEntries
             .Where(e => refs.Contains(e.Id))
             .ToListAsync();
 
-        return entries.Select(e => new AffordanceOption(
+        var entriesById = entries.ToDictionary(e => e.Id);
+
+        var options = entries.Select(e => new AffordanceOption(
             Id: e.Id,
             Name: e.Name,
             Cost: MapCost(e.ActionCost),
@@ -233,6 +292,109 @@ public static class AffordanceEndpoints
             TargetsEnemy: e.TargetKind == ActionTargetKind.Enemy,
             NormalRangeFeet: e.RangeNormalFeet,
             LongRangeFeet: e.RangeLongFeet)).ToList();
+
+        return (options, entriesById);
+    }
+
+    /// <summary>
+    /// สูตรทอยโจมตี/DC/ดาเมจ/การรักษาต่อ "ตัวเลือก" (catalog entry) หนึ่งอัน — คำนวณจาก **ผู้กระทำ +
+    /// แถว catalog เท่านั้น** ไม่เคยรับ/อ่านอะไรเกี่ยวกับเป้าเลย จึงไม่เพิ่มช่องรั่วข้อมูลเหนือโมเดลหมอก
+    /// ที่กรองไว้ก่อนหน้านี้แล้ว (ดู doc comment บนสุดของไฟล์) — ตัวเลือกที่ผู้เล่นเห็นอยู่แล้วว่ามี
+    /// ท่านี้ ไม่ได้รู้อะไรเพิ่มจากตัวเลขในสูตรของตัวเอง
+    /// </summary>
+    private static Dictionary<Guid, ActionFormula?> BuildFormulas(
+        Dictionary<Guid, ActionCatalogEntry> entries, Character actor)
+    {
+        var className = ParseClassName(actor.Sheet);
+        var scores = new AbilityScores(
+            actor.Strength, actor.Dexterity, actor.Constitution, actor.Intelligence, actor.Wisdom, actor.Charisma);
+
+        var result = new Dictionary<Guid, ActionFormula?>();
+        foreach (var (id, entry) in entries)
+        {
+            result[id] = BuildFormula(entry, scores, actor.Level, className);
+        }
+
+        return result;
+    }
+
+    private static ActionFormula? BuildFormula(
+        ActionCatalogEntry entry, AbilityScores scores, int level, string? className)
+    {
+        DamageType? damageType = null;
+        if (entry.DamageType is not null)
+        {
+            // parse ไม่ได้ = ข้อมูล catalog เพี้ยน (ไม่ควรเกิดเพราะมี DB CHECK) — คืน null ทั้งสูตร
+            // แทนการเดาชนิดดาเมจ ปลอดภัยกว่าเสมอ (เหตุผลเดียวกับ ActionFormulaResolver.Build)
+            if (!Enum.TryParse<DamageType>(entry.DamageType, ignoreCase: false, out var parsed))
+            {
+                return null;
+            }
+
+            damageType = parsed;
+        }
+
+        var source = new ActionFormulaSource(
+            RollKind: MapRollKind(entry.RollKind),
+            Ability: MapAbilitySource(entry.Ability),
+            DamageDice: entry.DamageDice,
+            DamageType: damageType,
+            HealingDice: entry.HealingDice,
+            AddsAbilityToEffect: entry.AddsAbilityToEffect,
+            IsCantrip: entry.Kind == ActionCatalogKind.Spell && entry.SpellSlotLevel == 0);
+
+        return ActionFormulaResolver.Build(source, scores, level, className);
+    }
+
+    /// <summary>แปลงรูปทอยจาก enum ของ Domain ไปเป็นของ Rules — switch ชัด ๆ ไม่ cast ตัวเลข เหตุผล
+    /// เดียวกับ <see cref="MapCost"/></summary>
+    private static FormulaRollKind MapRollKind(ActionRollKind kind) => kind switch
+    {
+        ActionRollKind.AttackRoll => FormulaRollKind.AttackRoll,
+        ActionRollKind.SavingThrow => FormulaRollKind.SavingThrow,
+        ActionRollKind.None => FormulaRollKind.None,
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "roll kind ที่ไม่รู้จัก")
+    };
+
+    /// <summary>แปลง ability ของ catalog จาก enum ของ Domain ไปเป็นของ Rules — switch ชัด ๆ ไม่ cast
+    /// ตัวเลข เหตุผลเดียวกับ <see cref="MapCost"/></summary>
+    private static ActionAbilitySource? MapAbilitySource(ActionAbility? ability) => ability switch
+    {
+        null => null,
+        ActionAbility.Strength => ActionAbilitySource.Strength,
+        ActionAbility.Dexterity => ActionAbilitySource.Dexterity,
+        ActionAbility.Spellcasting => ActionAbilitySource.Spellcasting,
+        _ => throw new ArgumentOutOfRangeException(nameof(ability), ability, "ability ที่ไม่รู้จัก")
+    };
+
+    /// <summary>
+    /// อ่าน <c>sheet.class</c> ด้วยแพทเทิร์นการ์ดเดียวกับ <see cref="ParseCatalogRefs"/> เป๊ะ (root ต้อง
+    /// เป็น object ก่อนเสมอ เพราะ TryGetProperty โยนถ้า root เป็น array/สตริง/ตัวเลข) — ตัวละครเก่าที่
+    /// ไม่มีคีย์นี้ หรือ sheet ที่ไม่ใช่ object เลย ต้องได้ null ไม่ใช่ 500
+    /// </summary>
+    private static string? ParseClassName(string sheetJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(sheetJson) ? "{}" : sheetJson);
+
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            if (!doc.RootElement.TryGetProperty("class", out var classElement)
+                || classElement.ValueKind != JsonValueKind.String)
+            {
+                return null;
+            }
+
+            return classElement.GetString();
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static List<Guid> ParseCatalogRefs(string sheetJson)
@@ -320,6 +482,14 @@ internal record AffordanceItemResponse(
     string AdvantageMode,
     string Cost,
     int? DistanceFeet,
-    List<AffordanceNoteResponse> Notes);
+    List<AffordanceNoteResponse> Notes,
+    string? Ability,
+    string? AttackExpression,
+    int? SaveDc,
+    string? SaveAbility,
+    string? DamageExpression,
+    string? DamageType,
+    string? HealingExpression,
+    string? TargetEntityType);
 
 internal record AffordanceResponse(Guid CharacterId, List<AffordanceItemResponse> Options);

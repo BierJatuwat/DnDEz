@@ -119,6 +119,31 @@ public class MovementPreviewEndpointsTests : IAsyncLifetime
         Assert.Empty(body.Warnings);
     }
 
+    /// <summary>
+    /// ⚠️ **สัญญาที่เปลี่ยนใน Sprint H Part 7** — เดิม preview โหลดฉากเองและ **ไม่เคยเช็ค** ว่าตัวละครมี token
+    /// อยู่บนฉากหรือยัง (คืน 200 พร้อมราคาเส้นทางให้ตัวละครที่ยังไม่ได้ลงกระดานด้วยซ้ำ) · พอย้ายมาใช้
+    /// <c>MovementSceneContext.LoadAsync</c> ตัวเดียวกับ commit/reachable จึงได้ 404 เหมือนกันทั้งสามที่
+    ///
+    /// เขียนเทสต์นี้เพราะ code review ชี้ว่าเป็นการเปลี่ยนพฤติกรรมของ endpoint เดิมที่ **ไม่มีเทสต์ล็อกไว้เลย**
+    /// ทั้งก่อนและหลัง · owner ตรวจฝั่ง frontend แล้วว่าไม่มีใครเรียก preview ก่อนมี token (ลาก token ที่มี
+    /// อยู่จริง หรือใช้เส้นทางจาก reachable ซึ่งต้องมี token อยู่ก่อน) จึงเก็บพฤติกรรมใหม่ไว้แล้วล็อกด้วย
+    /// เทสต์ แทนการย้อนกลับไปให้ preview คิดราคาให้ตัวละครที่ไม่ได้อยู่บนแผนที่
+    /// </summary>
+    [Fact]
+    public async Task Preview_for_a_character_without_a_token_on_the_scene_is_404()
+    {
+        var response = await AuthedClient(_otherPlayerToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignId}/sessions/{_sessionId}/movement/preview",
+            new
+            {
+                CharacterId = _otherPlayersCharacterId,
+                Path = new[] { new { X = 0.0, Y = 0.0 }, new { X = 1.0, Y = 0.0 } },
+                Disengage = false,
+            });
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
     /// <summary>เลือก Disengage = ไม่โดนสวน ผู้เล่นจึงเปรียบเทียบสองทางเลือกได้ก่อนตัดสินใจ
     /// (ตรงกับ §3.4 ที่ว่าต้องเห็นความต่างระหว่าง "ทางที่ถูกที่สุด" กับ "ทางที่ปลอดภัยที่สุด")</summary>
     [Fact]

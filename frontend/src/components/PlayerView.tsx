@@ -11,10 +11,12 @@ import { useReachable } from "@/lib/use-reachable";
 import { useMovement } from "@/lib/use-movement";
 import type { CampaignMember } from "@/lib/campaign-types";
 import { SceneMap } from "./SceneMap";
+import { parseSceneGrid } from "@/lib/scene-grid";
 import { CharacterPresetPicker } from "./CharacterPresetPicker";
 import { AffordancePanel } from "./AffordancePanel";
 import { ReactionPrompt } from "./ReactionPrompt";
-import { MovementPlanner } from "./MovementPlanner";
+import { MovementPlanner, type PendingMove } from "./MovementPlanner";
+import { TerrainLegend } from "./TerrainLegend";
 import {
   AttackCheckPanel,
   DeathSavePanel,
@@ -81,12 +83,37 @@ export function PlayerView({ campaignId }: { campaignId: string }) {
   const reachable = useReachable(campaignId, ws.selectedSessionId, activeCharacterId);
   const movement = useMovement(campaignId, ws.selectedSessionId);
 
-  /** ปล่อย token ลงช่องไหน → ใช้ **เส้นทางที่ server คำนวณมาให้** ของช่องนั้นส่งไป commit ตรง ๆ
-   *  client ไม่ประกอบเส้นทางเอง (กันการส่งทางที่เลี่ยง OA หรือลัดผ่านสิ่งกีดขวาง) */
-  const handleDropCell = (cell: { x: number; y: number }) => {
+  /** token ของตัวละครที่กำลังสั่งอยู่ — ระบุด้วย token id เพราะ entity เดียวมีได้หลาย token */
+  const ownTokenIds = scene.tokens
+    .filter((t) => t.entityType === "Character" && t.entityId === activeCharacterId)
+    .map((t) => t.id);
+
+  /** การเดินที่ server เตือนว่ามีราคา (โดนสวน / ระยะไม่พอ) — รอผู้เล่นยืนยันใน MovementPlanner */
+  const [pendingMove, setPendingMove] = useState<PendingMove | null>(null);
+
+  /** ปล่อย token ลงช่องไหน → ใช้ **เส้นทางที่ server คำนวณมาให้** ของช่องนั้น (client ไม่ประกอบเส้นทาง
+   *  เอง กันการส่งทางที่เลี่ยง OA หรือลัดผ่านสิ่งกีดขวาง)
+   *
+   *  Sprint H Part 4 — **preview ก่อนทุกครั้ง** ไม่ commit ทันทีแบบเดิม: ไม่มีคำเตือนก็เดินเลย (ผู้เล่นไม่
+   *  รู้สึกต่าง) · มีคำเตือนค่อยถาม — เดิมการลากไม่เคยเตือนเรื่องโดนสวน และเลือก Disengage ไม่ได้เลย
+   *  ทั้งสองอย่างเคยอยู่แค่ในฟอร์มกรอกพิกัดที่ Part นี้เอาออก (spatial-play-design §3.4) */
+  const handleTokenDrop = (_tokenId: string, cell: { x: number; y: number }) => {
     const square = reachable.squares.find((s) => s.x === cell.x && s.y === cell.y);
     if (!square || !activeCharacterId) return;
-    movement.commit.mutate({ characterId: activeCharacterId, path: square.path, disengage: false });
+    const characterId = activeCharacterId;
+    setPendingMove(null);
+    movement.preview.mutate(
+      { characterId, path: square.path, disengage: false },
+      {
+        onSuccess: (preview) => {
+          if (preview.warnings.length === 0 && preview.isAffordable) {
+            movement.commit.mutate({ characterId, path: square.path, disengage: false });
+          } else {
+            setPendingMove({ characterId, path: square.path, preview });
+          }
+        },
+      },
+    );
   };
 
   return (
@@ -170,10 +197,16 @@ export function PlayerView({ campaignId }: { campaignId: string }) {
                       nameOf={nameOf}
                       fogStyle="opaque"
                       emptyHint="ยังไม่มีอะไรบนแผนที่"
+                      pixelsPerSquare={parseSceneGrid(scene.scene?.grid).pixelsPerSquare}
                       reachable={reachable.squares}
-                      draggableEntityId={activeCharacterId ?? undefined}
-                      onDropCell={handleDropCell}
+                      draggableTokenIds={ownTokenIds}
+                      onTokenDrop={handleTokenDrop}
+                      constrainToReachable
+                      terrain={scene.terrain}
                     />
+                    {/* Sprint H Part 6 — novice check: ผู้เล่นต้องรู้เองจากจอว่าตรงไหนเดินยาก ไม่ต้องมีใครบอก
+                        (พื้นที่ได้มาถูกกรองตามหมอกที่ server แล้ว — ไม่มีอะไรในหมอกโผล่ในคำอธิบาย) */}
+                    <TerrainLegend terrain={scene.terrain} />
                     <p className="text-xs opacity-50">
                       ลาก token ของคุณเพื่อเดิน — พื้นที่เขียวคือระยะที่ไปถึงได้ในเทิร์นนี้
                       ({reachable.budgetFeet} ฟุต)
@@ -187,15 +220,18 @@ export function PlayerView({ campaignId }: { campaignId: string }) {
                 )}
               </section>
 
-              {ws.ownCharacters.length > 0 && (
+              {(movement.preview.isError || movement.commit.isError) && !pendingMove && (
+                <p className="text-xs text-red-500">เดินไม่สำเร็จ — ลองลาก token ใหม่อีกครั้ง</p>
+              )}
+
+              {/* Sprint H Part 4 — ไม่มีฟอร์มกรอกพิกัดแล้ว โผล่เฉพาะตอนลากไปแล้ว server เตือนว่ามีราคา */}
+              {pendingMove && (
                 <MovementPlanner
+                  key={pendingMove.path.map((p) => `${p.x},${p.y}`).join(";")}
                   campaignId={campaignId}
                   sessionId={ws.selectedSessionId}
-                  characterId={actingCharacterId ?? ws.ownCharacters[0].id}
-                  characterName={
-                    ws.ownCharacters.find((c) => c.id === (actingCharacterId ?? ws.ownCharacters[0].id))
-                      ?.name ?? "ตัวละครของคุณ"
-                  }
+                  pending={pendingMove}
+                  onClose={() => setPendingMove(null)}
                 />
               )}
 

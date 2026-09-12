@@ -24,15 +24,6 @@ namespace DnDEz.Api.Endpoints;
 /// </summary>
 public static class MovementPreviewEndpoints
 {
-    /// <summary>
-    /// ระยะเอื้อมมาตรฐาน 5 ฟุต (SRD 5.2 "Reach": *"A creature has a 5-foot reach"*)
-    ///
-    /// ⚠️ ยังไม่มีคอลัมน์ reach ต่อตัวละคร/มอนสเตอร์ในสคีมาเลย — มอนสเตอร์เอื้อมยาว (เช่นไฮดรา
-    /// reach 10 ft) จึงยังถูกคิดเป็น 5 ฟุตอยู่ · engine รองรับค่าอื่นแล้ว (มีเทสต์คุมเคส 10 ฟุต)
-    /// ขาดแค่ที่เก็บข้อมูล ไม่ใช่ขาดกฎ
-    /// </summary>
-    private const int DefaultReachFeet = 5;
-
     public static void MapMovementPreviewEndpoints(this WebApplication app)
     {
         app.MapPost("/campaigns/{campaignId:guid}/sessions/{sessionId:guid}/movement/preview", async (
@@ -54,59 +45,14 @@ public static class MovementPreviewEndpoints
                 return Results.BadRequest();
             }
 
-            var campaign = await db.Campaigns.SingleOrDefaultAsync(c => c.Id == campaignId);
-            if (campaign is null)
+            var context = await MovementSceneContext.LoadAsync(
+                db, tokenStore, campaignId, sessionId, request.CharacterId, callerUserId.Value);
+            if (context.Failure is not null)
             {
-                return Results.NotFound();
-            }
-
-            var session = await db.Sessions
-                .SingleOrDefaultAsync(s => s.Id == sessionId && s.CampaignId == campaignId);
-            if (session is null)
-            {
-                return Results.NotFound();
-            }
-
-            var (actor, authFailure) = await CampaignAuthorization.RequireCharacterActorAsync(
-                db, request.CharacterId, campaignId, campaign, callerUserId.Value);
-            if (authFailure is not null)
-            {
-                return authFailure;
-            }
-
-            var isDm = campaign.OwnerUserId == callerUserId.Value;
-
-            var scene = await db.Scenes.SingleOrDefaultAsync(s => s.SessionId == sessionId && s.IsActive);
-            if (scene is null)
-            {
-                return Results.NotFound();
-            }
-
-            var tokens = SceneTokenSerialization.Parse(scene.Tokens);
-            var pending = await tokenStore.GetPendingPositionsAsync(scene.Id);
-            for (var i = 0; i < tokens.Count; i++)
-            {
-                if (pending.TryGetValue(tokens[i].Id, out var pos))
-                {
-                    tokens[i] = tokens[i] with { X = pos.X, Y = pos.Y };
-                }
+                return context.Failure;
             }
 
             var path = request.Path.Select(p => new GridPoint((int)Math.Round(p.X), (int)Math.Round(p.Y))).ToList();
-
-            // ── ภัยคุกคาม: เฉพาะศัตรูที่ "ผู้เดินมองเห็นแล้ว" เท่านั้น ──
-            //
-            // คำเตือนบอกชื่อศัตรู ถ้าเตือนถึงตัวที่ยังอยู่ในหมอกก็เท่ากับบอกว่ามีมันอยู่ ซึ่งเป็นช่องรั่ว
-            // แบบเดียวกับที่ §1.2 เตือนไว้และ Part 9 แก้ไปแล้ว · ผลข้างเคียงที่ตั้งใจ: นักซุ่มโจมตี
-            // ที่ยังไม่ถูกเปิดหมอกจะ **ไม่** โผล่ในคำเตือน ซึ่งถูกทั้งเรื่องความปลอดภัยและเรื่องเกม
-            // (การซุ่มโจมตีควรเซอร์ไพรส์ — ไม่ใช่ประกาศล่วงหน้า)
-            var fogAreas = FogLayerSerialization.ParseRevealedAreas(scene.FogLayer);
-            var visibleTokens = tokens
-                .Where(t => t.EntityType == "Character" && t.EntityId != request.CharacterId)
-                .Where(t => FogLayerSerialization.IsVisibleTo(t.X, t.Y, fogAreas, isDm))
-                .ToList();
-
-            var threats = await BuildThreatsAsync(db, actor!, visibleTokens);
 
             IReadOnlyList<OpportunityAttackTrigger> triggers;
             PathCost cost;
@@ -115,12 +61,19 @@ public static class MovementPreviewEndpoints
                 cost = MovementCostResolver.CostOfPath(
                     path,
                     MovementMode.Walk,
-                    // ยังไม่มีที่เก็บพื้นเดินยาก/กำแพงในสคีมา — `scenes.grid` เก็บแค่ pixelsPerSquare
-                    // กับ offset ไม่มีรายการช่อง · engine รองรับครบแล้ว (Part 8) ขาดแค่ข้อมูล
-                    TerrainField.Empty,
-                    new MovementProfile(BudgetFeet: actor!.SpeedFeet));
+                    // พื้นมาจาก scenes.terrain (ชั้นแผนที่เท่านั้น — ชั้น effect ยังไม่ทำ ดู SceneTerrainSerialization)
+                    context.Terrain,
+                    new MovementProfile(BudgetFeet: context.Actor!.SpeedFeet));
 
-                triggers = OpportunityAttackResolver.Detect(path, threats, request.Disengage);
+                // ── ภัยคุกคาม: เฉพาะศัตรูที่ "ผู้เดินมองเห็นแล้ว" เท่านั้น ──
+                //
+                // คำเตือนบอกชื่อศัตรู ถ้าเตือนถึงตัวที่ยังอยู่ในหมอกก็เท่ากับบอกว่ามีมันอยู่ ซึ่งเป็นช่องรั่ว
+                // แบบเดียวกับที่ §1.2 เตือนไว้และ Part 9 แก้ไปแล้ว · ผลข้างเคียงที่ตั้งใจ: นักซุ่มโจมตี
+                // ที่ยังไม่ถูกเปิดหมอกจะ **ไม่** โผล่ในคำเตือน ซึ่งถูกทั้งเรื่องความปลอดภัยและเรื่องเกม
+                // (การซุ่มโจมตีควรเซอร์ไพรส์ — ไม่ใช่ประกาศล่วงหน้า) · ตอนนี้ threats มาจาก
+                // MovementSceneContext.LoadAsync เดียวกับ commit/reachable รวมถึงมอนสเตอร์ที่มี
+                // reach ต่อ stat block แล้ว ไม่ใช่ DefaultReachFeet ตายตัวอีกต่อไป
+                triggers = OpportunityAttackResolver.Detect(path, context.Threats, request.Disengage);
             }
             catch (ArgumentException)
             {
@@ -171,7 +124,7 @@ public static class MovementPreviewEndpoints
             var reachable = MovementCostResolver.Reachable(
                 origin,
                 MovementMode.Walk,
-                TerrainField.Empty,
+                context.Terrain,
                 new MovementProfile(BudgetFeet: budget));
 
             return Results.Ok(new ReachableResponse(
@@ -198,58 +151,6 @@ public static class MovementPreviewEndpoints
         $"เส้นทางนี้เดินออกจากระยะเอื้อมของ{threatName} — {threatName}จะได้โจมตีสวนคุณหนึ่งครั้งฟรี " +
         $"ถ้าไม่อยากโดน ลองเลือกถอย (Disengage) หรือเดินทางอื่นที่ไม่ออกจากระยะ";
 
-    /// <summary>
-    /// แปลง token ที่มองเห็นแล้วให้เป็นรายการภัยคุกคามที่ engine กินได้
-    ///
-    /// **ฝ่าย**: ใช้แกน "ใครคุม" เหมือน Part 9 (ยังไม่มีตาราง faction) — ตัวละครผู้เล่นมองว่า NPC
-    /// ที่ DM คุมเป็นศัตรู และ NPC มองผู้เล่นเป็นศัตรูแบบสมมาตร
-    ///
-    /// **<c>CanSeeMover</c> = true เสมอสำหรับตัวที่ผ่านการกรองหมอกมาแล้ว** — โมเดลหมอกของ Part 6
-    /// เป็น "พื้นที่ที่เปิดแล้ว" ร่วมกันทั้งโต๊ะ ไม่ได้แยกตามสายตาของแต่ละตัว การมองเห็นจึงสมมาตร
-    /// ถ้าวันหนึ่งมีระบบ line-of-sight ต่อตัวจริง ๆ ต้องกลับมาแก้ตรงนี้
-    ///
-    /// **<c>ReactionAvailable</c> = true เสมอ** — turn state ที่มีอยู่เก็บทรัพยากรของ *เจ้าของเทิร์น
-    /// ปัจจุบัน* คนเดียว ไม่ได้เก็บของทุกตัวในสนาม จึงยังไม่มีทางรู้ว่าศัตรูแต่ละตัวใช้ reaction ไปแล้ว
-    /// หรือยัง · เลือก **เตือนเกินดีกว่าเตือนขาด** สำหรับพาเนลที่มีไว้กันมือใหม่เหยียบกับดัก
-    /// (ทิศทางเดียวกับที่ Part 9 เลือกตอนเจอเงื่อนไข Incapacitated ที่ยังโมเดลไม่ได้)
-    /// </summary>
-    private static async Task<List<ReachThreat>> BuildThreatsAsync(
-        DnDEzDbContext db, Character actor, List<SceneTokenRecord> visibleTokens)
-    {
-        var ids = visibleTokens.Select(t => t.EntityId).Distinct().ToList();
-        if (ids.Count == 0)
-        {
-            return [];
-        }
-
-        var characters = await db.Characters
-            .Where(c => ids.Contains(c.Id))
-            .ToDictionaryAsync(c => c.Id);
-
-        var threats = new List<ReachThreat>();
-        foreach (var token in visibleTokens)
-        {
-            if (!characters.TryGetValue(token.EntityId, out var character))
-            {
-                continue;
-            }
-
-            if (character.ControlledByDm == actor.ControlledByDm)
-            {
-                continue; // ฝ่ายเดียวกัน ไม่สวนกันเอง
-            }
-
-            threats.Add(new ReachThreat(
-                Id: character.Id,
-                Name: character.Name,
-                Position: new GridPoint((int)Math.Round(token.X), (int)Math.Round(token.Y)),
-                ReachFeet: DefaultReachFeet,
-                CanSeeMover: true,
-                ReactionAvailable: true));
-        }
-
-        return threats;
-    }
 }
 
 internal record MovementPreviewPoint(double X, double Y);

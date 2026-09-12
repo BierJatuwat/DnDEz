@@ -11,7 +11,9 @@ export class ApiError extends Error {
 }
 
 type ApiFetchOptions = {
-  method?: "GET" | "POST" | "PUT" | "DELETE";
+  // PATCH เพิ่มเข้ามาตอน Sprint H Part 2 — ฝั่ง API มี endpoint ที่เป็น PATCH อยู่ 4 ตัวตั้งแต่
+  // Sprint G (grid, token, beat, beat order) แต่ไม่เคยมีโค้ดฝั่ง frontend เรียกเลยจนถึงรอบนี้
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
   token?: string | null;
 };

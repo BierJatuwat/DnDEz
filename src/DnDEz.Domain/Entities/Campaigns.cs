@@ -203,9 +203,13 @@ public class CharacterReview
 
 /// <summary>
 /// คลังกลไก (action catalog) — design doc §2.2-§2.3: เก็บ "มันคืออะไร" (ระยะ/ชนิดเป้า/ราคา action/
-/// รูปแบบการทอย) ที่ rules engine ใช้เป็นฐานคำนวณ ส่วน "แล้วยังไง" (damage dice, upcast, คำบรรยาย ฯลฯ)
-/// อยู่ engine ไม่ใช่ที่นี่ — รายละเอียดเสริมที่ไม่กระทบการคำนวณ core เก็บใน jsonb <see cref="Details"/>
+/// รูปแบบการทอย) ที่ rules engine ใช้เป็นฐานคำนวณ ส่วน upcast/คำบรรยาย/ผลพิเศษ ไม่อยู่ที่นี่ —
+/// รายละเอียดเสริมที่ไม่กระทบการคำนวณ core เก็บใน jsonb <see cref="Details"/>
 /// ไม่ผูกแคมเปญ (ไม่มี campaign_id) เพราะเป็นข้อมูลอ้างอิงระดับระบบ ดู ActionCatalogRlsTests
+///
+/// **Sprint H Part 4 ขยายขอบเขตจาก §2.3** — เพิ่มลูกเต๋าดาเมจ/การรักษา + ability เข้ามา (เดิม §2.3
+/// ไม่มีดาเมจ) เพราะถ้าไม่มี ผู้เล่นต้องกรอกสูตรเต๋าเองทุกครั้ง ซึ่งเป็นช่องว่างสุดท้ายระหว่าง "ระบบรู้กฎ"
+/// กับ "ผู้เล่นไม่ต้องรู้กฎ" · เหตุผลเต็มดู migration `AddActionCatalogDamageAndAbility`
 /// </summary>
 public class ActionCatalogEntry
 {
@@ -223,6 +227,23 @@ public class ActionCatalogEntry
     public string? SaveAbility { get; set; }
     public string[] Tags { get; set; } = [];
     public bool? TouchesGround { get; set; }
+
+    /// <summary>ลูกเต๋าดาเมจของท่าเอง **ยังไม่รวม modifier ของผู้กระทำ** เช่น "1d8" (Sprint H Part 4)</summary>
+    public string? DamageDice { get; set; }
+
+    /// <summary>ชื่อต้องตรงกับ DnDEz.Rules.DamageType เป๊ะ — Domain ไม่ reference Rules จึงเป็น string
+    /// และมี CHECK ใน DB กำกับ (แพทเทิร์นเดียวกับ <see cref="Character.DamageResistances"/>)</summary>
+    public string? DamageType { get; set; }
+
+    /// <summary>ลูกเต๋าการรักษา เช่น "2d8" ของ Cure Wounds — แยกจากดาเมจเพราะการรักษาไม่ใช่ damage type</summary>
+    public string? HealingDice { get; set; }
+
+    /// <summary>ability ที่ท่านี้ใช้ — null = ไม่พึ่ง ability เลย (เช่น Magic Missile)</summary>
+    public ActionAbility? Ability { get; set; }
+
+    /// <summary>บวก ability modifier เข้าดาเมจ/การรักษาไหม — อาวุธบวกเสมอ เวทบวกเฉพาะที่ตัวบทบอก</summary>
+    public bool AddsAbilityToEffect { get; set; }
+
     public string Details { get; set; } = "{}";
     public DateTimeOffset CreatedAt { get; set; }
 }

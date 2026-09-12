@@ -4,6 +4,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch, ApiError } from "./api";
 import { useAuthStore } from "./auth-store";
 import type { FogArea, Scene } from "./scene-types";
+import type { SceneTerrain } from "./terrain-paint";
+
+/** ค่าคงที่ตัวเดียว (ไม่สร้าง object ใหม่ทุก render) — ฉากที่ยังไม่มีพื้นพิเศษ หรือ server รุ่นเก่า */
+const EMPTY_TERRAIN: SceneTerrain = { difficult: [], blocked: [] };
 
 /**
  * Sprint G Part 6 — ดึง scene ที่ active ของเซสชัน + คำสั่งเปิด/ปิดพื้นที่หมอก (DM เท่านั้น)
@@ -68,6 +72,7 @@ export function useScene(campaignId: string, sessionId: string | null) {
     scene,
     tokens: scene?.tokens ?? [],
     revealedAreas: scene?.revealedAreas ?? [],
+    terrain: scene?.terrain ?? EMPTY_TERRAIN,
     isLoading: sceneQuery.isPending && !!sessionId,
     noScene,
     isError: sceneQuery.isError && !noScene,

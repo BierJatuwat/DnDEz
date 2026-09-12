@@ -9,6 +9,7 @@ import {
   spentResourceLabels,
   targetLine,
 } from "@/lib/affordance-view";
+import { attackPlan, damageTypeLabel, describeDice, formulaLine } from "@/lib/affordance-formula";
 import type { AffordanceItem } from "@/lib/affordance-types";
 import type { useCombatActions } from "@/lib/use-combat-actions";
 
@@ -17,8 +18,6 @@ type Combat = ReturnType<typeof useCombatActions>;
 
 const sectionClass =
   "rounded border border-black/10 dark:border-white/10 p-4 space-y-3";
-const inputClass =
-  "rounded border border-black/20 dark:border-white/20 bg-transparent px-3 py-1.5";
 
 /**
  * Sprint G Part 9 — พาเนล "คุณจะทำอะไร?" (mockup `docs/mockups/uxpilot-player-view.png`)
@@ -33,12 +32,10 @@ const inputClass =
  *   3. ADVANTAGE — ป้ายเขียว + กล่องเหตุผลขอบเขียว
  *   4. ใช้ไปแล้ว — เทาจาง (มาจาก turn state ดูเหตุผลใน `spentResourceLabels`)
  *
- * ⚠️ **ยังต้องกรอกสูตรเต๋าอยู่ และนี่เป็นข้อจำกัดที่รู้ตัว ไม่ใช่ลืมทำ** — mockup แสดงบรรทัด
- * "สร้างดาเมจ 1d8+3" บนการ์ด แต่ **คลังกลไกไม่มีข้อมูลดาเมจเลย** (design doc §2.3 ระบุสิ่งที่
- * catalog เก็บไว้ชัดเจน: ระยะ/ชนิดเป้า/ราคา/รูปทอย/ป้ายประเภท — ไม่มีดาเมจ) และค่าโจมตีก็ต้องรู้ว่า
- * ท่าไหนใช้ STR หรือ DEX ซึ่ง catalog ก็ไม่ได้บอก · จึงเลือก **ไม่แต่งตัวเลขขึ้นมาเอง** — สิ่งที่
- * Part นี้แก้ได้จริงคือ "เลือกอะไรกับใคร" ซึ่งย้ายมาให้ server คำนวณครบแล้ว ส่วนตัวเลขเหลือเป็นช่อง
- * รองที่พับเก็บไว้ รอ Part ที่เพิ่มดาเมจ/ability ลง catalog
+ * **Sprint H Part 4 (frontend) — กดแล้วทอยได้เลย ไม่มีช่องกรอก** · สูตรมาจาก server (catalog มีดาเมจ/
+ * ability แล้ว) และ **แสดงให้เห็นก่อนกดเสมอ** ทั้งบนการ์ดและในกล่องยืนยัน — ไม่ซ่อน เพื่อให้ผู้เล่น
+ * เรียนรู้ตัวเลขไปด้วย · ท่าที่ระบบยังทอยให้ไม่ได้ (ให้เป้าเซฟ / รักษา / โดนอัตโนมัติ / server คำนวณ
+ * สูตรไม่ได้) บอกให้ขอ DM แทนการเปิดช่องกรอก เพราะช่องกรอกมือมีเฉพาะหน้า DM (player-side-design §5)
  */
 export function AffordancePanel({
   campaignId,
@@ -88,6 +85,7 @@ export function AffordancePanel({
               const badge = advantageBadge(item.advantageMode);
               const isSelected = selected?.optionId === item.optionId && selected?.targetId === item.targetId;
               const line = targetLine(item);
+              const formula = formulaLine(item);
 
               return (
                 <div key={`${item.optionId}:${item.targetId ?? "none"}`} className="space-y-1">
@@ -114,6 +112,10 @@ export function AffordancePanel({
                         </span>
                       )}
                     </span>
+                    {/* สูตรเห็นตั้งแต่ก่อนเลือก — mockup มีบรรทัด "สร้างดาเมจ 1d8+3" บนการ์ด */}
+                    {formula && (
+                      <span className="mt-0.5 block text-xs tabular-nums opacity-60">{formula}</span>
+                    )}
                   </button>
 
                   {/* กล่องเหตุผล — หัวใจของโมเดล 3 ระดับ (§1.4): ระบบไม่ห้าม แต่บอกราคาให้ครบก่อนกด
@@ -153,12 +155,12 @@ export function AffordancePanel({
         ))}
       </div>
 
-      {selected && selected.targetId && (
-        <RollControls
-          key={`${selected.optionId}:${selected.targetId}`}
+      {selected && (
+        <ActionConfirm
+          key={`${selected.optionId}:${selected.targetId ?? "none"}`}
           combat={combat}
           attackerId={characterId}
-          target={selected}
+          item={selected}
         />
       )}
     </section>
@@ -166,60 +168,92 @@ export function AffordancePanel({
 }
 
 /**
- * ช่องตัวเลขที่เหลืออยู่ — โผล่เฉพาะหลังเลือกการ์ดแล้ว เพื่อให้ "เลือกอะไรกับใคร" (ที่คำนวณมาแล้ว)
- * เป็นพระเอกของพาเนล ส่วนตัวเลขเป็นของรอง · ดู doc comment ของ AffordancePanel ว่าทำไมยังคำนวณ
- * สูตรให้อัตโนมัติไม่ได้ในรอบนี้
+ * กล่องยืนยันหลังเลือกการ์ด — **ไม่มีช่องกรอก** มีแต่สูตรที่ระบบจะใช้พร้อมคำอธิบายภาษาคน แล้วปุ่มเดียว
+ *
+ * novice check ของ Part นี้: ผู้เล่นที่ไม่รู้ว่า `1d8+3` แปลว่าอะไร ต้องโจมตีได้จบโดยไม่พิมพ์อะไรเลย ·
+ * ส่วนคำอธิบายใต้สูตรมีไว้ให้คนที่อยากรู้ค่อย ๆ เรียน ไม่ได้บังคับให้อ่านก่อนกด
  */
-function RollControls({
+function ActionConfirm({
   combat,
   attackerId,
-  target,
+  item,
 }: {
   combat: Combat;
   attackerId: string;
-  target: AffordanceItem;
+  item: AffordanceItem;
 }) {
-  const [expression, setExpression] = useState("1d20+5");
-  const [damageExpression, setDamageExpression] = useState("1d8+3");
+  const plan = attackPlan(item);
+  const formula = formulaLine(item);
 
   return (
     <div className="rounded border border-indigo-500 p-3 space-y-2">
       <p className="text-sm">
-        {target.optionName} → <strong>{target.targetName}</strong>
-        {target.advantageMode === "Disadvantage" && (
-          <span className="ml-2 text-xs text-red-600 dark:text-red-400">(ทอยแบบเสียเปรียบ)</span>
+        {item.optionName}
+        {item.targetName && (
+          <>
+            {" "}→ <strong>{item.targetName}</strong>
+          </>
         )}
       </p>
-      <div className="flex flex-wrap gap-2">
-        <input
-          value={expression}
-          onChange={(e) => setExpression(e.target.value)}
-          className={`w-28 text-sm ${inputClass}`}
-          aria-label="สูตรทอยโจมตี"
-        />
-        <input
-          value={damageExpression}
-          onChange={(e) => setDamageExpression(e.target.value)}
-          className={`w-28 text-sm ${inputClass}`}
-          aria-label="สูตรดาเมจ"
-        />
-        <button
-          type="button"
-          onClick={() =>
-            combat.makeAttack.mutate({
-              attackerId,
-              targetCharacterId: target.targetId!,
-              expression,
-              damageExpression,
-              damageType: "Slashing",
-            })
-          }
-          disabled={combat.makeAttack.isPending}
-          className="rounded bg-indigo-600 px-3 py-1.5 text-white disabled:opacity-50"
-        >
-          ลงมือ
-        </button>
-      </div>
+
+      {plan.kind === "attack" ? (
+        <>
+          <dl className="space-y-1.5 text-sm">
+            <div>
+              <dt className="inline">ทอยโจมตี </dt>
+              <dd className="inline font-medium tabular-nums">{plan.expression}</dd>
+              {/* SRD 5.2: "...equals or exceeds the target's Armor Class" = โดน */}
+              <p className="text-xs opacity-60">
+                {describeDice(plan.expression) ?? plan.expression} — ได้เท่ากับหรือมากกว่า AC ของเป้าคือโดน
+              </p>
+            </div>
+            <div>
+              <dt className="inline">ดาเมจ </dt>
+              <dd className="inline font-medium tabular-nums">
+                {plan.damageExpression} {damageTypeLabel(plan.damageType)}
+              </dd>
+              <p className="text-xs opacity-60">
+                {describeDice(plan.damageExpression) ?? plan.damageExpression} — ทอยเฉพาะตอนโจมตีโดน
+              </p>
+            </div>
+          </dl>
+
+          {/* ใช้ถ้อยคำเดียวกับป้ายเหตุผลที่ server เขียนมา ("ทอย 2 ลูก เอาลูกที่แย่กว่า") ให้สอดคล้องกัน */}
+          {plan.advantage === "Disadvantage" && (
+            <p className="text-xs text-red-600 dark:text-red-400">
+              เสียเปรียบ — ระบบทอย 2 ลูก เอาลูกที่แย่กว่าให้เอง
+            </p>
+          )}
+          {plan.advantage === "Advantage" && (
+            <p className="text-xs text-green-700 dark:text-green-400">
+              ได้เปรียบ — ระบบทอย 2 ลูก เอาลูกที่ดีกว่าให้เอง
+            </p>
+          )}
+
+          <button
+            type="button"
+            onClick={() =>
+              combat.makeAttack.mutate({
+                attackerId,
+                targetCharacterId: plan.targetId,
+                expression: plan.expression,
+                damageExpression: plan.damageExpression,
+                damageType: plan.damageType,
+                advantage: plan.advantage,
+              })
+            }
+            disabled={combat.makeAttack.isPending}
+            className="rounded bg-indigo-600 px-4 py-1.5 text-white disabled:opacity-50"
+          >
+            {combat.makeAttack.isPending ? "กำลังทอย..." : "ลงมือ"}
+          </button>
+        </>
+      ) : (
+        <>
+          {formula && <p className="text-sm tabular-nums">{formula}</p>}
+          <p className="text-sm opacity-70">{plan.reason}</p>
+        </>
+      )}
     </div>
   );
 }

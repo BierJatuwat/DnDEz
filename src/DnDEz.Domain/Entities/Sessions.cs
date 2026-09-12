@@ -77,6 +77,12 @@ public class Scene
     public string Tokens { get; set; } = "[]";
     public string FogLayer { get; set; } = "{}";
 
+    /// <summary>Sprint H Part 5 — พื้นจากแผนที่ (พื้นเดินยาก/กำแพง) ของ spatial-play-design §3.3 รูปร่าง
+    /// <c>{"difficult":[[x,y],...],"blocked":[[x,y],...]}</c> · แยกจาก <see cref="Grid"/> เพราะ PATCH grid
+    /// สร้าง grid ใหม่ทั้งก้อน — เหตุผลเต็มดู <c>SceneTerrainSerialization</c> (DnDEz.Api)
+    /// ⚠️ เป็นข้อมูลที่กำหนดว่าใครเดินไปไหนได้ — เขียนผ่าน endpoint DM-only เท่านั้น</summary>
+    public string Terrain { get; set; } = "{}";
+
     /// <summary>Sprint G Part 4 — เดิมตั้งใจเก็บ URL ตรง ๆ แต่ signed URL อายุสั้น (นาที) เก็บลง DB
     /// แล้วจะหมดอายุก่อนมีคนเปิดดูจริง (session เล่นเป็นชั่วโมง) จึง**ไม่ใช้คอลัมน์นี้ต่อ** เปลี่ยนไปเก็บ
     /// <see cref="MapAssetId"/> แทน แล้ว generate signed URL สดทุกครั้งที่ GET (ดู ScenePrepEndpoints

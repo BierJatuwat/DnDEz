@@ -322,6 +322,14 @@ export function useCampaignWorkspace(campaignId: string) {
       appendLog("realtime FogChanged — ดึงแผนที่ใหม่");
       void queryClient.invalidateQueries({ queryKey: ["scene"] });
     },
+    onTerrainChanged: () => {
+      // Sprint H Part 6 — DM วาดหนองน้ำ/กำแพง: สิ่งที่เห็นบนแผนที่เปลี่ยน และ "เดินได้ถึงไหน" ก็เปลี่ยน
+      // ต้องดึงทั้งสองอย่างใหม่ ไม่งั้นขอบเขตสีเขียวตอนลากจะยังเป็นของก่อนมีหนองน้ำ · payload ไม่มีรายการ
+      // ช่องโดยตั้งใจ ห้ามพยายามวาดจาก payload (พื้นในหมอกเป็นความลับ ต้องผ่านการกรองของ GET scene)
+      appendLog("realtime TerrainChanged — ดึงแผนที่และระยะเดินใหม่");
+      void queryClient.invalidateQueries({ queryKey: ["scene"] });
+      void queryClient.invalidateQueries({ queryKey: ["reachable"] });
+    },
     onReactionPrompt: (payload) => {
       // Sprint G Part 10 — event นี้ยิงมาที่กลุ่มของผู้ใช้คนเดียว ถ้ามาถึงเราแปลว่าเรามีสิทธิ์จริง
       // (ไม่ต้องกรองซ้ำที่นี่) · เก็บไว้ใน state ให้ component เด้ง prompt ขึ้นมา

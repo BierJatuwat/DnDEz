@@ -1025,3 +1025,303 @@ commit เสมอ) เพราะถ้าไม่ตรงกัน ผู�
 **ยังค้าง (บันทึกไว้ไม่ให้ลืม)**: `pixelsPerSquare` จาก `scenes.grid` ยังไม่ได้ต่อเข้า SceneMap จริง
 (ใช้ดีฟอลต์ 50) · `feetPerSquare`/`measurement` ยังเป็น hardcode ไม่ได้ย้ายเป็นข้อมูลแบบ Owlbear ·
 พื้นเดินยาก/กำแพงยังไม่มีที่เก็บ (TerrainField.Empty ทุกที่) — engine รองรับแล้ว ขาดแค่ข้อมูล
+
+[2026-09-11 main] : Sprint H Part 1-3 · ไม่ใช้ tier ทั้งสาม (Part 1 sonnet · Part 2-3 opus)
+
+**Part 1 — ต่อ pixelsPerSquare**: `parseSceneGrid` (10 เทสต์) แกะ `scenes.grid` แบบไม่ไว้ใจข้อมูล
+แล้วส่งเข้า SceneMap ทั้ง 3 จอ · ยืนยันบนเบราว์เซอร์: กริด 80 → token cx = 40/120 (ห่าง 80px เป๊ะ)
+· `grid='{}'` → 25/75 (ดีฟอลต์ 50) ไม่พัง · แก้ comment ที่ล้าสมัยใน MovementPlanner ที่ยังอ้างว่า
+หน่วยพิกัดขัดกันอยู่ (Part 10 เคาะไปแล้ว)
+
+**Part 2 — เครื่องมือแผนที่ DM**: `DmMapTools` + `use-scene-tokens` · เปลี่ยน SceneMap จาก
+`draggableEntityId` (ตัวเดียว) → `draggableTokenIds` + `onTokenDrop(tokenId, cell)` เพราะ DM ลากได้
+หลายตัว · ใช้ **token id ไม่ใช่ entity id** เพราะ entity เดียวมีได้หลาย token (fixture Part 6 เคยมีจริง)
+· แยกสองเส้นทางตาม §14.2: จัดฉาก (PATCH, ไม่คิดระยะ) vs เดินตามกฎ (commit, หัก speed + OA)
+· ยืนยันด้วยการลากระยะเดียวกันสองโหมด: จัดฉากวางได้ (ghost เขียว token ย้ายจริง) · เดินตามกฎปฏิเสธ
+(ghost แดง token ไม่ขยับ) · `apiFetch` ไม่รองรับ PATCH เลย ทั้งที่ API มี 4 endpoint — เพิ่มให้แล้ว
+
+**Part 3 — เดิน onboarding ด้วยมือจริง ห้ามแตะ SQL** ครบ 8 ขั้น ด้วยบัญชีใหม่ 2 บัญชี
+(dm.onboard / player.onboard) แคมเปญใหม่ แผนที่จริง 640x640 ที่มีตาราง 64px
+
+**ตัวบล็อกที่เจอ (ตรงกับที่คาดไว้)**: **ไม่มี UI อัปโหลดแผนที่/สร้างฉาก/ตั้งกริดเลย** — endpoint
+พร้อมมาตั้งแต่ Sprint G Part 4 แต่หน้า DM มี `input[type=file]` = **0 ตัว** ขณะที่ข้อความบนจอบอกให้
+"อัปโหลดแผนที่แล้วสร้างฉากก่อน" → ทางตันสมบูรณ์ เล่นจริงไม่ได้เลย · แก้ด้วย `SceneSetupPanel` +
+`use-scene-setup` · รวมอัปโหลด+สร้างฉากเป็นปุ่มเดียวเพราะในมุม DM มันคือก้าวเดียว (การแยกสองปุ่ม
+เป็นรูปร่างของ API ไม่ใช่ของงาน) · upload เป็น multipart ใช้ apiFetch ไม่ได้ (มันตั้ง Content-Type เอง
+ทำให้ boundary หาย) ต้อง fetch ตรงและห้ามตั้ง Content-Type
+
+**บั๊กหน่วยตกค้างอีกตัว**: ดีฟอลต์รัศมีหมอกใน DmConsole = **120** ซึ่งเป็นค่าจากยุคพิกัดเป็นพิกเซล
+พอเป็น "ช่อง" กลายเป็นเปิดหมอก 120 ช่องทั้งแผนที่ในคลิกเดียว → แก้เป็น 4 · **ตระกูลเดียวกับ
+`sceneBounds` padding=40 ที่เจอใน Part 1** — บทเรียน: เปลี่ยนหน่วยเมื่อไหร่ ต้องไล่ค่าคงที่ทุกตัว
+ที่ผูกกับหน่วยนั้น ไม่ใช่แค่ที่สูตรคำนวณ
+
+**สิ่งที่คาดว่าจะพังแต่ไม่พัง**: พิกัด token ตรงตารางบนรูปเป๊ะ (ช่อง 2→cx 160, ช่อง 3→cx 224
+บนกริด 64) เพราะ Part 1 แก้ไปก่อนแล้ว · ผู้เล่นที่ยังไม่มี token เห็น "รอ DM เปิดเซสชัน" ชัดเจนไม่ค้าง
+
+**ผลเดินครบ 8 ขั้น**: สมัคร DM → สร้างแคมเปญ → ตั้ง join code → สมัครผู้เล่น → เข้าร่วมด้วยโค้ด →
+สร้างตัวละครจาก preset (ธอริน 12/12) → DM เปิดเซสชัน + สร้าง NPC → อัปโหลดแผนที่ + ตั้งกริด 64 →
+วาง token 2 ตัว → เปิดหมอก → เปิด encounter (initiative ทอยเอง) → ผู้เล่นเห็น affordance
+"LONGSWORD · ก็อบลินเฝ้าถ้ำ · ห่าง 5 ฟุต" → ลากเดินหนี → **OA prompt เด้งจอ DM นับถอยหลัง 23 วิ** →
+DM กดสวนกลับ → token ไปถึงปลายทาง → จอกลางแสดงครบ (interactive = 0)
+
+**ของขรุขระที่เจอแต่ไม่ได้แก้ (นอกขอบเขต บันทึกไว้)**:
+- `movement/commit` ไม่เช็คว่าถึงตาใครเดิน — ผู้เล่นเดินนอกเทิร์นตัวเองได้ (initiative ก็อบลินมาก่อน
+  แต่ธอรินเดินได้เลย) · endpoint ใช้ `RequireCharacterActorAsync` (เช็คเจ้าของ) ไม่ได้เช็คเทิร์น
+- เซสชันที่สร้างใหม่มีสถานะ `Draft` ไม่ใช่ `Active` และไม่มีปุ่มเปลี่ยนสถานะ — ใช้งานได้ปกติ
+  แต่คำว่า Draft ทำให้ DM ไม่แน่ใจว่าต้องกดอะไรอีกไหม
+- หน้าแรกขึ้น "ยังไม่ได้อยู่โต๊ะไหนเลย" แม้เป็น DM เจ้าของแคมเปญ (เห็นตอนล็อกอินบัญชีเก่า)
+  — ยังไม่ได้ไล่หาสาเหตุ
+
+เทสต์: Rules 284/284 · Api 542/543 (flake เดิม) · frontend 110/110 · build เขียว
+
+[2026-09-11 main] : Sprint H Part 4 (backend) · <tier> · ดาเมจ + ability ใน action catalog
+- decision framework: แตกได้จริง 3 ส่วนไฟล์ไม่ชนกัน — (1) Rules pure function ประกอบสูตร (2) migration
+  seed (3) endpoint wiring · owner (main) ทำเอง: เปิด SRD 5.2 CC จริง (`pdftotext -raw` — `-layout`
+  ตารางอาวุธเลื่อนแถว Shortbow กลายเป็น "Finesse", Greataxe กลายเป็น "Ammunition" ต้องใช้ raw เท่านั้น),
+  เขียนเทสต์ red ทั้ง 3 ไฟล์, วาง stub API + Domain/DbContext + generate migration
+- (1) main -> sonnet-worker (ไม่ใช่ opus ตามข้อ 1a): owner สร้างไฟล์ stub ไว้ก่อนแล้ว worker แค่ Edit
+  body 4 เมธอด → ไม่ต้องใช้ Write · red ยืนยันแล้ว 61/61 fail ก่อน dispatch
+- เจอระหว่างทาง (พิสูจน์แล้วบนฐาน scratch `dndez_fresh_probe` ไม่แตะ `dndez`): Part 1 seed id ด้วย
+  gen_random_uuid() แต่ preset Part 7 hardcode id ที่ตรงกับเครื่อง dev เท่านั้น → ฐานใหม่ ref ของ preset
+  5/8 ชี้ไปที่ไม่มีอยู่ (นักรบ/จอมเวทย์×2/จอมโจร/เรนเจอร์ ได้ affordance ว่าง) · แก้ใน migration Part นี้
+  เพราะเป็นแถวเดียวกันที่กำลังแก้ และถ้าไม่แก้ ดาเมจของ Part นี้ไปไม่ถึงตัวละคร preset บนเครื่องอื่นเลย
+- (1) ผล sonnet-worker: ActionFormulaResolver green ใน 5 tool call ไม่ชนเพดาน — owner รันซ้ำเองแล้ว
+  Rules 345/345 (284 เดิม + 61 ใหม่) · แพทเทิร์นเดิมที่สำเร็จ: ไฟล์เดียว pure logic API ตายตัว red รออยู่
+  **และ owner สร้าง stub ให้ก่อน** จึงใช้ sonnet (ไม่มี Write) ได้แทน opus
+  · owner อ่านโค้ดเจอจุดน่าสงสัย 1 จุดเก็บไว้ให้รอบ code review: `n.ToString()` ของเลขติดลบขึ้นกับ
+  culture (บาง locale ใช้ U+2212 เป็นเครื่องหมายลบ → "1d20−3" parse ไม่ได้)
+- (2) main -> sonnet-worker: เขียน data + doc comment ใน migration ที่ owner generate ไว้ + **ให้ตรวจตัวเลข
+  SRD ซ้ำเองจาก srd-raw.txt** (ตาคู่ที่สองของตัวบท — ข้อ 4 TDD ห้าม owner เขียนทั้งเทสต์และ seed จากการอ่าน
+  ครั้งเดียวกัน) · ห้ามรัน Api.Tests ระหว่างที่ (1) ยังแก้ Rules อยู่ (build ชนกัน) ให้ตรวจด้วย psql แทน
+- (2) ผล sonnet-worker: **ชนเพดาน 8 turn** หลังเขียน data SQL + doc comment ครบ แต่ยังไม่ได้ apply/รายงาน
+  · owner ตรวจเอง: SQL ถูกทั้ง 11 คำสั่ง · เลขบรรทัด SRD 13 จุดที่ worker อ้าง เปิดดูแล้วตรงตัวบทจริงทุกจุด
+  (หลักฐานว่าอ่าน SRD ซ้ำเองจริง ไม่ได้ลอกจากพรอมต์ — เลขบรรทัดไม่ตรงกับที่ owner ให้ไปเป๊ะ)
+  · owner แก้ prose 3 จุดก่อน apply: (ก) worker เขียนว่า Fire Bolt ไม่บวก INT "เพราะ cantrip ไม่บวก
+  modifier เข้าดาเมจ" — เหมารวมผิด ตัวบทจริงคือ "A spell tells you ... whether to add any modifiers"
+  (ข) อ้างเลขบรรทัดของไฟล์ scratch ที่คนอ่าน repo ไม่มี → เปลี่ยนเป็นชื่อหัวข้อ SRD
+  (ค) owner เองเขียนชื่อหัวข้อผิด 2 จุด ("Rules Glossary"/"Creating a Character") จับได้เพราะไปหาหัวข้อ
+  จริงก่อนปล่อยผ่าน → Playing the Game › Damage and Healing / Step 5: Character Creation Details
+  · apply แล้วทั้ง dev และ scratch: 7 แถวตรงตาราง ทั้งสองฐาน · **scratch: preset ref ค้าง 5 → 0**
+  (red→green ของบั๊ก id บนฐานใหม่จริง)
+- (3) main -> sonnet-worker: wire สูตรเข้า AffordanceEndpoints.cs (ไฟล์เดิมไฟล์เดียว) หลัง (1)(2) เสร็จ
+- (3) ผล sonnet-worker: **ชนเพดาน 8 turn สองรอบ** (รอบแรกเพิ่งเขียน call site · owner SendMessage ปลุก
+  ต่อพร้อมงานแก้ culture 1 บรรทัด — ครั้งแรกที่ SendMessage ใช้ได้ใน build นี้ ปลุกต่อได้โดยไม่ต้อง
+  dispatch ใหม่แบบเย็น) · owner รันซ้ำเองทั้งชุด: **Rules 346/346 · Api 566/567** (fail ตัวเดียวคือ
+  flake เดิม ApiKeyCrudTests...preserves_existing_status_on_rotate) · เทสต์ใหม่ Api +24 เขียวครบ
+  เทสต์ affordance เดิม 10 ตัวเขียวโดยไม่แตะ
+- culture bug: owner เขียนเทสต์ sv-SE ก่อน → red จริง (ได้ "1d20−3" U+2212) → worker แก้ → green
+- **ไม่ dispatch security-reviewer โดยตั้งใจ** (ข้อห้าม "ห้าม dispatch ถ้าไม่เข้า trigger"): ไม่มี input
+  ทางใหม่ ไม่มี query ใหม่ (catalog query เดิม) ฟิลด์ใหม่คำนวณจากค่าของผู้กระทำเอง + แถว catalog
+  ไม่อ่านอะไรของเป้าเลย · ฝากให้ code-reviewer ยกขึ้นถ้าเห็นต่าง
+- main -> code-reviewer (ระดับ ≥ ผู้เขียน sonnet) ครอบทั้ง 3 ส่วนรวมกันรอบเดียว
+- เปิดเผยระหว่างทาง (นอกขอบเขต Part นี้): API มีแค่ /checks กับ /attacks — **ไม่มี endpoint รักษา
+  และไม่มี endpoint เวทแบบ save** Cure Wounds/Sacred Flame จึงมีสูตรใน response แต่ยังกดใช้จริงไม่ได้
+  · frontend ส่ง damageType "Slashing" ตายตัว (AffordancePanel.tsx) ธนูบันทึกผิดชนิดอยู่
+- scratch DB `dndez_fresh_probe` drop แล้วหลังพิสูจน์เสร็จ (เหลือ `dndez` ตัวเดียว)
+- code-reviewer รอบ 1: **ชนเพดาน 8 turn ก่อนเขียนรายงาน** → SendMessage ปลุกให้เขียนจากที่ตรวจแล้ว
+  → รายงานแบบบอกตรง ๆ ว่าตรวจไม่ครบ (ดีกว่าเงียบ) · finding 4 ข้อ owner ตัดสิน:
+  (1) Build ไม่บังคับคู่ dice⇔type เอง พึ่ง guard ภายนอก → **รับ แก้** (owner เขียน red 2 ตัว)
+  (2) MapRollKind/MapAbilitySource throw → **ไม่รับ** ตั้งใจให้พังดัง ตามเหตุผลเดิมใน doc ของ MapCost
+  (3) "ไม่มี FK" reviewer ยืนยันไม่ได้ → owner query pg_constraint เองไปแล้วตั้งแต่ต้น (0 แถว)
+  (4) TryParse ล้มเหลวไม่มีเทสต์ → รับเป็นช่องว่าง เข้าถึงไม่ได้ถ้าไม่ละเมิด CHECK
+  · ของที่ reviewer ไม่ได้ตรวจ: ตาราง PB / ประโยค Wizard-Cleric / ชื่อหัวข้อ → owner ตรวจเองแล้วก่อนหน้า
+  · **ActionCatalogDamageSeedTests.cs ยังไม่มีใครรีวิวเลย** (ไฟล์ที่เป็น DoD หลัก) → ส่งเข้ารอบ 2
+- guard (dice⇔type) : owner red 2 ตัว → sonnet-worker (ชนเพดานอีก แต่แก้ครบ) → owner รันซ้ำ Rules 348/348
+- code-reviewer รอบ 2 (รอบสุดท้ายที่อนุญาต · read-only ไม่ build กันชนกับ worker): ไม่มี blocking ·
+  ยืนยัน Theory 7 แถวตรง SQL ทุกช่อง / rollback ไม่รั่ว / doc ของ dangling-ref ซื่อตรง / guard ถูก ·
+  finding เดียว: เทสต์ CHECK damage_type พิสูจน์ได้ทางเดียว (ชื่อเกินใน CHECK หลุดได้) และ doc เดิม
+  เขียนเกินจริงว่า "พอดี" → **owner แก้เอง** (เทสต์เป็นของ owner และใหม่ใน Part นี้): เพิ่ม
+  `Damage_type_check_lists_exactly_the_rules_damage_types` set-diff กับ pg_get_constraintdef ของจริง +
+  แก้ doc เดิมให้บอกว่าพิสูจน์ทางเดียว · **red-proof**: ใน transaction ที่ rollback สลับ CHECK ให้มี
+  'Sonic' เกิน → constraintdef มี 'Sonic' จริง (regex ของเทสต์จับได้) → rollback แล้วกลับเป็น 13 ชื่อ
+- ผลสุดท้าย (owner รันเอง): Rules 348/348 · ActionCatalogDamageSeedTests 20/20 · Api 566/568
+- ⚠️ **flake ใหม่ที่ยังหาสาเหตุไม่ได้** (ไม่ได้เกิดจาก diff ของ Part นี้ — ไม่แตะโค้ด scene/fog เลย):
+  `SceneFogEndpointsTests.Player_response_raw_json_contains_no_trace_of_hidden_token` ตก 1 ครั้งในรัน
+  เต็ม · รันเดี่ยว 45 ครั้ง (class 5 + เทสต์เดียว 40) ไม่ตกเลย จึงไม่ได้ข้อความ assert มา ·
+  เทสต์มี 2 assert: (ก) id ของ token ที่ซ่อน = ตัวตรวจรั่วจริง (ข) `"999"` ทั้งก้อน JSON (token ซ่อนอยู่
+  x=999) ซึ่ง **ชนกับ GUID สุ่มได้แน่นอน** — response มี GUID สุ่ม ~8 ตัว ประเมิน ~5%/รอบ · แต่ 0/45
+  ตอนรันเดี่ยวเกิดได้แค่ ~10% ถ้าสมมติฐานนี้ถูก จึง **ตัดเรื่องรั่วจริงทิ้งไม่ได้** · ไม่พบกลไกรั่ว (scene/
+  session id สุ่มต่อเทสต์ ไม่มีใครเขียน pending ของฉากนี้) → เปิด task แยกให้หา assert ที่ตกก่อนแก้
+- flake เดิม SceneTokenEndpointsTests.Move_updates_pending ขึ้นอีก 1 รอบ (แข่ง SceneTokenFlushService
+  timer 20 วิ ตามที่บันทึกไว้ตั้งแต่ Sprint G) — รวมไว้ใน task เดียวกัน
+
+[2026-09-11 main] : Sprint H Part 4 (frontend) · ไม่มี <tier> → ทำเองตรง ๆ ไม่ dispatch
+- AffordancePanel: การ์ดแสดงสูตรจาก server ก่อนกด ("ทอยโจมตี 1d20+4 · ดาเมจ 1d8+2 ฟัน") · เลือกแล้ว
+  มีคำอธิบายภาษาคน ("ลูกเต๋า 20 หน้า 1 ลูก แล้วบวก 4 — ได้เท่ากับหรือมากกว่า AC ของเป้าคือโดน" —
+  ตรวจตัวบท SRD 5.2 ก่อนเขียน: "An attack roll hits if the roll equals or exceeds the target's Armor
+  Class") + ปุ่ม "ลงมือ" ปุ่มเดียว **ไม่มีช่องกรอก** · ท่าที่ /attacks รับไม่ได้ (เซฟ/รักษา/โดนอัตโนมัติ/
+  ไม่มีสูตร) บอกให้ขอ DM แทนการเปิดช่องกรอก
+- **บั๊กเงียบ 2 ตัวที่แก้ไปด้วย**: (1) makeAttack ไม่เคยส่ง advantage — การ์ดขึ้น "เสียเปรียบ" แต่ทอย
+  ปกติ (2) damageType "Slashing" ตายตัวทุกท่า (ธนูบันทึกเป็นดาเมจฟัน) → ใช้ค่าจาก server ไม่รู้ = ไม่ส่ง
+- MovementPlanner: เอาช่องกรอกพิกัดออก แต่ **ไม่ลบทั้งไฟล์** — ฟอร์มเดิมเป็นที่เดียวที่เห็นคำเตือน OA
+  ก่อนเดินและเลือก Disengage ได้ (การลากเดิม commit ทันที disengage:false) → เปลี่ยนเป็น preview ทุก
+  ครั้งที่วาง: ไม่มีคำเตือนเดินเลย · มีคำเตือนเปิดพาเนลยืนยัน + Disengage (spatial-play-design §3.4)
+- คงไว้ตั้งใจ: ช่องกรอกของหน้า DM (§5) · ช่องทอยเช็คของผู้เล่น (ยังไม่มีคลังสกิลให้คำนวณ)
+- ฟิลด์สูตร 7 ตัวใน AffordanceItem เป็น optional+nullable โดยตั้งใจ (frontend/backend deploy แยกกัน
+  response รุ่นเก่าไม่มีฟิลด์ = ไม่มีสูตร) · เทสต์ใหม่แยกไฟล์ affordance-formula.test.ts ไม่แตะเทสต์เดิม
+- TDD: เทสต์ 24 ตัว red ก่อน (โมดูลยังไม่มี) → เขียน affordance-formula.ts → green
+- เกต: vitest 134/134 · tsc สะอาด · lint สะอาด · build ✓
+- ⚠️ **ตรวจบนเบราว์เซอร์ยังไม่ได้** — Docker ดับ: `wsl -l -v` = docker-desktop Stopped (อาการเดียวกับ
+  Sprint G Part 9) แต่ **สาเหตุจริงอยู่ใน com.docker.backend.exe.log**: backend crash ตอนเริ่ม
+  "remove ...\Docker\run\sailor-ingest.sock: The file cannot be accessed by the system" — socket ค้างจาก
+  2026-09-10 07:41 · dialog ของ Docker มีแค่ Quit / Reset to factory defaults (**ห้ามกด Reset — ล้าง
+  container/volume รวม DB**) · บทเรียนต่อยอด: `wsl -l -v` บอกแค่อาการ ให้ grep "backend crashed"
+  ใน log ของ backend ต่อทันที · รอผู้ใช้อนุมัติก่อนปิด Docker/ลบไฟล์ socket
+- Docker: ผู้ใช้อนุมัติให้แก้ แต่คำสั่งแรกโดน guard บล็อกก่อนรัน (เห็น Remove-Item อยู่คำสั่งเดียวกับ
+  path "C:\Program Files\..." ของ Start-Process) · ตรวจสถานะก่อนรันซ้ำ → Docker **ฟื้นเองแล้ว**
+  (WSL Running, socket ถูกสร้างใหม่ 20:42) **จึงไม่ได้ลบไฟล์หรือ kill อะไรเลย** · container 3 ตัว
+  (postgres/redis/minio) Exited (255) ตาม VM ที่ดับไป → `docker start` แล้ว pg_isready/PONG ผ่าน
+- สังเกตระหว่างเตรียมเช็คบนเบราว์เซอร์ (นอกขอบเขต ยังไม่ได้ตรวจตัวบท SRD เรื่องเดินผ่าน/หยุดในช่อง
+  ของศัตรู): GET movement/reachable คืนช่อง (3,2) ซึ่งเป็นช่องที่ก็อบลินยืนอยู่ ว่า "ไปถึงได้ 15 ฟุต"
+- เบราว์เซอร์ไม่มี session ค้าง → ไม่พิมพ์รหัสผ่าน/ไม่ฉีด token ลงเบราว์เซอร์เอง ขอให้ผู้ใช้ล็อกอินเอง
+
+[2026-09-12 main] : Sprint H Part 5 (backend) · <tier> · พื้นเดินยาก + กำแพง (ชั้นแผนที่)
+- decision framework: แตกได้ — (1) ตัวอ่าน/เขียน `scenes.terrain` (pure) (2) endpoint DM-only +
+  ต่อเข้า preview/reachable/commit · owner: ออกแบบ + stub + red tests 3 ไฟล์ + entity/migration
+- **ตัดสินใจเก็บเป็นคอลัมน์ใหม่ `scenes.terrain` ไม่ขยาย `grid`** (สวน §3.3 ที่เขียนว่า grid) เพราะ
+  PATCH grid สร้าง grid ใหม่ทั้งก้อน → จัดกริดครั้งเดียวกำแพงหายทั้งฉาก · ล็อกด้วยเทสต์
+  Recalibrating_the_grid_does_not_wipe_painted_terrain · ไม่ใช่ตารางใหม่ → อยู่ใต้ RLS
+  `campaign_isolation` เดิม (ตรวจแล้ว: relrowsecurity/relforcerowsecurity = t/t)
+- ⚠️ ข้อเท็จจริงที่ต้องให้ security-reviewer เห็น: policy `campaign_isolation` ของ scenes เป็น FOR ALL
+  สำหรับสมาชิกทุกคน → "DM-only" กันที่ชั้น endpoint อย่างเดียว (เหมือน grid/fog เดิม)
+- **ชั้น effect (Web/Grease) ไม่ทำใน Part นี้** — เขียนกำกับที่ SceneTerrainSerialization.ToTerrainField
+  ที่เดียวทั้งระบบ + เทสต์ล็อกว่า FromEffects ว่างเสมอ
+- migration AddSceneTerrain apply แล้ว (terrain jsonb NOT NULL DEFAULT '{}') · red: 53/55 fail
+  · ผ่าน 2 ตัวบน stub: Anonymous 401 (ถูกต้องแล้วจาก RequireAuthorization) กับ
+  **The_detour_path_from_reachable_is_accepted_by_commit — เทสต์อ่อนของ owner เอง** ผ่านได้ทั้งที่ยังไม่มี
+  พื้น (reachable คืนทางตรงที่ commit รับอยู่แล้ว) → เขียนใหม่เป็น Commit_reads_the_same_terrain_as_reachable
+  เพิ่มขั้น "ส่งทางลุยตรง 35 ฟุตมาเอง ต้องโดนปฏิเสธ" ให้แดงจริง
+- (1) main -> sonnet-worker: SceneTerrainSerialization (owner สร้าง stub ไว้ → Edit ได้ ไม่ต้อง opus)
+- (1) ผล sonnet-worker: **ชนเพดาน 8 turn ไม่มีรายงาน** แต่โค้ดครบ (NotImplemented เหลือ 0) · owner รันเอง
+  SceneTerrainSerializationTests 29/29 · อ่าน diff เจอ **บั๊ก culture ซ้ำแบบ Part 4**: `sb.Append(int)` ใช้
+  เครื่องหมายลบของ locale → sv-SE ได้ U+2212 → JSON ใน DB พัง → Parse คืนชั้นว่าง = กำแพงหายทั้งฉาก
+  เงียบ ๆ · owner เขียนเทสต์ sv-SE (red ก่อน) แล้วค่อยให้ worker แก้ · บทเรียน: ตระกูลบั๊กนี้โผล่สองครั้ง
+  ติดใน 2 Part — ทุกจุดที่แปลงตัวเลขเป็นข้อความเพื่อ "เครื่องอ่านต่อ" (สูตรเต๋า, JSON เขียนมือ) ต้องใช้
+  InvariantCulture เสมอ
+- culture red ยืนยันแล้ว: sv-SE → Serialize ได้ `[[−3,−4]]` (U+2212)
+- (2) main -> sonnet-worker: endpoint (stub เดิม) + ต่อ terrain เข้า 3 call site + แก้ culture 1 บรรทัด ·
+  กับดักในสเปกของ owner เองที่ใส่ไว้ในพรอมต์: Enum.TryParse รับ "1" เป็นตัวเลข → ต้องเทียบชื่อเป๊ะ
+- (2) ผล sonnet-worker รอบแรก: **ชนเพดาน 8 turn ไม่มีรายงาน** · owner ตรวจเอง: wiring 3 จุดเสร็จ + culture
+  เสร็จ (MovementTerrain DoD + เทสต์ movement เดิมเขียว รวม 63 ผ่าน) แต่ endpoint ยัง 501 (18 fail) ·
+  reachable parse terrain ซ้ำเองแทน context.Terrain → SendMessage ปลุกต่อให้ทำ endpoint + แก้จุดนี้
+- (2) worker ปลุกรอบสอง เสร็จจริง · owner รันเอง: **Rules 348/348 · Api 623/624** (flake เดิมตัวเดียว)
+  · อ่าน endpoint เอง: ลำดับ 401→DM→scene(Session.CampaignId)→validate→Apply→save ถูกตามสเปก
+- main -> security-reviewer (บังคับตาม dispatch) + code-reviewer คู่ขนาน · ทั้งคู่ read-only (api dev server
+  ล็อก DLL + owner รันชุดเทสต์แล้ว) · ฝากประเด็นให้ security ชั่ง: reachable คำนวณจากกำแพงในหมอกที่
+  ยังไม่เปิด → รูปขอบเขตบอกตำแหน่งกำแพงที่ซ่อนอยู่ได้ (ตระกูลเดียวกับ §1.2)
+- body limit 64 KB: TestServer ไม่บังคับ Kestrel limit → owner พิสูจน์กับ Kestrel จริงแยก (ผลบันทึกถัดไป)
+- **body limit พิสูจน์กับ Kestrel จริงแล้ว** (api dev server + DM ทดสอบของ Part 3, ไม่ผ่านเบราว์เซอร์):
+  PATCH 71,740 ไบต์ (ช่อง Clear เดียวที่ (900,900) + padding ที่ถูกเมิน — ถ้า limit ไม่ทำงานจะได้ 200 ไม่ใช่
+  400 จึงแยกออกจาก cap ของเราเองได้) → **413** · control 1,084 ไบต์รูปเดียวกัน → 200 · terrain ก่อน/หลัง
+  เหมือนเดิม `{"difficult":[],"blocked":[]}`
+- แก้ docs/spatial-play-design.md §3.3: ตาราง "อยู่ที่ไหน" ของพื้นจากแผนที่ `scenes.grid` → `scenes.terrain`
+  พร้อมหมายเหตุเหตุผล (PATCH grid เขียนทับทั้งก้อน) และสถานะชั้น effect "ยังไม่ทำ" — เอกสารออกแบบ
+  ต้องไม่ขัดกับโค้ดจริง
+- security-reviewer: **ไม่มีช่องโหว่** (อ่านโค้ดยืนยัน): DM check ก่อน scene lookup ทั้งสอง handler · scene scope ด้วย
+  Session.CampaignId (กัน IDOR) · grep ทั้ง src ไม่มีทางอื่นเขียน Terrain (สร้าง scene ไม่ bind จาก body,
+  GET scene ของผู้เล่นไม่มี terrain) · ลำดับ validate ถูก · Dijkstra หยุดที่งบเดิน ไม่ขึ้นกับขนาดแผนที่ ·
+  ไม่มี over-posting · ไม่เหลือ culture formatting · สองข้อที่ reviewer ไม่ได้ตรวจ owner ตรวจเองไปแล้ว
+  (RLS flags ผ่าน psql, body limit 413 บน Kestrel จริง)
+- **คำเตือนเชิงออกแบบ (เห็นด้วย แต่เป็นการตัดสินใจของผู้ใช้ ไม่ใช่ owner)**: reachable คิดจากกำแพงทุกช่อง
+  รวมในหมอกที่ยังไม่เปิด → ผู้เล่นส่องรูปพื้นที่สีเขียวแล้วรู้ตำแหน่งกำแพงที่ซ่อนอยู่ได้ทันทีและซ้ำได้ ·
+  ทางเลือกที่ reviewer เสนอ (ยังไม่ verify): reachable/preview ของผู้เล่นมองข้ามพื้นนอกหมอก ส่วน commit
+  ยังบังคับกำแพงจริง (รู้ว่ามีกำแพงตอนเดินชน) · **ไม่ทำเองโดยไม่ถามผู้ใช้** เพราะเปลี่ยนความรู้สึกการเดิน
+- pre-existing (ไม่ใช่ของ Part นี้): path ของ preview/commit ไม่จำกัดความยาว (มีแค่ 16 MB global)
+  — CostOfPath เป็น O(n) ต่อก้าว severity ต่ำ-กลาง
+[2026-09-12 (time n/a)] code-reviewer -> security-reviewer : Sprint H Part 5 terrain — SceneTerrainSerialization.IsWithinBounds ทำ Math.Abs(int) กับพิกัดที่ parse จาก jsonb ภายนอก (scenes.terrain) และจาก PATCH body ตรง ๆ (SceneTerrainEndpoints.cs:111) ถ้า x หรือ y = int.MinValue จะ throw OverflowException ที่ไม่ถูกจับ (Parse ดักแค่ JsonException) ขัดกับสัญญา "Parse ไม่ throw" ที่เขียนไว้ในเอกสารของคลาสเอง — เข้า trigger "รับ input จากภายนอก" + "query/เขียนคอลัมน์ DB" ตาม Security Review Flow ขอให้ตรวจเพิ่มว่าควร clamp/validate ก่อนเรียก Math.Abs หรือย้ายไปใช้ long/ Math.Abs ที่ปลอดภัยกว่า และเคสนี้ทำให้ scene หนึ่งอ่าน terrain ไม่ได้อีกเลย (DoS ต่อฉากนั้นแบบถาวรจนกว่าจะแก้ DB มือ) ไม่ใช่แค่ request เดียว
+- code-reviewer: **เจอบั๊กจริงที่ security-reviewer พลาด** — IsWithinBounds ใช้ Math.Abs → int.MinValue โยน
+  OverflowException · PATCH ได้ 500 (ไม่บันทึก) · ถ้าค่านี้หลุดเข้า DB ได้ Parse โยน (catch แค่ JsonException)
+  = ทุกการอ่านพื้นของฉากนั้นพังถาวร · reviewer เขียน log "escalate -> security-reviewer" แต่ไม่ได้เรียกจริง
+- **owner ตัดสิน escalation นี้**: ไม่ dispatch security-reviewer ซ้ำ — ทางแก้เป็นการเทียบขอบสองฝั่งตรง ๆ
+  (x >= -Max && x <= Max, ไม่มีทาง overflow) และพิสูจน์ด้วยเทสต์ red→green 6 เคส (unit ขอบ int ×4,
+  Parse ข้ามรายการ int.MinValue, HTTP ต้อง 400 ไม่ใช่ 500 และฉากไม่เปลี่ยน) ซึ่งตรงจุดกว่าให้ reviewer อ่านอีกรอบ
+- บทเรียนสำหรับรอบจูน: reviewer สองตัวอ่านไฟล์เดียวกันคู่ขนาน ตัว security ผ่าน ตัว code จับ overflow ได้ ·
+  "ตรวจขอบ" ต้องรวมขอบของชนิดข้อมูล (int.MinValue/MaxValue) ไม่ใช่แค่ขอบของกฎธุรกิจ (1000/1001)
+- int.MinValue red ยืนยันแล้ว: 4/6 fail — IsWithinBounds ×2 และ Parse โยน OverflowException, HTTP ได้ 500
+  (คาด 400) · 2 เคส int.MaxValue ผ่านอยู่แล้ว (Abs ไม่ overflow ฝั่งนั้น) เป็นตัวกันขอบอีกด้าน
+- main -> sonnet-worker (ปลุก worker (1) ที่เขียนไฟล์นี้): แก้ IsWithinBounds เป็นเทียบสองฝั่ง บรรทัดเดียว
+- (1) worker แก้ IsWithinBounds เป็นเทียบสองฝั่ง (Math.Abs เหลือแค่ในคำอธิบายเหตุผลของ doc comment)
+  · owner รันเองหลังแก้: **Rules 348/348 · Api 629/630** (+6 เคสใหม่เขียวครบ · fail ตัวเดียวคือ flake เดิม
+  ApiKeyCrudTests) · main -> code-reviewer รอบ 2 (รอบสุดท้าย) ตรวจเฉพาะ fix + 6 เทสต์
+- สรุปขอบเขต Part 5: ✅ ชั้นแผนที่ (เก็บ/endpoint DM-only/ต่อเข้าการเดินทั้ง 3 จุด) · ❌ ชั้น effect ยังไม่ทำ
+  (เขียนกำกับที่ ToTerrainField + เทสต์ล็อก) · ❓ รอผู้ใช้ตัดสิน: reachable ควรคิดกำแพงที่อยู่ในหมอกไหม
+- code-reviewer รอบ 2 (รอบสุดท้าย): **ผ่าน ไม่มี finding** · ไล่ขอบทุกกลุ่มด้วยมือ ไม่เหลือเลขที่ overflow ได้ ·
+  ไฟล์เดียวที่ reviewer ไม่ได้เปิด (SceneTerrainEndpointsTests) owner รันเองแล้วทั้ง red (500) และ green
+- **ปิด Part 5 (backend)** · api + frontend-dev รันค้างไว้ให้ผู้ใช้ทำ novice check ของ Part 4 (health: 401/200)
+
+[2026-09-12 main] : Sprint H Part 6 — เครื่องมือวาดพื้นของ DM + ผู้เล่นเห็นพื้น · ไม่มี <tier> → ทำเองตรง ๆ
+- **ขอบเขตต้องขยายไป backend เล็กน้อย (บอกผู้ใช้ตั้งแต่ต้น)**: DoD ให้ผู้เล่นเห็นพื้นบนจอตัวเอง แต่ Part 5
+  ทำ GET terrain เป็น DM-only และ GET scene ของผู้เล่นไม่มีพื้นเลย → เพิ่ม `SceneResponse.Terrain` กรองตาม
+  หมอก **ที่ server** ใน ProjectTerrain (กติกาเดียวกับ token: FogLayerSerialization.IsVisibleTo) + broadcast
+  `TerrainChanged` ที่มีแค่ sceneId (ไม่เหมือน FogChanged ที่ส่งวงหมอก — พื้นในหมอกเป็นความลับ)
+- เทสต์ใหม่: backend SceneTerrainProjectionTests 5 (DM เห็นครบ / ผู้เล่นเห็นเฉพาะในหมอกที่เปิด / raw JSON ค้น
+  `"x":777` เป๊ะ ไม่ใช่เลขลอย — กันแบบเดียวกับที่เทสต์หมอก flaky เพราะเลขชน GUID / ฉากไม่มีพื้นได้ list ว่าง /
+  broadcast ถึงสอง role และไม่พกรายการช่อง) · frontend terrain-paint 13 + hub TerrainChanged 1 — red ทั้งหมดก่อน
+- frontend: SceneMap ชั้นพื้น (ลายเฉียงน้ำตาล/หินเทา) + โหมดวาด · มุมช่องได้จาก cellToPx (ไม่คิดสูตรใหม่) ·
+  **เติมช่องระหว่าง pointermove ด้วย cellsAlongLine** ไม่งั้นลากเร็วแล้วกำแพงมีรู · ref กันส่งเส้นซ้ำเมื่อ
+  pointerup+pointerleave ยิงติดกัน · DmMapTools โหมด "วาดพื้น" (หนองน้ำ/กำแพง/ยางลบ) · TerrainLegend ใต้แผนที่
+  ทั้ง DM และผู้เล่น · TerrainChanged → invalidate scene + reachable · TableView ไม่แตะ
+- เกต: tsc/lint สะอาด · vitest 148/148 · Rules 348/348 · Api 634/635 (flake เดิม)
+- novice check บนจอ: รอผู้ใช้ล็อกอิน DM (วาดด้วยเครื่องมือจริง) แล้วสลับเป็นผู้เล่น (เห็นพื้น + reachable หด)
+
+[2026-09-12 main] : Sprint H Part 7 · <tier> · monster เข้าระบบเป้าหมาย/ภัยคุกคาม + reach ต่อตัว
+- decision framework: แตกได้ 2 ทางที่ไม่ชนกัน (backend 2 ไฟล์ / frontend 1 ไฟล์ คนละ toolchain →
+  dispatch คู่ขนานได้ ไม่ชน build) · owner: ออกแบบ + red tests + migration/entity
+- **ข้อเท็จจริงที่เปลี่ยนขอบเขต**: `monster_stat_blocks` เป็นแม่แบบระดับแคมเปญ **ไม่มี HP รายตัว** และ
+  `POST .../attacks` รับเฉพาะ TargetCharacterId → "ถูกโจมตีไม่ได้" แก้ครบไม่ได้ในรอบนี้โดยไม่สร้างระบบ
+  instance ใหม่ทั้งก้อน · **ทางที่เล็กที่สุดที่ใช้ได้จริง** (ตามที่ dispatch อนุญาต): มอนสเตอร์เข้ารายการ
+  เป้าหมาย + ภัยคุกคาม (เรขาคณิต/reach/OA ซึ่งเป็นสิ่งที่กฎการเดินต้องใช้จริง) · เพิ่ม `targetEntityType`
+  ใน affordance เพื่อให้หน้าจอไม่เสนอปุ่มที่กดแล้ว 404 (frontend ตอบ "บอก DM" แทน)
+  · ที่เหลือเขียนกำกับใน doc comment ของ migration: HP รายตัว / endpoint แก้ speed-reach / actions↔catalog
+- migration AddMonsterSpeedAndReach: speed 30, reach 5 เป็นดีฟอลต์ (ไม่ใช่ 0) แถวเดิมใช้ได้ทันที ·
+  ไม่ใช่ตารางใหม่ → RLS `campaign_isolation` เดิมครอบอยู่แล้ว (ตรวจ pg_class/pg_policies ก่อน)
+- red: backend 6/10 fail (4 ที่ผ่านคือ defaults + DM sanity + **เทสต์คุม 2 ตัวที่ผ่านแบบ vacuous** คือ
+  reach 5 ต้องไม่มี OA และมอนสเตอร์ในหมอกต้องไม่โผล่ — ตอนนี้ผ่านเพราะระบบไม่รู้จักมอนสเตอร์เลย
+  คุณค่าจริงของสองตัวนี้คือกันการถอยหลังหลังแก้) · frontend 1 fail (monster → ต้องให้ DM)
+- (frontend) sonnet-worker: เสร็จใน 8 tool call — attackPlan คืน "บอก DM" เมื่อ targetEntityType เป็น
+  "Monster" · รายงาน 26/26 + tsc สะอาด (owner จะรันซ้ำเองอีกรอบตอนเกตรวม)
+- (backend) sonnet-worker: **ชนเพดานกลางทาง** — part A เสร็จ (มอนสเตอร์เข้ารายการเป้าหมาย + lookup ชนิดเป้า
+  + ฟิลด์ TargetEntityType) แต่ part B ยังไม่แตะเลย (MovementSceneContext ยังกรองเฉพาะ Character และยังใช้
+  DefaultReachFeet) → SendMessage ปลุกต่อเฉพาะ part B
+- (backend) ปลุกต่อ part B: มอนสเตอร์เป็นภัยคุกคามแล้ว (ReachFeet จาก stat block จริง) · owner รันเอง
+  49/50 — **เทสต์จับของจริง**: `Preview_warns_about_the_monster_before_committing` ตก เพราะ endpoint
+  preview **ทำสำเนาการโหลดฉากของตัวเองทั้งชุด** (โหลด scene เอง กรองหมอกเอง + BuildThreatsAsync ส่วนตัว
+  ที่ฮาร์ดโค้ด DefaultReachFeet) ไม่ได้ใช้ MovementSceneContext.LoadAsync เหมือน commit/reachable ทั้งที่
+  doc comment ของ MovementSceneContext เขียนว่า "โหลดที่เดียวใช้ทั้งสอง endpoint" — **คือกับดัก
+  "สามระบบคำนวณเหมือนกันแต่คนละโค้ด" ที่ §2.4 เตือนไว้เป๊ะ ๆ**
+- main -> sonnet-worker: ให้ preview ใช้ LoadAsync ตัวเดียวกัน แล้วลบ BuildThreatsAsync ทิ้ง (ไม่แพตช์
+  สำเนาที่สอง) · เตือนไว้ว่า LoadAsync คืน 404 เมื่อตัวละครไม่มี token บนฉาก ซึ่ง preview เดิมไม่เคยเช็ค —
+  ถ้าเทสต์เดิมตกเพราะข้อนี้ ให้หยุดแล้วรายงาน ห้ามแก้เทสต์
+- (backend) worker แก้ preview ให้ใช้ LoadAsync ตัวเดียวกับ commit/reachable + ลบ BuildThreatsAsync ทิ้ง
+  · owner รันเอง: **Rules 348/348 · Api 644/645** (flake เดิมตัวเดียว, เทสต์ใหม่ 10 ตัวเขียวครบ) ·
+  frontend: tsc/lint สะอาด · vitest 150/150 (+2 เคสมอนสเตอร์)
+- ⚠️ **พฤติกรรมเปลี่ยนที่ต้องบันทึก**: preview เดิมไม่เคยเช็คว่าตัวละครมี token บนฉากไหม (คืน 200 ได้)
+  พอย้ายมาใช้ LoadAsync จะได้ 404 เหมือน commit/reachable — เทสต์เดิมทั้งชุดยังเขียว แต่เป็นการเปลี่ยน
+  สัญญาของ endpoint จริง ๆ ฝากให้ code-reviewer ประเมินว่าถูกต้องไหม
+- main -> security-reviewer (บังคับตาม dispatch: แหล่งข้อมูลใหม่ใน "ทำอะไรได้บ้าง" = ทางรั่วใหม่ว่ามี
+  มอนสเตอร์อะไรอยู่ไหน) + code-reviewer · ทั้งคู่ read-only คู่ขนาน
+- security-reviewer: **ผ่าน ไม่มี critical/warning** · ยืนยันด้วยการอ่านโค้ด + psql: ลำดับ "กรองหมอกก่อน
+  แล้วค่อย query" เหมือน Character เป๊ะ → id ของมอนสเตอร์ในหมอกไปไม่ถึง query ด้วยซ้ำ · GET scene ไม่ส่ง
+  ชื่อมอนสเตอร์ให้ผู้เล่นเลย (มีแค่ token id) · RLS `campaign_isolation` (ENABLE+FORCE) + `app.campaign_id`
+  ต่อ request ครอบ query ใหม่อยู่แล้ว และ id ที่ไม่ match จะ continue = fail closed · สิทธิ์ตอบ OA ของ
+  มอนสเตอร์เป็นของ DM ตลอดสาย commit→store→respond · preview unification = ปลอดภัยขึ้น (drift ไม่ได้อีก)
+- **owner ตัดสิน 2 ข้อที่ reviewer ยก**: (ก) reach_feet ไม่มี CHECK → **ไม่เพิ่มตอนนี้** เพราะยังไม่มี
+  endpoint ไหนเขียนคอลัมน์นี้ได้เลย (ไม่ reachable จาก HTTP) — ผูกไว้กับ Part ที่จะทำ endpoint แก้ speed/reach
+  (บันทึกไว้ตรงนี้เพื่อให้ Part นั้นหยิบไปทำ) · (ข) broadcast ของ SignalR ตอน token ขยับ อาจบอกตำแหน่ง
+  ของ token ที่อยู่ในหมอกไหม — **ไม่ใช่ของ diff นี้และ reviewer ไม่ได้ตรวจ** → เปิด task แยกให้ไปพิสูจน์
+- code-reviewer: 1 medium + 1 note + 2 informational · **ตอบคำถามที่ security-reviewer ตรวจไม่ทัน**:
+  ไม่มีเทสต์ vacuous ในสองไฟล์ใหม่ — โดยเฉพาะคู่ reach 10 / reach 5 ที่ใช้ **แถวมอนสเตอร์เดียวกัน**
+  แล้ว UPDATE reach_feet ระหว่างกลาง = พิสูจน์ว่าเลขมาจาก stat block จริง ไม่ใช่ค่าคงที่ที่บังเอิญถูก
+- **owner ตัดสิน**: (1) medium "preview เปลี่ยนจาก 200 → 404 เมื่อตัวละครไม่มี token" → **รับ** ·
+  ตรวจ frontend เองแล้วไม่มีใครเรียก preview ก่อนมี token (PlayerView ลาก token ที่มีอยู่ ·
+  MovementPlanner ใช้เส้นทางจาก reachable ซึ่งต้องมี token) → เก็บพฤติกรรมใหม่ (ตรงกับ commit/reachable)
+  แล้ว **เพิ่มเทสต์ล็อกไว้** แทนการปล่อยให้เปลี่ยนเงียบ ๆ · (2) note "กฎฝ่าย (ControlledByDm) เขียนซ้ำ
+  ในสองไฟล์" → **ไม่แก้ตอนนี้** พร้อมเหตุผล: affordance target กับ OA threat เป็นสองฟีเจอร์ที่แยกกันอยู่แล้ว
+  การรวบเป็น helper เดียวตอนนี้จะมัดสองอย่างเข้าด้วยกันก่อนที่ตาราง faction จริงจะมา — ยกไปทำพร้อม faction
+- owner เพิ่มเทสต์ล็อก 404 ของ preview แล้วรันเต็มชุด: **Api 646/646 ผ่านหมด** (รอบนี้ flake เดิมของ
+  ApiKeyCrudTests ไม่ขึ้น ยืนยันอีกครั้งว่าเป็น flake ไม่ใช่ของที่งานนี้ทำพัง) · Rules 348/348 ·
+  frontend tsc/lint สะอาด · vitest 150/150
+- **ปิด Part 7 (backend + frontend เล็กน้อย)** · เปิด task แยกไว้ 2 ใบให้ผู้ใช้: cap ความยาว path ของ
+  movement (จาก security review Part 5) และตรวจว่า broadcast realtime รั่วตำแหน่งใน หมอกไหม (จาก Part 7)
+- ค้างที่ผู้ใช้: novice check บนจอของ Part 6 (ต้องล็อกอิน DM แล้วสลับเป็นผู้เล่น) · การตัดสินใจของ Part 5
+  ว่า reachable ควรคิดกำแพงที่อยู่ในหมอกหรือไม่

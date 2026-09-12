@@ -10,6 +10,8 @@
  * ห้ามเขียนโค้ดฝั่ง client ที่พยายามเติมค่าที่หายไปตรงนี้จากที่อื่น
  */
 
+import type { SceneTerrain } from "./terrain-paint";
+
 export type SceneToken = {
   id: string;
   entityType: "Character" | "Monster" | string;
@@ -41,4 +43,9 @@ export type Scene = {
   isActive: boolean;
   tokens: SceneToken[];
   revealedAreas: FogArea[];
+  /**
+   * Sprint H Part 6 — พื้นเดินยาก/กำแพง · ผู้เล่นได้เฉพาะช่องในพื้นที่ที่เปิดหมอกแล้ว (server กรอง)
+   * optional เพราะ server รุ่นก่อน Part นี้ไม่ส่งมา — ไม่มี = ไม่มีพื้นพิเศษให้วาด
+   */
+  terrain?: SceneTerrain;
 };

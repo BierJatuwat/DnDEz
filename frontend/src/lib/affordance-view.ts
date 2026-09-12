@@ -27,11 +27,10 @@ export function advantageBadge(mode: AdvantageMode): string | null {
 }
 
 /**
- * บรรทัดสรุปใต้ชื่อท่า — "โจมตี ก็อบลินยาม · ห่าง 5 ฟุต"
+ * บรรทัดสรุปใต้ชื่อท่า — "ก็อบลินยาม · ห่าง 5 ฟุต" (เป้ากับระยะ)
  *
- * mockup มีบรรทัดบรรยายท่าพร้อมลูกเต๋าดาเมจ ("สร้างดาเมจ 1d8+3") แต่ **คลังกลไกยังไม่มีข้อมูล
- * ดาเมจเลย** — design doc §2.3 ระบุสิ่งที่ catalog ต้องเก็บไว้ชัดเจน (ระยะ/ชนิดเป้า/ราคา/รูปทอย/
- * ป้ายประเภท) และดาเมจไม่อยู่ในนั้น จึงแสดงสิ่งที่มีจริงคือเป้ากับระยะแทนการแต่งตัวเลขขึ้นมาเอง
+ * บรรทัดสูตรเต๋า ("ทอยโจมตี 1d20+4 · ดาเมจ 1d8+2 ฟัน") แยกไปอยู่ `formulaLine` ใน
+ * affordance-formula.ts ตั้งแต่ Sprint H Part 4 ที่ catalog มีดาเมจ/ability แล้ว
  */
 export function targetLine(item: AffordanceItem): string | null {
   if (!item.targetName) return null;

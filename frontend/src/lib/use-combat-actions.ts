@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch, ApiError } from "./api";
 import { useAuthStore } from "./auth-store";
+import type { AdvantageMode } from "./affordance-types";
 import type {
   AttackResult,
   CheckResult,
@@ -209,12 +210,16 @@ export function useCombatActions({
       expression,
       damageExpression,
       damageType,
+      advantage,
     }: {
       attackerId: string;
       targetCharacterId: string;
       expression: string;
       damageExpression: string;
       damageType: string;
+      /** Sprint H Part 4 — โหมดที่ affordance คำนวณมา (ก่อนหน้านี้ไม่เคยส่ง การ์ดขึ้น "เสียเปรียบ"
+       *  แต่ทอยปกติเงียบ ๆ) · ไม่ส่ง = server ใช้ None ตามเดิม ฟอร์มกรอกมือของ DM จึงไม่กระทบ */
+      advantage?: AdvantageMode;
     }) =>
       apiFetch<AttackResult>(
         `/campaigns/${campaignId}/sessions/${sessionId}/characters/${attackerId}/attacks`,
@@ -223,6 +228,7 @@ export function useCombatActions({
           token,
           body: {
             expression,
+            advantage,
             targetCharacterId,
             damageComponents: [{ expression: damageExpression, type: damageType }],
           },

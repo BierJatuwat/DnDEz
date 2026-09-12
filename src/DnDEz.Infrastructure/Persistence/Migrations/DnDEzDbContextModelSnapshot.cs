@@ -32,10 +32,18 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
+                    b.Property<string>("Ability")
+                        .HasColumnType("text")
+                        .HasColumnName("ability");
+
                     b.Property<string>("ActionCost")
                         .IsRequired()
                         .HasColumnType("text")
                         .HasColumnName("action_cost");
+
+                    b.Property<bool>("AddsAbilityToEffect")
+                        .HasColumnType("boolean")
+                        .HasColumnName("adds_ability_to_effect");
 
                     b.Property<DateTimeOffset>("CreatedAt")
                         .ValueGeneratedOnAdd()
@@ -43,12 +51,27 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                         .HasColumnName("created_at")
                         .HasDefaultValueSql("now()");
 
+                    b.Property<string>("DamageDice")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("damage_dice");
+
+                    b.Property<string>("DamageType")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("damage_type");
+
                     b.Property<string>("Details")
                         .IsRequired()
                         .ValueGeneratedOnAdd()
                         .HasColumnType("jsonb")
                         .HasColumnName("details")
                         .HasDefaultValueSql("'{}'::jsonb");
+
+                    b.Property<string>("HealingDice")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("healing_dice");
 
                     b.Property<string>("Key")
                         .IsRequired()
@@ -119,7 +142,13 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
 
                     b.ToTable("action_catalog_entries", null, t =>
                         {
+                            t.HasCheckConstraint("ck_ability_actioncatalogentry", "ability IN ('Strength', 'Dexterity', 'Spellcasting')");
+
                             t.HasCheckConstraint("ck_action_cost_actioncatalogentry", "action_cost IN ('Action', 'BonusAction', 'Reaction', 'None')");
+
+                            t.HasCheckConstraint("ck_damage_pair_actioncatalogentry", "(damage_dice IS NULL) = (damage_type IS NULL)");
+
+                            t.HasCheckConstraint("ck_damage_type_actioncatalogentry", "damage_type IN ('Acid', 'Bludgeoning', 'Cold', 'Fire', 'Force', 'Lightning', 'Necrotic', 'Piercing', 'Poison', 'Psychic', 'Radiant', 'Slashing', 'Thunder')");
 
                             t.HasCheckConstraint("ck_kind_actioncatalogentry", "kind IN ('Weapon', 'Spell', 'Movement')");
 
@@ -1193,6 +1222,12 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                         .HasColumnType("character varying(200)")
                         .HasColumnName("name");
 
+                    b.Property<int>("ReachFeet")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(5)
+                        .HasColumnName("reach_feet");
+
                     b.Property<string>("ReviewStatus")
                         .IsRequired()
                         .HasColumnType("text")
@@ -1201,6 +1236,12 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                     b.Property<Guid?>("SourceDocumentId")
                         .HasColumnType("uuid")
                         .HasColumnName("source_document_id");
+
+                    b.Property<int>("SpeedFeet")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(30)
+                        .HasColumnName("speed_feet");
 
                     b.HasKey("Id")
                         .HasName("pk_monster_stat_blocks");
@@ -1632,6 +1673,13 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("SessionId")
                         .HasColumnType("uuid")
                         .HasColumnName("session_id");
+
+                    b.Property<string>("Terrain")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("terrain")
+                        .HasDefaultValueSql("'{}'::jsonb");
 
                     b.Property<string>("Tokens")
                         .IsRequired()

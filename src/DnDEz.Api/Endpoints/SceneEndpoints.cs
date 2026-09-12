@@ -391,10 +391,12 @@ public static class SceneEndpoints
         var fogAreas = FogLayerSerialization.ParseRevealedAreas(scene.FogLayer)
             .Select(a => new FogAreaResponse(a.Id, a.X, a.Y, a.Radius)).ToList();
 
+        // helper นี้ใช้เฉพาะ response ของ endpoint DM-only (สร้างฉาก / จัดกริด) — token ก็ส่งครบไม่กรอง
+        // อยู่แล้ว พื้นจึงส่งครบทั้งฉากเหมือนกัน (isDm: true)
         return new SceneResponse(
             scene.Id, scene.SessionId, scene.Name, scene.Grid, scene.MapAssetId, imageUrl, scene.IsActive,
             tokens.Select(t => new TokenResponse(t.Id, t.EntityType, t.EntityId, t.X, t.Y)).ToList(),
-            fogAreas);
+            fogAreas, ProjectTerrain(scene, [], isDm: true));
     }
 
     /// <summary>
@@ -449,7 +451,29 @@ public static class SceneEndpoints
 
         return new SceneResponse(
             scene.Id, scene.SessionId, scene.Name, scene.Grid, scene.MapAssetId, imageUrl, scene.IsActive,
-            tokenResponses, fogAreas.Select(a => new FogAreaResponse(a.Id, a.X, a.Y, a.Radius)).ToList());
+            tokenResponses, fogAreas.Select(a => new FogAreaResponse(a.Id, a.X, a.Y, a.Radius)).ToList(),
+            ProjectTerrain(scene, fogAreas, isDm));
+    }
+
+    /// <summary>
+    /// Sprint H Part 6 — พื้นเดินยาก/กำแพงของฉากตามสิทธิ์ของผู้ดู: DM ได้ทั้งฉาก ผู้เล่นได้เฉพาะช่องในพื้นที่
+    /// ที่เปิดหมอกแล้ว · **กรองที่ server เท่านั้น** ไม่ส่งทั้งก้อนไปให้ client ซ่อน (§13.3) — กำแพงในหมอกคือ
+    /// ข้อมูลว่าแผนที่ส่วนที่ยังไม่สำรวจหน้าตาเป็นยังไง ซึ่งผู้เล่นยังไม่ควรรู้
+    ///
+    /// ใช้กติกา "มองเห็นไหม" ตัวเดียวกับ token (<see cref="FogLayerSerialization.IsVisibleTo"/>) ห้ามเขียน
+    /// สูตรวงกลมใหม่ · เรียงตาม Y แล้ว X แบบเดียวกับ <c>SceneTerrainEndpoints</c>
+    /// </summary>
+    private static TerrainResponse ProjectTerrain(Scene scene, IReadOnlyList<FogRevealedArea> fogAreas, bool isDm)
+    {
+        var layer = SceneTerrainSerialization.Parse(scene.Terrain);
+
+        List<TerrainSquareResponse> Visible(IEnumerable<DnDEz.Rules.GridPoint> squares) => squares
+            .Where(p => FogLayerSerialization.IsVisibleTo(p.X, p.Y, fogAreas, isDm))
+            .OrderBy(p => p.Y).ThenBy(p => p.X)
+            .Select(p => new TerrainSquareResponse(p.X, p.Y))
+            .ToList();
+
+        return new TerrainResponse(Visible(layer.Difficult), Visible(layer.Blocked));
     }
 
 }
@@ -462,6 +486,7 @@ internal record CreateSceneRequest(string? Name, Guid MapAssetId);
 
 internal record UpdateGridRequest(double? PixelsPerSquare, double? OffsetX, double? OffsetY);
 
+/// <param name="Terrain">Sprint H Part 6 — พื้นเดินยาก/กำแพง กรองตามหมอกแล้วสำหรับผู้เล่น (ดู ProjectTerrain)</param>
 internal record SceneResponse(
     Guid Id, Guid SessionId, string Name, string Grid, Guid? MapAssetId, string? ImageUrl, bool IsActive,
-    List<TokenResponse> Tokens, List<FogAreaResponse> RevealedAreas);
+    List<TokenResponse> Tokens, List<FogAreaResponse> RevealedAreas, TerrainResponse Terrain);

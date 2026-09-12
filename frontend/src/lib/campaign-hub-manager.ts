@@ -32,6 +32,11 @@ export type CampaignHubEvents = {
   /** Sprint G Part 6 — DM เปิด/ปิดพื้นที่หมอก แล้วทุก role ต้องดึง scene ใหม่ (สิ่งที่มองเห็นเปลี่ยน) */
   onFogChanged: (payload: unknown) => void;
   /**
+   * Sprint H Part 6 — DM วาดพื้นเดินยาก/กำแพง แล้วทุก role ต้องดึง scene ใหม่ **และ** ขอบเขตเดินใหม่
+   * · payload มีแค่ sceneId (พื้นในหมอกเป็นความลับ ผู้เล่นต้องได้เฉพาะส่วนที่ server กรองผ่าน GET scene)
+   */
+  onTerrainChanged: (payload: unknown) => void;
+  /**
    * Sprint G Part 10 — มีคนเดินออกจากระยะเอื้อมของตัวที่เราคุม เรามีสิทธิ์สวนได้
    *
    * ⚠️ event นี้ยิงมาที่ **กลุ่มของผู้ใช้คนเดียว** (`campaign:{id}:user:{userId}`) ไม่ใช่ทั้งแคมเปญ —
@@ -105,6 +110,9 @@ export class CampaignHubManager {
     // Sprint G Part 6 — server ยิงเข้า role-group แยก (dm/player) แต่ฝั่ง client ไม่ต้องรู้ว่าตัวเอง
     // อยู่ group ไหน: ได้รับเมื่อไหร่แปลว่า "สิ่งที่เรามองเห็นเปลี่ยนแล้ว" ให้ดึง scene ใหม่เท่านั้น
     connection.on("FogChanged", (payload) => this.events.onFogChanged(payload));
+
+    // Sprint H Part 6 — คนละความหมายกับหมอก: พื้นเปลี่ยน "เดินได้ถึงไหน" ด้วย (ต้อง invalidate reachable)
+    connection.on("TerrainChanged", (payload) => this.events.onTerrainChanged(payload));
 
     connection.onreconnecting(() => {
       this.started = false;

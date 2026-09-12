@@ -565,6 +565,9 @@ app.MapSceneTokenEndpoints();
 // ── Sprint G Part 6: fog reveal/hide (DM-only) — projection ตาม role อยู่ใน GET scene (design doc §13) ──
 app.MapSceneFogEndpoints();
 
+// ── Sprint H Part 5: DM ระบายพื้นเดินยาก/กำแพง (DM-only) — ข้อมูลที่กำหนดว่าใครเดินไปไหนได้ (§3.3) ──
+app.MapSceneTerrainEndpoints();
+
 // ── Sprint G Part 9: "ทำอะไรได้บ้าง" คำนวณต่อผู้ดูแต่ละคน — deterministic ล้วน ไม่แตะ AI (§1.3) ──
 app.MapAffordanceEndpoints();
 

@@ -23,6 +23,7 @@ export function useCampaignHub({
   onActionMessageCreated,
   onCombatEvent,
   onFogChanged,
+  onTerrainChanged,
   onReactionPrompt,
   onMovementResumed,
 }: UseCampaignHubOptions) {
@@ -42,6 +43,7 @@ export function useCampaignHub({
       onActionMessageCreated,
       onCombatEvent,
       onFogChanged,
+      onTerrainChanged,
       onReactionPrompt,
       onMovementResumed,
     });

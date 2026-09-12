@@ -276,6 +276,8 @@ public class DnDEzDbContext(DbContextOptions<DnDEzDbContext> options) : DbContex
             e.Property(x => x.Grid).HasColumnType(Jsonb).HasDefaultValueSql("'{}'::jsonb");
             e.Property(x => x.Tokens).HasColumnType(Jsonb).HasDefaultValueSql("'[]'::jsonb");
             e.Property(x => x.FogLayer).HasColumnType(Jsonb).HasDefaultValueSql("'{}'::jsonb");
+            // Sprint H Part 5 — พื้นจากแผนที่ แยกจาก grid (PATCH grid เขียน grid ทับทั้งก้อน)
+            e.Property(x => x.Terrain).HasColumnType(Jsonb).HasDefaultValueSql("'{}'::jsonb");
             // มี active scene ได้ทีละอันต่อ session
             e.HasIndex(x => x.SessionId).IsUnique().HasFilter("is_active = true")
                 .HasDatabaseName("ix_scenes_one_active_per_session");
@@ -418,6 +420,9 @@ public class DnDEzDbContext(DbContextOptions<DnDEzDbContext> options) : DbContex
             e.Property(x => x.Name).HasMaxLength(200);
             e.Property(x => x.Actions).HasColumnType(Jsonb).HasDefaultValueSql("'[]'::jsonb");
             e.Property(x => x.ConditionRefs).HasColumnType(Jsonb).HasDefaultValueSql("'[]'::jsonb");
+            // Sprint H Part 7 — ดีฟอลต์ที่ใช้ได้จริง (ไม่ใช่ 0) สำหรับแถวเดิมและ import ที่ไม่ระบุค่า
+            e.Property(x => x.SpeedFeet).HasDefaultValue(30);
+            e.Property(x => x.ReachFeet).HasDefaultValue(5);
             e.HasIndex(x => new { x.CampaignId, x.ReviewStatus });
             EnumCheck<MonsterStatBlock, ReviewStatus>(e, x => x.ReviewStatus, "review_status");
         });
@@ -474,6 +479,20 @@ public class DnDEzDbContext(DbContextOptions<DnDEzDbContext> options) : DbContex
             EnumCheck<ActionCatalogEntry, ActionCostKind>(e, x => x.ActionCost, "action_cost");
             EnumCheck<ActionCatalogEntry, ActionTargetKind>(e, x => x.TargetKind, "target_kind");
             EnumCheck<ActionCatalogEntry, ActionRollKind>(e, x => x.RollKind, "roll_kind");
+
+            // ── Sprint H Part 4 — ดาเมจ + ability ──
+            e.Property(x => x.DamageDice).HasMaxLength(50);
+            e.Property(x => x.DamageType).HasMaxLength(32);
+            e.Property(x => x.HealingDice).HasMaxLength(50);
+            EnumCheck<ActionCatalogEntry, ActionAbility>(e, x => x.Ability!.Value, "ability");
+            // 13 ชื่อต้องตรงกับ DnDEz.Rules.DamageType (Infrastructure ไม่ reference Rules จึงเขียนตรง ๆ —
+            // ActionCatalogDamageSeedTests ไล่ enum ของ Rules เทียบกับ CHECK นี้ทุกค่า กันสองฝั่งเพี้ยนกัน)
+            e.ToTable(t => t.HasCheckConstraint("ck_damage_type_actioncatalogentry",
+                "damage_type IN ('Acid', 'Bludgeoning', 'Cold', 'Fire', 'Force', 'Lightning', 'Necrotic', "
+                + "'Piercing', 'Poison', 'Psychic', 'Radiant', 'Slashing', 'Thunder')"));
+            // มีลูกเต๋าดาเมจ ⇔ มีชนิดดาเมจ — ดาเมจที่ไม่มีชนิดหัก resistance/immunity ไม่ได้
+            e.ToTable(t => t.HasCheckConstraint("ck_damage_pair_actioncatalogentry",
+                "(damage_dice IS NULL) = (damage_type IS NULL)"));
         });
 
         b.Entity<CharacterPreset>(e =>

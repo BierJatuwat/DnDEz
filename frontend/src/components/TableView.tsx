@@ -9,6 +9,7 @@ import { partyHealth } from "@/lib/scene-view";
 import { roundOf, type Encounter } from "@/lib/combat-types";
 import type { CharacterSummary, GameSession } from "@/lib/campaign-types";
 import { SceneMap } from "./SceneMap";
+import { parseSceneGrid } from "@/lib/scene-grid";
 
 /**
  * Sprint G Part 6 — **จอกลาง (Table view)** — มุมมองที่สามที่มีบุคลิกของตัวเอง (design doc §13)
@@ -124,6 +125,7 @@ export function TableView({ campaignId }: { campaignId: string }) {
           fogStyle="opaque"
           scale="table"
           emptyHint="ยังไม่มีอะไรบนแผนที่"
+          pixelsPerSquare={parseSceneGrid(scene?.grid).pixelsPerSquare}
         />
       )}
 

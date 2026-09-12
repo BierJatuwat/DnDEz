@@ -55,6 +55,21 @@ public class MonsterStatBlock
     public string Name { get; set; } = null!;
     public int ArmorClass { get; set; }
     public int HitPoints { get; set; }
+
+    /// <summary>
+    /// Sprint H Part 7 — ระยะเดินต่อเทิร์น (ฟุต) · ดีฟอลต์ 30 = ค่ามาตรฐานของสิ่งมีชีวิตขนาดกลางใน SRD
+    /// ยังไม่มี endpoint ให้ DM แก้ค่านี้ (ตอนนี้ตั้งได้ตอน import/แก้ผ่าน DB) — ดูรายการที่เหลือใน
+    /// doc comment ของ migration `AddMonsterSpeedAndReach`
+    /// </summary>
+    public int SpeedFeet { get; set; } = 30;
+
+    /// <summary>
+    /// Sprint H Part 7 — ระยะเอื้อม (ฟุต) ที่ใช้ตัดสิน opportunity attack · ดีฟอลต์ 5 ตาม SRD 5.2 "Reach"
+    /// (*"A creature has a 5-foot reach"*) · ก่อน Part นี้ `MovementSceneContext` ใช้ 5 ตายตัวกับทุกตัว
+    /// มอนสเตอร์เอื้อมยาวจึงถูกคิดผิดมาตลอด ทั้งที่ engine รองรับค่าอื่นอยู่แล้ว
+    /// </summary>
+    public int ReachFeet { get; set; } = 5;
+
     public string Actions { get; set; } = "[]";
     public string ConditionRefs { get; set; } = "[]";
     public ReviewStatus ReviewStatus { get; set; } = ReviewStatus.Pending;

@@ -73,3 +73,7 @@ public enum ActionTargetKind { Enemy, Ally, Point }
 
 /// <summary>None = auto-hit ไม่มีทั้งทอยโจมตีและ save (เช่น Magic Missile, ท่าเคลื่อนที่พื้นฐาน)</summary>
 public enum ActionRollKind { AttackRoll, SavingThrow, None }
+
+/// <summary>ability ที่ท่านี้ใช้คำนวณ (ทอยโจมตี / DC / บวกเข้าดาเมจหรือการรักษา) — Spellcasting = ขึ้นกับ
+/// คลาสของผู้ร่าย (Wizard ใช้ INT, Cleric ใช้ WIS) catalog จึงเก็บเป็นค่ากลางไว้ (Sprint H Part 4)</summary>
+public enum ActionAbility { Strength, Dexterity, Spellcasting }

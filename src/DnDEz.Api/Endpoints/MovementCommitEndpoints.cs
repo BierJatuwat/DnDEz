@@ -78,7 +78,7 @@ public static class MovementCommitEndpoints
             try
             {
                 cost = MovementCostResolver.CostOfPath(
-                    path, MovementMode.Walk, TerrainField.Empty,
+                    path, MovementMode.Walk, context.Terrain,
                     new MovementProfile(BudgetFeet: context.Actor!.SpeedFeet));
 
                 triggers = OpportunityAttackResolver.Detect(path, context.Threats, request.Disengage);
@@ -210,6 +210,7 @@ internal sealed class MovementSceneContext
     public Scene? Scene { get; private init; }
     public SceneTokenRecord? ActorToken { get; private init; }
     public List<ReachThreat> Threats { get; private init; } = [];
+    public TerrainField Terrain { get; private init; } = TerrainField.Empty;
 
     /// <summary>ผู้ใช้ที่ถือสิทธิ์ reaction ของแต่ละภัยคุกคาม — เจ้าของตัวละคร หรือ DM ถ้าเป็น NPC</summary>
     public Dictionary<Guid, Guid> ThreatUserIds { get; private init; } = [];
@@ -217,8 +218,8 @@ internal sealed class MovementSceneContext
     /// <summary>
     /// ระยะเอื้อมมาตรฐาน 5 ฟุต (SRD 5.2 "Reach": *"A creature has a 5-foot reach"*)
     ///
-    /// ⚠️ ยังไม่มีคอลัมน์ reach ต่อตัวละครในสคีมา มอนสเตอร์เอื้อมยาวจึงยังถูกคิดเป็น 5 ฟุต —
-    /// engine รองรับค่าอื่นแล้ว (มีเทสต์คุมเคส 10 ฟุต) ขาดแค่ที่เก็บข้อมูล ไม่ใช่ขาดกฎ
+    /// มอนสเตอร์เอื้อมยาวเท่าไรอ่านจาก <c>monster_stat_blocks.reach_feet</c> ของตัวเอง (Sprint H Part 7)
+    /// ค่านี้ (5 ฟุตตายตัว) ใช้เฉพาะตัวละคร (Character) ที่ยังไม่มีคอลัมน์ reach ในสคีมา
     /// </summary>
     private const int DefaultReachFeet = 5;
 
@@ -275,43 +276,78 @@ internal sealed class MovementSceneContext
 
         // เตือนเฉพาะศัตรูที่ผู้เดินมองเห็นแล้ว — ถ้าเตือนถึงตัวที่ยังอยู่ในหมอกก็เท่ากับบอกว่ามีมันอยู่
         // (ช่องรั่วแบบเดียวกับที่ §1.2 เตือนไว้) · ผลข้างเคียงที่ตั้งใจ: นักซุ่มโจมตีไม่โผล่ในคำเตือน
+        // รับทั้ง Character และ Monster — มอนสเตอร์ก็เป็นภัยคุกคามที่ตั้งเอื้อมได้เหมือนกัน (Part 7)
         var visibleEnemyTokens = tokens
-            .Where(t => t.EntityType == "Character" && t.EntityId != characterId)
+            .Where(t => (t.EntityType == "Character" || t.EntityType == "Monster") && t.EntityId != characterId)
             .Where(t => FogLayerSerialization.IsVisibleTo(t.X, t.Y, fogAreas, isDm))
             .ToList();
 
-        var ids = visibleEnemyTokens.Select(t => t.EntityId).Distinct().ToList();
+        var ids = visibleEnemyTokens.Where(t => t.EntityType == "Character")
+            .Select(t => t.EntityId).Distinct().ToList();
         var characters = ids.Count == 0
             ? []
             : await db.Characters.Where(c => ids.Contains(c.Id)).ToDictionaryAsync(c => c.Id);
+
+        var monsterIds = visibleEnemyTokens.Where(t => t.EntityType == "Monster")
+            .Select(t => t.EntityId).Distinct().ToList();
+        var monsters = monsterIds.Count == 0
+            ? []
+            : await db.MonsterStatBlocks.Where(m => monsterIds.Contains(m.Id)).ToDictionaryAsync(m => m.Id);
 
         var threats = new List<ReachThreat>();
         var threatUserIds = new Dictionary<Guid, Guid>();
         foreach (var token in visibleEnemyTokens)
         {
-            if (!characters.TryGetValue(token.EntityId, out var character))
+            if (token.EntityType == "Character")
             {
-                continue;
-            }
+                if (!characters.TryGetValue(token.EntityId, out var character))
+                {
+                    continue;
+                }
 
-            // ฝ่าย: ใช้แกน "ใครคุม" เหมือน Part 9 (ยังไม่มีตาราง faction)
-            if (character.ControlledByDm == actor!.ControlledByDm)
+                // ฝ่าย: ใช้แกน "ใครคุม" เหมือน Part 9 (ยังไม่มีตาราง faction)
+                if (character.ControlledByDm == actor!.ControlledByDm)
+                {
+                    continue;
+                }
+
+                threats.Add(new ReachThreat(
+                    Id: character.Id,
+                    Name: character.Name,
+                    Position: new GridPoint((int)Math.Round(token.X), (int)Math.Round(token.Y)),
+                    ReachFeet: DefaultReachFeet,
+                    // หมอกของ Part 6 เป็นพื้นที่ที่เปิดร่วมกันทั้งโต๊ะ การมองเห็นจึงสมมาตร —
+                    // ถ้าวันหนึ่งมี line-of-sight ต่อตัวจริง ๆ ต้องกลับมาแก้ตรงนี้
+                    CanSeeMover: true,
+                    // ยังไม่มีที่เก็บ reaction ของตัวที่ไม่ใช่เจ้าของเทิร์น → เตือนเกินดีกว่าเตือนขาด
+                    ReactionAvailable: true));
+
+                threatUserIds[character.Id] = character.OwnerUserId ?? campaign.OwnerUserId;
+            }
+            else if (token.EntityType == "Monster")
             {
-                continue;
+                if (!monsters.TryGetValue(token.EntityId, out var monster))
+                {
+                    continue;
+                }
+
+                // ฝ่าย: มอนสเตอร์คุมโดย DM เสมอ — เป็นภัยคุกคามก็ต่อเมื่อผู้เดินไม่ใช่ฝ่าย DM
+                if (actor!.ControlledByDm)
+                {
+                    continue;
+                }
+
+                threats.Add(new ReachThreat(
+                    Id: monster.Id,
+                    Name: monster.Name,
+                    Position: new GridPoint((int)Math.Round(token.X), (int)Math.Round(token.Y)),
+                    ReachFeet: monster.ReachFeet,
+                    CanSeeMover: true,
+                    ReactionAvailable: true));
+
+                // มอนสเตอร์ไม่มีเจ้าของผู้เล่น — DM ถือสิทธิ์ reaction แทน
+                threatUserIds[monster.Id] = campaign.OwnerUserId;
             }
-
-            threats.Add(new ReachThreat(
-                Id: character.Id,
-                Name: character.Name,
-                Position: new GridPoint((int)Math.Round(token.X), (int)Math.Round(token.Y)),
-                ReachFeet: DefaultReachFeet,
-                // หมอกของ Part 6 เป็นพื้นที่ที่เปิดร่วมกันทั้งโต๊ะ การมองเห็นจึงสมมาตร —
-                // ถ้าวันหนึ่งมี line-of-sight ต่อตัวจริง ๆ ต้องกลับมาแก้ตรงนี้
-                CanSeeMover: true,
-                // ยังไม่มีที่เก็บ reaction ของตัวที่ไม่ใช่เจ้าของเทิร์น → เตือนเกินดีกว่าเตือนขาด
-                ReactionAvailable: true));
-
-            threatUserIds[character.Id] = character.OwnerUserId ?? campaign.OwnerUserId;
         }
 
         return new MovementSceneContext
@@ -322,6 +358,7 @@ internal sealed class MovementSceneContext
             ActorToken = actorToken,
             Threats = threats,
             ThreatUserIds = threatUserIds,
+            Terrain = SceneTerrainSerialization.ToTerrainField(scene.Terrain),
         };
     }
 }

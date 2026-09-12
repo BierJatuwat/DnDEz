@@ -79,6 +79,7 @@ function makeEvents() {
     onActionMessageCreated: vi.fn(),
     onCombatEvent: vi.fn(),
     onFogChanged: vi.fn(),
+    onTerrainChanged: vi.fn(),
     onReactionPrompt: vi.fn(),
     onMovementResumed: vi.fn(),
   };
@@ -231,6 +232,18 @@ describe("CampaignHubManager", () => {
     // ต้องไม่ไหลไปเข้า callback อื่น — server ยิง FogChanged เข้า role-group แยก การส่งผิดช่องทาง
     // จะทำให้หน้าจอ invalidate ผิด query แล้วหมอกไม่อัปเดตตามจริง
     expect(events.onCombatEvent).not.toHaveBeenCalled();
+  });
+
+  it("forwards TerrainChanged events to onTerrainChanged, not to onFogChanged (Sprint H Part 6)", async () => {
+    await manager.start();
+    const payload = { sceneId: "scene-1" };
+
+    connection.emit("TerrainChanged", payload);
+
+    expect(events.onTerrainChanged).toHaveBeenCalledWith(payload);
+    // คนละความหมายกับหมอก: หมอกเปลี่ยน "ใครมองเห็นอะไร" ส่วนพื้นเปลี่ยน "เดินได้ถึงไหน" (ต้อง invalidate
+    // reachable ด้วย) — ถ้าไหลผิดช่อง ขอบเขตสีเขียวของผู้เล่นจะไม่หดตามหนองน้ำที่ DM เพิ่งวาด
+    expect(events.onFogChanged).not.toHaveBeenCalled();
   });
 
   it(

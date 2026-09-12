@@ -8,7 +8,9 @@ import { useCampaignWorkspace } from "@/lib/use-campaign-workspace";
 import { useCombatActions } from "@/lib/use-combat-actions";
 import { useScene } from "@/lib/use-scene";
 import type { ApiKeyInfo, CampaignMember } from "@/lib/campaign-types";
-import { SceneMap } from "./SceneMap";
+import { DmMapTools } from "./DmMapTools";
+import { SceneSetupPanel } from "./SceneSetupPanel";
+import { parseSceneGrid } from "@/lib/scene-grid";
 import { ReactionPrompt } from "./ReactionPrompt";
 import {
   AttackCheckPanel,
@@ -63,7 +65,10 @@ export function DmConsole({ campaignId }: { campaignId: string }) {
   const nameOf = (entityId: string) => ws.characters.find((c) => c.id === entityId)?.name;
   const [fogX, setFogX] = useState("0");
   const [fogY, setFogY] = useState("0");
-  const [fogRadius, setFogRadius] = useState("120");
+  // Sprint H Part 3 — ดีฟอลต์เดิมคือ 120 ซึ่งเป็นค่าจากยุคที่พิกัดเป็น "พิกเซล" · พอ Part 10
+  // เคาะให้พิกัดเป็น "ช่อง" ค่านี้กลายเป็นรัศมี 120 ช่อง = เปิดหมอกทั้งแผนที่ในคลิกเดียว
+  // (ตระกูลเดียวกับ `sceneBounds` padding ที่เจอใน Part 1) · 4 ช่อง ≈ 20 ฟุต พอดีกับคบไฟ
+  const [fogRadius, setFogRadius] = useState("4");
 
   const campaignQuery = useQuery({
     queryKey: ["campaign", campaignId],
@@ -437,18 +442,30 @@ export function DmConsole({ campaignId }: { campaignId: string }) {
               <section className={sectionClass}>
                 <h2 className="font-medium">แผนที่</h2>
                 {scene.noScene ? (
-                  <p className="text-sm opacity-50">
-                    ยังไม่มีแผนที่ในเซสชันนี้ — อัปโหลดแผนที่แล้วสร้างฉากก่อน
-                  </p>
+                  /* Sprint H Part 3 — เดิม: บอกให้ "อัปโหลดแผนที่" แต่ไม่มีปุ่มให้กด = ทางตัน */
+                  <SceneSetupPanel
+                    campaignId={campaignId}
+                    sessionId={ws.selectedSessionId}
+                    scene={null}
+                  />
                 ) : (
                   <>
-                    <SceneMap
+                    <SceneSetupPanel
+                      campaignId={campaignId}
+                      sessionId={ws.selectedSessionId}
+                      scene={scene.scene}
+                    />
+                    <DmMapTools
+                      campaignId={campaignId}
+                      sessionId={ws.selectedSessionId}
+                      sceneId={scene.scene?.id ?? null}
                       tokens={scene.tokens}
                       revealedAreas={scene.revealedAreas}
+                      terrain={scene.terrain}
                       imageUrl={scene.scene?.imageUrl ?? null}
+                      pixelsPerSquare={parseSceneGrid(scene.scene?.grid).pixelsPerSquare}
+                      characters={ws.characters}
                       nameOf={nameOf}
-                      fogStyle="translucent"
-                      emptyHint="ยังไม่มีอะไรบนแผนที่"
                     />
                     {/* DM เห็น token ครบทุกตัวจาก server อยู่แล้ว — เส้นประรอบ token คือคำเตือนว่า
                         "ตัวนี้ผู้เล่นยังไม่เห็น" ไม่ใช่การปิดบังจาก DM */}
