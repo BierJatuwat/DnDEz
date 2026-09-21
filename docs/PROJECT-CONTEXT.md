@@ -1065,6 +1065,17 @@ source import, image generation, refresh token/HTTPS redirect/CI-CD/staging (เ
 
 ---
 
+### ✅ นำเข้า SRD 5.2.1 (2026-09-21) — ไม่ใช่ "source import" ของหนังสือ DM
+
+ต่างจาก source import (สแกนหนังสือ, ยังตัดออกจาก phase 1): นี่คือเนื้อหา CC-BY-4.0 ที่ฝังมากับระบบตามที่ §2 ตัดสินไว้
+- **ข้อมูล**: มอนสเตอร์ 330 (`srd_monsters`, global อ่านอย่างเดียว) · เวท 339 + condition 15 + กฎมีป้าย 26 (`rules_corpus_entries`)
+  ที่มา/วิธีตรวจ/สิ่งที่ยังไม่ได้นำเข้าอยู่ใน doc comment ของ migration `ImportSrd521` และ `tools/srd-import/README.md`
+- **endpoint**: `GET /srd/monsters[/{key}]` · `GET /srd/corpus[/{category}/{key}]` · `GET /srd/attribution` ·
+  `POST /campaigns/{id}/monsters/from-srd` (DM คัดลอกเข้าแคมเปญ → ได้แม่แบบ Approved พร้อม speed/reach จริงสำหรับ OA)
+- **ยังไม่ได้ทำ**: UI (คลังมอนสเตอร์/หน้าเวท/tooltip condition) · แสดงข้อความ attribution ในหน้าจอ (**ข้อบังคับของสัญญาอนุญาต**) ·
+  คลาส/สปีชีส์/ฟีท/อาวุธ/เกราะ/ไอเทมเวทมนตร์ · กฎในบท Rules Glossary ที่ไม่มีป้าย (~110 รายการ แยกหัวข้อยังไม่แม่น) ·
+  เวทเรียกอัญเชิญ (stat block ขึ้นกับระดับช่องเวท) · เชื่อม `actions` ของมอนสเตอร์เข้า action catalog
+
 ### 🔜 Sprint G — ทำให้ concept จริง (spatial play) (เสนอ 2026-09-05)
 
 **อ่านก่อนเริ่ม**: [`spatial-play-design.md`](./spatial-play-design.md) ทั้ง 3 ภาค — โดยเฉพาะ

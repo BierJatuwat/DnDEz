@@ -17,6 +17,11 @@
     <PackageReference Include="EFCore.NamingConventions" Version="8.0.3" />
   </ItemGroup>
 
+  <!-- ข้อมูล SRD 5.2.1 ที่ migration `ImportSrd521` อ่านตอน Up() — สร้างจาก tools/srd-import/build_srd_data.py -->
+  <ItemGroup>
+    <EmbeddedResource Include="Seed\Srd\*.json" LogicalName="Seed.Srd.%(Filename)%(Extension)" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\DnDEz.Domain\DnDEz.Domain.csproj" />
   </ItemGroup>

@@ -47,6 +47,7 @@ public class DnDEzDbContext(DbContextOptions<DnDEzDbContext> options) : DbContex
     public DbSet<RulesCorpusEntry> RulesCorpusEntries => Set<RulesCorpusEntry>();
     public DbSet<CharacterPreset> CharacterPresets => Set<CharacterPreset>();
     public DbSet<ActionCatalogEntry> ActionCatalogEntries => Set<ActionCatalogEntry>();
+    public DbSet<SrdMonster> SrdMonsters => Set<SrdMonster>();
 
     /// <summary>คอลัมน์ที่เก็บ JSON ทั้งก้อน — ใช้ jsonb เสมอ (ไม่ใช่ json/text)</summary>
     private const string Jsonb = "jsonb";
@@ -424,6 +425,9 @@ public class DnDEzDbContext(DbContextOptions<DnDEzDbContext> options) : DbContex
             e.Property(x => x.SpeedFeet).HasDefaultValue(30);
             e.Property(x => x.ReachFeet).HasDefaultValue(5);
             e.HasIndex(x => new { x.CampaignId, x.ReviewStatus });
+            e.Property(x => x.SrdKey).HasMaxLength(100);
+            // แม่แบบที่คัดลอกจากคลัง SRD มีได้ตัวเดียวต่อแคมเปญต่อชนิด (แม่แบบที่ DM สร้างเอง srd_key = NULL ไม่ถูกจำกัด)
+            e.HasIndex(x => new { x.CampaignId, x.SrdKey }).IsUnique().HasFilter("srd_key IS NOT NULL");
             EnumCheck<MonsterStatBlock, ReviewStatus>(e, x => x.ReviewStatus, "review_status");
         });
 
@@ -463,6 +467,23 @@ public class DnDEzDbContext(DbContextOptions<DnDEzDbContext> options) : DbContex
             e.Property(x => x.Key).HasMaxLength(100);
             e.Property(x => x.Title).HasMaxLength(200);
             e.HasIndex(x => new { x.Category, x.Key }).IsUnique();
+            e.Property(x => x.Data).HasColumnType(Jsonb).HasDefaultValueSql("'{}'::jsonb");
+        });
+
+        b.Entity<SrdMonster>(e =>
+        {
+            e.ToTable("srd_monsters");
+            e.Property(x => x.Key).HasMaxLength(100);
+            e.Property(x => x.Name).HasMaxLength(200);
+            e.Property(x => x.Size).HasMaxLength(40);
+            e.Property(x => x.Type).HasMaxLength(60);
+            e.Property(x => x.Alignment).HasMaxLength(80);
+            e.Property(x => x.ChallengeRating).HasMaxLength(10);
+            e.Property(x => x.SourceVersion).HasMaxLength(20);
+            e.Property(x => x.Data).HasColumnType(Jsonb).HasDefaultValueSql("'{}'::jsonb");
+            e.HasIndex(x => x.Key).IsUnique();
+            e.ToTable(t => t.HasCheckConstraint("ck_srd_monster_numbers",
+                "armor_class > 0 AND hit_points > 0 AND speed_feet >= 0 AND reach_feet >= 5"));
         });
 
         b.Entity<ActionCatalogEntry>(e =>

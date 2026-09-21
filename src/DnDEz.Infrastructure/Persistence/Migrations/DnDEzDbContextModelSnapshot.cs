@@ -1243,11 +1243,21 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                         .HasDefaultValue(30)
                         .HasColumnName("speed_feet");
 
+                    b.Property<string>("SrdKey")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("srd_key");
+
                     b.HasKey("Id")
                         .HasName("pk_monster_stat_blocks");
 
                     b.HasIndex("CampaignId", "ReviewStatus")
                         .HasDatabaseName("ix_monster_stat_blocks_campaign_id_review_status");
+
+                    b.HasIndex("CampaignId", "SrdKey")
+                        .IsUnique()
+                        .HasDatabaseName("ix_monster_stat_blocks_campaign_id_srd_key")
+                        .HasFilter("srd_key IS NOT NULL");
 
                     b.ToTable("monster_stat_blocks", null, t =>
                         {
@@ -1599,6 +1609,13 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                         .HasColumnType("text")
                         .HasColumnName("content");
 
+                    b.Property<string>("Data")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("data")
+                        .HasDefaultValueSql("'{}'::jsonb");
+
                     b.Property<string>("Key")
                         .IsRequired()
                         .HasMaxLength(100)
@@ -1748,6 +1765,95 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                     b.ToTable("source_documents", null, t =>
                         {
                             t.HasCheckConstraint("ck_ocr_status_sourcedocument", "ocr_status IN ('Pending', 'Processing', 'Completed', 'Failed')");
+                        });
+                });
+
+            modelBuilder.Entity("DnDEz.Domain.Entities.SrdMonster", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Alignment")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)")
+                        .HasColumnName("alignment");
+
+                    b.Property<int>("ArmorClass")
+                        .HasColumnType("integer")
+                        .HasColumnName("armor_class");
+
+                    b.Property<string>("ChallengeRating")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)")
+                        .HasColumnName("challenge_rating");
+
+                    b.Property<string>("Data")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("data")
+                        .HasDefaultValueSql("'{}'::jsonb");
+
+                    b.Property<int>("HitPoints")
+                        .HasColumnType("integer")
+                        .HasColumnName("hit_points");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("key");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("name");
+
+                    b.Property<int>("ReachFeet")
+                        .HasColumnType("integer")
+                        .HasColumnName("reach_feet");
+
+                    b.Property<string>("Size")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)")
+                        .HasColumnName("size");
+
+                    b.Property<string>("SourceVersion")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("source_version");
+
+                    b.Property<int>("SpeedFeet")
+                        .HasColumnType("integer")
+                        .HasColumnName("speed_feet");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(60)
+                        .HasColumnType("character varying(60)")
+                        .HasColumnName("type");
+
+                    b.Property<int>("Xp")
+                        .HasColumnType("integer")
+                        .HasColumnName("xp");
+
+                    b.HasKey("Id")
+                        .HasName("pk_srd_monsters");
+
+                    b.HasIndex("Key")
+                        .IsUnique()
+                        .HasDatabaseName("ix_srd_monsters_key");
+
+                    b.ToTable("srd_monsters", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_srd_monster_numbers", "armor_class > 0 AND hit_points > 0 AND speed_feet >= 0 AND reach_feet >= 5");
                         });
                 });
 

@@ -73,6 +73,12 @@ public class MonsterStatBlock
     public string Actions { get; set; } = "[]";
     public string ConditionRefs { get; set; } = "[]";
     public ReviewStatus ReviewStatus { get; set; } = ReviewStatus.Pending;
+
+    /// <summary>
+    /// key ของ <see cref="SrdMonster"/> ที่แถวนี้ถูกคัดลอกมา (null = DM สร้างเอง/มาจาก source import) — ใช้ 2 อย่าง:
+    /// กัน DM เพิ่ม "Goblin Warrior" ซ้ำเป็นสองแม่แบบ (unique ต่อแคมเปญ) และบอกที่มาเพื่อแสดง attribution ของ CC-BY-4.0
+    /// </summary>
+    public string? SrdKey { get; set; }
 }
 
 public class NpcProfile
@@ -142,6 +148,54 @@ public class RulesCorpusEntry
     public string Content { get; set; } = null!;
     public string License { get; set; } = "CC-BY-4.0";
     public string Source { get; set; } = "SRD 5.2";
+
+    /// <summary>
+    /// ข้อมูลเชิงโครงสร้างของรายการนี้ (jsonb) — เวท: level/school/classes/castingTime/range/components/duration ·
+    /// กฎที่มีป้าย: `{"tag":"Action"}` ฯลฯ · ส่วน <see cref="Content"/> ยังเป็นข้อความอ่านตรง ๆ สำหรับ tooltip
+    /// เพิ่มใน migration `ImportSrd521` (ก่อนหน้านั้นตารางนี้ไม่มีแถวเลย)
+    /// </summary>
+    public string Data { get; set; } = "{}";
+}
+
+/// <summary>
+/// คลังมอนสเตอร์ SRD 5.2.1 (CC-BY-4.0) ระดับ **global อ่านอย่างเดียว** — ไม่ผูกแคมเปญ (ต่างจาก
+/// <see cref="MonsterStatBlock"/> ที่เป็นแม่แบบระดับแคมเปญและ DM แก้ได้)
+///
+/// **ทำไมแยกตาราง ไม่ยัดใส่ monster_stat_blocks**: แถวใน monster_stat_blocks ต้องมี campaign_id + RLS ต่อแคมเปญ
+/// และต้องผ่านด่าน review ของ DM · ข้อมูล SRD เป็นของกลางที่ตรวจแล้วตอน import จึงใช้เส้นทาง "DM เลือกจากคลัง →
+/// คัดลอกเข้าแคมเปญ" (`POST /campaigns/{id}/monsters/from-srd`) แทน — DM แก้ค่าของสำเนาได้โดยไม่กระทบคลังกลาง
+/// </summary>
+public class SrdMonster
+{
+    public Guid Id { get; set; }
+
+    /// <summary>slug ของชื่อ เช่น "goblin-warrior" — unique · ใช้อ้างอิงจาก API</summary>
+    public string Key { get; set; } = null!;
+    public string Name { get; set; } = null!;
+
+    /// <summary>"Small" / "Medium or Small" ฯลฯ ตามต้นฉบับ (บางตัวมีสองขนาด จึงเป็น text ไม่ใช่ enum)</summary>
+    public string Size { get; set; } = null!;
+    public string Type { get; set; } = null!;
+    public string Alignment { get; set; } = null!;
+
+    public int ArmorClass { get; set; }
+    public int HitPoints { get; set; }
+
+    /// <summary>ความเร็วเดิน (ฟุต) — ตัวเลขแรกของบรรทัด Speed · บินอย่างเดียว = 0 (ความเร็วอื่นอยู่ใน <see cref="Data"/>)</summary>
+    public int SpeedFeet { get; set; }
+
+    /// <summary>ระยะเอื้อมสูงสุดของท่าระยะประชิด (ฟุต) · ไม่มีท่าระยะประชิดเลย = 5 ตาม SRD "Reach"</summary>
+    public int ReachFeet { get; set; }
+
+    /// <summary>เก็บเป็นข้อความเพราะมี "1/8" "1/4" "1/2" — ห้ามแปลงเป็นตัวเลขแล้วเรียงลำดับตรง ๆ</summary>
+    public string ChallengeRating { get; set; } = null!;
+    public int Xp { get; set; }
+
+    /// <summary>เวอร์ชัน SRD ที่นำเข้า เช่น "5.2.1"</summary>
+    public string SourceVersion { get; set; } = null!;
+
+    /// <summary>stat block เต็มที่แยกจาก PDF (jsonb): abilities, skills, senses, traits, actions ฯลฯ</summary>
+    public string Data { get; set; } = "{}";
 }
 
 /// <summary>
