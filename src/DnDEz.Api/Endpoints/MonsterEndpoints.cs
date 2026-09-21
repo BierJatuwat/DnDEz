@@ -22,6 +22,11 @@ namespace DnDEz.Api.Endpoints;
 /// การเพิ่มมอนสเตอร์เข้าแคมเปญอยู่ที่ `POST /campaigns/{id}/monsters/from-srd` ใน <see cref="SrdEndpoints"/>
 /// (คัดลอกจากคลัง SRD 5.2.1) — ยังไม่มีเส้นทางสร้างมอนสเตอร์เองจากศูนย์ ดู doc comment ของ migration
 /// `AddMonsterSpeedAndReach` สำหรับรายการที่ยังไม่ได้ทำของระบบมอนสเตอร์ทั้งหมด
+///
+/// ## PATCH — DM ปรับค่าพลังเองได้ (2026-09-22)
+/// ⚠️ **แก้ที่ "แม่แบบ" ไม่ใช่ตัวใดตัวหนึ่งบนแผนที่** — ก็อบลิน 3 ตัวที่วางจากแม่แบบเดียวกันใช้แถวนี้ร่วมกัน
+/// แก้ HP ที่นี่ = เปลี่ยนทั้งสามตัวพร้อมกัน · จะแยกรายตัวได้ต้องมี HP รายตัวก่อน ซึ่งยังไม่มี (ดู migration
+/// `AddMonsterSpeedAndReach`) — หน้าจอต้องเขียนกำกับให้ DM รู้ ไม่ใช่ปล่อยให้เดาเอาเอง
 /// </summary>
 public static class MonsterEndpoints
 {
@@ -55,8 +60,111 @@ public static class MonsterEndpoints
 
             return Results.Ok(monsters);
         }).RequireAuthorization();
+
+        // ── DM ปรับค่าพลังของแม่แบบก่อนเอาลงแผนที่ ──────────────────────────
+        app.MapPatch("/campaigns/{campaignId:guid}/monsters/{monsterId:guid}", async (
+            Guid campaignId,
+            Guid monsterId,
+            UpdateMonsterRequest? request,
+            ClaimsPrincipal principal,
+            DnDEzDbContext db) =>
+        {
+            var callerUserId = principal.GetUserId();
+            if (callerUserId is null)
+            {
+                return Results.Unauthorized();
+            }
+
+            var (_, failure) = await CampaignAuthorization.RequireCampaignDmAsync(db, campaignId, callerUserId.Value);
+            if (failure is not null)
+            {
+                return failure;
+            }
+
+            if (request is null)
+            {
+                return Results.BadRequest(new MonsterErrorResponse("body_required"));
+            }
+
+            var monster = await db.MonsterStatBlocks
+                .SingleOrDefaultAsync(m => m.Id == monsterId && m.CampaignId == campaignId);
+            if (monster is null)
+            {
+                return Results.NotFound();
+            }
+
+            // validate ทุกค่าที่ส่งมา **ก่อนแตะแถวเลย** — ถ้าปล่อยให้ CHECK ของฐานเป็นด่านเดียว ผู้ใช้จะได้ 500
+            // แทน 400 และไม่รู้ว่าค่าไหนผิด · ฟิลด์ที่ไม่ส่งมา = ไม่แก้ (PATCH ไม่ใช่ PUT)
+            if (request.Name is not null)
+            {
+                var trimmed = request.Name.Trim();
+                if (trimmed.Length == 0 || trimmed.Length > MaxNameLength)
+                {
+                    return Results.BadRequest(new MonsterErrorResponse("invalid_name"));
+                }
+            }
+
+            if (request.ArmorClass is <= 0 or > MaxArmorClass)
+            {
+                return Results.BadRequest(new MonsterErrorResponse("invalid_armor_class"));
+            }
+
+            if (request.HitPoints is <= 0 or > MaxHitPoints)
+            {
+                return Results.BadRequest(new MonsterErrorResponse("invalid_hit_points"));
+            }
+
+            // speed 0 ถูกต้องได้ (สิ่งมีชีวิตที่ขยับเองไม่ได้) ต่างจาก reach ที่ต่ำกว่า 5 ไม่มีทางถูกตามกฎ
+            if (request.SpeedFeet is < 0 or > MaxDistanceFeet)
+            {
+                return Results.BadRequest(new MonsterErrorResponse("invalid_speed"));
+            }
+
+            if (request.ReachFeet is < MinReachFeet or > MaxDistanceFeet)
+            {
+                return Results.BadRequest(new MonsterErrorResponse("invalid_reach"));
+            }
+
+            monster.Name = request.Name?.Trim() ?? monster.Name;
+            monster.ArmorClass = request.ArmorClass ?? monster.ArmorClass;
+            monster.HitPoints = request.HitPoints ?? monster.HitPoints;
+            monster.SpeedFeet = request.SpeedFeet ?? monster.SpeedFeet;
+            monster.ReachFeet = request.ReachFeet ?? monster.ReachFeet;
+
+            await db.SaveChangesAsync();
+
+            return Results.Ok(new CampaignMonsterListItem(
+                monster.Id, monster.Name, monster.ArmorClass, monster.HitPoints, monster.SpeedFeet,
+                monster.ReachFeet, monster.SrdKey, monster.ReviewStatus.ToString()));
+        }).RequireAuthorization();
     }
+
+    private const int MaxNameLength = 200;
+
+    /// <summary>เพดานที่กันค่าพิมพ์พลาดอย่างเดียว ไม่ใช่กฎของเกม — AC สูงสุดใน SRD คือ 25 (Tarrasque)
+    /// homebrew ที่สูงกว่านั้นยังใส่ได้ แต่ถ้าเผลอพิมพ์ 999 ควรถูกทักทันทีมากกว่าปล่อยให้ผู้เล่นตีไม่โดนทั้งเกม</summary>
+    private const int MaxArmorClass = 99;
+
+    /// <summary>HP สูงสุดใน SRD คือ 697 (Tarrasque) — เผื่อ homebrew ไว้กว้างมากแต่ยังกันเลขหลุดมือ</summary>
+    private const int MaxHitPoints = 9999;
+
+    /// <summary>ระยะสูงสุดที่รับ — reach ยาวสุดใน SRD คือ 60 ฟุต (Roper) ส่วน speed ก็ไม่เคยเกินหลักร้อยต้น ๆ</summary>
+    private const int MaxDistanceFeet = 999;
+
+    /// <summary>SRD 5.2 "Reach": *"A creature has a 5-foot reach"* — ต่ำกว่านี้ไม่มีทางถูก</summary>
+    private const int MinReachFeet = 5;
 }
+
+/// <summary>
+/// ฟิลด์ที่เป็น null = ไม่แก้ (PATCH ไม่ใช่ PUT) — ส่งมาเฉพาะช่องที่ DM แตะจริง
+///
+/// **แก้ได้เฉพาะตัวเลขที่ engine ใช้** — `actions`/`conditionRefs` ยังแก้ผ่านที่นี่ไม่ได้ เพราะยังไม่มี
+/// UI ที่แก้ท่าได้อย่างปลอดภัย (ข้อความอิสระใน jsonb ที่ไม่มีใครตรวจ = แหล่งของข้อมูลที่เชื่อไม่ได้)
+/// </summary>
+internal record UpdateMonsterRequest(
+    string? Name, int? ArmorClass, int? HitPoints, int? SpeedFeet, int? ReachFeet);
+
+internal record MonsterErrorResponse(string Reason);
 
 /// <summary>
 /// ไม่ส่ง `actions`/`conditionRefs` (jsonb ก้อนใหญ่) ออกมาในลิสต์ — จอเลือกมอนสเตอร์มาวางต้องการแค่ชื่อกับ

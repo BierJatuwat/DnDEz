@@ -426,6 +426,13 @@ public class DnDEzDbContext(DbContextOptions<DnDEzDbContext> options) : DbContex
             e.Property(x => x.ReachFeet).HasDefaultValue(5);
             e.HasIndex(x => new { x.CampaignId, x.ReviewStatus });
             e.Property(x => x.SrdKey).HasMaxLength(100);
+            // ค่าที่ engine ใช้คำนวณจริง — เพิ่ม CHECK ตอนที่ **มี endpoint ให้ DM แก้ได้จริง** (2026-09-22)
+            // ก่อนหน้านี้ค่าเหล่านี้มาจาก import/คัดลอกจากคลัง SRD เท่านั้น จึงเชื่อถือได้โดยไม่ต้องมีด่าน
+            // (code review เคยเสนอให้ใส่ตอน Sprint H Part 7 แล้ว owner ปฏิเสธด้วยเหตุผลนี้ตรง ๆ — ตอนนี้
+            // เหตุผลนั้นหมดไปแล้ว) · speed 0 ถูกต้องได้ (สิ่งมีชีวิตที่ขยับเองไม่ได้) แต่ reach ต่ำกว่า 5
+            // ไม่มีทางถูก: SRD "Reach" บอกว่าทุกสิ่งมีชีวิตเอื้อมได้อย่างน้อย 5 ฟุต
+            e.ToTable(t => t.HasCheckConstraint("ck_monster_stat_block_numbers",
+                "armor_class > 0 AND hit_points > 0 AND speed_feet >= 0 AND reach_feet >= 5"));
             // แม่แบบที่คัดลอกจากคลัง SRD มีได้ตัวเดียวต่อแคมเปญต่อชนิด (แม่แบบที่ DM สร้างเอง srd_key = NULL ไม่ถูกจำกัด)
             e.HasIndex(x => new { x.CampaignId, x.SrdKey }).IsUnique().HasFilter("srd_key IS NOT NULL");
             EnumCheck<MonsterStatBlock, ReviewStatus>(e, x => x.ReviewStatus, "review_status");

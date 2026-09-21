@@ -12,7 +12,17 @@ import {
   sortByDifficulty,
 } from "@/lib/srd-view";
 import { SrdAttribution } from "./SrdAttribution";
-import type { SrdMonsterSummary } from "@/lib/srd-types";
+import {
+  STAT_LIMITS,
+  draftFromMonster,
+  hasChanges,
+  hasErrors,
+  parseStatDraft,
+  type MonsterStatDraft,
+  type StatField,
+} from "@/lib/monster-stats-form";
+import type { MonsterStatChanges } from "@/lib/use-srd";
+import type { CampaignMonster, SrdMonsterSummary } from "@/lib/srd-types";
 
 const inputClass =
   "rounded border border-black/20 dark:border-white/20 bg-transparent px-2 py-1 text-sm";
@@ -44,9 +54,10 @@ export function MonsterLibraryPanel({ campaignId }: { campaignId: string }) {
   const [crMax, setCrMax] = useState("1");
   const [page, setPage] = useState(0);
   const [openKey, setOpenKey] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const { monsters, total, attribution, isLoading, isError } = useSrdMonsters({ query, crMax, page });
-  const { monsters: campaignMonsters, copyFromSrd } = useCampaignMonsters(campaignId);
+  const { monsters: campaignMonsters, copyFromSrd, updateMonster } = useCampaignMonsters(campaignId);
 
   const ownedKeys = new Set(campaignMonsters.map((m) => m.srdKey).filter((k): k is string => !!k));
   const pageCount = Math.ceil(total / MONSTER_PAGE_SIZE);
@@ -115,7 +126,12 @@ export function MonsterLibraryPanel({ campaignId }: { campaignId: string }) {
                 open={openKey === monster.key}
                 busy={copyFromSrd.isPending && copyFromSrd.variables === monster.key}
                 onToggle={() => setOpenKey(openKey === monster.key ? null : monster.key)}
-                onAdd={() => copyFromSrd.mutate(monster.key)}
+                onAdd={() =>
+                  copyFromSrd.mutate(monster.key, {
+                    // เพิ่งเพิ่มเข้ามา = จังหวะที่ DM อยากปรับค่าพอดี เปิดฟอร์มรอไว้เลยแทนให้ไปหาเอง
+                    onSuccess: (result) => setEditingId(result.monsterId),
+                  })
+                }
               />
             ))}
           </div>
@@ -153,18 +169,35 @@ export function MonsterLibraryPanel({ campaignId }: { campaignId: string }) {
       {campaignMonsters.length > 0 && (
         <div className="space-y-1">
           <p className="text-xs uppercase tracking-wider opacity-50">
-            อยู่ในแคมเปญนี้แล้ว ({campaignMonsters.length})
+            อยู่ในแคมเปญนี้แล้ว ({campaignMonsters.length}) — กดเพื่อปรับค่าพลังก่อนเอาลงแผนที่
           </p>
-          <ul className="flex flex-wrap gap-1 text-xs">
+          <ul className="space-y-1">
             {campaignMonsters.map((m) => (
-              <li
-                key={m.id}
-                className="rounded border border-black/10 dark:border-white/10 px-2 py-1 opacity-80"
-              >
-                {m.name}
-                <span className="ml-1 tabular-nums opacity-50">
-                  AC {m.armorClass} · HP {m.hitPoints}
-                </span>
+              <li key={m.id} className="rounded border border-black/10 dark:border-white/10">
+                <button
+                  type="button"
+                  onClick={() => setEditingId(editingId === m.id ? null : m.id)}
+                  aria-expanded={editingId === m.id}
+                  className="w-full flex items-center justify-between gap-2 px-2 py-1 text-left text-xs hover:bg-black/5 dark:hover:bg-white/5"
+                >
+                  <span className="truncate">{m.name}</span>
+                  <span className="shrink-0 tabular-nums opacity-50">
+                    AC {m.armorClass} · HP {m.hitPoints} · เดิน {m.speedFeet} · เอื้อม {m.reachFeet}
+                  </span>
+                </button>
+                {editingId === m.id && (
+                  <MonsterStatEditor
+                    monster={m}
+                    onSave={(changes) =>
+                      updateMonster.mutate(
+                        { monsterId: m.id, ...changes },
+                        { onSuccess: () => setEditingId(null) },
+                      )
+                    }
+                    saving={updateMonster.isPending}
+                    failed={updateMonster.isError}
+                  />
+                )}
               </li>
             ))}
           </ul>
@@ -275,6 +308,104 @@ function MonsterDetail({ monsterKey }: { monsterKey: string }) {
           ))}
         </div>
       ))}
+    </div>
+  );
+}
+
+/**
+ * ฟอร์มปรับค่าพลังของแม่แบบมอนสเตอร์
+ *
+ * **บอกให้ชัดว่าแก้แล้วกระทบอะไร** — ค่านี้เป็นของ "แม่แบบ" ก็อบลินทุกตัวที่วางจากแม่แบบเดียวกันใช้ร่วมกัน
+ * DM ที่คิดว่ากำลังแก้ตัวใดตัวหนึ่งบนแผนที่จะงงมากถ้าตัวอื่นเปลี่ยนตามโดยไม่มีใครบอก (จะแยกรายตัวได้
+ * ต้องมี HP รายตัวก่อน ซึ่งยังไม่มี)
+ *
+ * ปุ่มบันทึกปิดเมื่อ **ไม่มีอะไรเปลี่ยน** ด้วย ไม่ใช่แค่ตอนค่าผิด — กดบันทึกทั้งที่ไม่ได้แก้อะไรแล้วเห็น
+ * "สำเร็จ" ทำให้ไม่แน่ใจว่าที่แก้ไปก่อนหน้าบันทึกหรือยัง
+ */
+function MonsterStatEditor({
+  monster,
+  onSave,
+  saving,
+  failed,
+}: {
+  monster: CampaignMonster;
+  onSave: (changes: MonsterStatChanges) => void;
+  saving: boolean;
+  failed: boolean;
+}) {
+  const [draft, setDraft] = useState<MonsterStatDraft>(() => draftFromMonster(monster));
+  const result = parseStatDraft(draft, monster);
+  const blocked = hasErrors(result) || !hasChanges(result) || saving;
+
+  const field = (key: StatField, label: string, hint?: string) => (
+    <label className="flex flex-col gap-0.5">
+      <span className="opacity-60">{label}</span>
+      <input
+        type="number"
+        inputMode="numeric"
+        value={draft[key]}
+        min={STAT_LIMITS[key].min}
+        max={STAT_LIMITS[key].max}
+        onChange={(e) => setDraft({ ...draft, [key]: e.target.value })}
+        aria-label={label}
+        className={`w-full rounded border bg-transparent px-2 py-1 tabular-nums ${
+          result.errors[key] ? "border-red-500" : "border-black/20 dark:border-white/20"
+        }`}
+      />
+      {result.errors[key] ? (
+        <span className="text-red-500">{result.errors[key]}</span>
+      ) : hint ? (
+        <span className="opacity-40">{hint}</span>
+      ) : null}
+    </label>
+  );
+
+  return (
+    <div className="space-y-2 border-t border-black/10 dark:border-white/10 p-2 text-[11px]">
+      <label className="flex flex-col gap-0.5">
+        <span className="opacity-60">ชื่อ</span>
+        <input
+          value={draft.name}
+          onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+          aria-label="ชื่อมอนสเตอร์"
+          className={`w-full rounded border bg-transparent px-2 py-1 ${
+            result.errors.name ? "border-red-500" : "border-black/20 dark:border-white/20"
+          }`}
+        />
+        {result.errors.name && <span className="text-red-500">{result.errors.name}</span>}
+      </label>
+
+      <div className="grid grid-cols-2 gap-2">
+        {field("armorClass", "ค่าเกราะ (AC)", "ยิ่งสูงยิ่งตียาก")}
+        {field("hitPoints", "พลังชีวิต (HP)")}
+        {field("speedFeet", "ระยะเดิน (ฟุต)", "30 = ปกติ · 0 = ขยับไม่ได้")}
+        {field("reachFeet", "ระยะเอื้อม (ฟุต)", "10 ขึ้นไป = สวนได้จากไกลขึ้น")}
+      </div>
+
+      <p className="opacity-50">
+        ⚠️ ค่านี้เป็นของแม่แบบ — ถ้าวางมอนสเตอร์ตัวนี้บนแผนที่ไว้หลายตัว จะเปลี่ยนพร้อมกันทุกตัว
+      </p>
+
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => onSave(result.changes)}
+          disabled={blocked}
+          className={`${chipClass} border-indigo-500 bg-indigo-500/15 text-indigo-600 dark:text-indigo-400 disabled:opacity-40`}
+        >
+          {saving ? "กำลังบันทึก..." : "บันทึก"}
+        </button>
+        <button
+          type="button"
+          onClick={() => setDraft(draftFromMonster(monster))}
+          disabled={saving || !hasChanges(result)}
+          className={`${chipClass} border-black/20 dark:border-white/20 opacity-70 disabled:opacity-30`}
+        >
+          คืนค่าเดิม
+        </button>
+      </div>
+
+      {failed && <p className="text-red-500">บันทึกไม่สำเร็จ ลองใหม่อีกครั้ง</p>}
     </div>
   );
 }

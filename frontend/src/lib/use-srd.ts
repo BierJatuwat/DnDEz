@@ -127,10 +127,42 @@ export function useCampaignMonsters(campaignId: string, enabled = true) {
     },
   });
 
+  /**
+   * ปรับค่าพลังของ **แม่แบบ** — ส่งเฉพาะช่องที่แก้ (PATCH ไม่ใช่ PUT)
+   *
+   * ⚠️ มีผลกับทุกตัวที่วางจากแม่แบบนี้ เพราะมอนสเตอร์ยังไม่มี HP รายตัว (ดู doc comment ของ
+   * `MonsterEndpoints` ฝั่ง C#) — หน้าจอต้องบอก DM ให้ชัด ไม่ใช่ปล่อยให้เดา
+   */
+  const updateMonster = useMutation({
+    mutationFn: ({ monsterId, ...changes }: MonsterStatChanges & { monsterId: string }) =>
+      apiFetch<CampaignMonster>(`/campaigns/${campaignId}/monsters/${monsterId}`, {
+        method: "PATCH",
+        token,
+        body: changes,
+      }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["campaign-monsters", campaignId] });
+      // ค่าที่แก้ (reach/speed) เป็นข้อมูลที่ engine ใช้คำนวณ — ขอบเขตการเดินและตัวเลือกที่คำนวณไว้แล้ว
+      // อาจเปลี่ยนตาม ต้องให้ server คิดใหม่ ไม่ใช่โชว์ค่าที่คิดจากตัวเลขเก่าต่อไป
+      await queryClient.invalidateQueries({ queryKey: ["reachable"] });
+      await queryClient.invalidateQueries({ queryKey: ["affordances"] });
+    },
+  });
+
   return {
     monsters: monstersQuery.data ?? [],
     isLoading: monstersQuery.isPending && enabled,
     isError: monstersQuery.isError,
     copyFromSrd,
+    updateMonster,
   };
 }
+
+/** ช่องที่ DM แก้ได้ — ไม่ส่ง = ไม่แก้ */
+export type MonsterStatChanges = {
+  name?: string;
+  armorClass?: number;
+  hitPoints?: number;
+  speedFeet?: number;
+  reachFeet?: number;
+};

@@ -180,6 +180,170 @@ public class MonsterLibraryEndpointsTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
+    // ═══ PATCH /campaigns/{cid}/monsters/{id} — DM ปรับค่าพลังก่อนเอาลงแผนที่ ═══
+
+    [Fact]
+    public async Task Dm_can_adjust_every_stat_the_engine_uses()
+    {
+        var response = await PatchMonsterAsync(_dmToken, _visibleMonsterId, new
+        {
+            name = "ก็อบลินยามประตู (ตัวหัวหน้า)",
+            armorClass = 17,
+            hitPoints = 25,
+            speedFeet = 40,
+            reachFeet = 10,
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<MonsterItem>(JsonOptions);
+        Assert.Equal(("ก็อบลินยามประตู (ตัวหัวหน้า)", 17, 25, 40, 10),
+            (body!.Name, body.ArmorClass, body.HitPoints, body.SpeedFeet, body.ReachFeet));
+
+        // ต้องลงฐานจริง ไม่ใช่แค่ response สวย
+        await using var conn = new NpgsqlConnection(OwnerConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT name, armor_class, hit_points, speed_feet, reach_feet FROM monster_stat_blocks WHERE id = @id", conn);
+        cmd.Parameters.AddWithValue("id", _visibleMonsterId);
+        await using var r = await cmd.ExecuteReaderAsync();
+        Assert.True(await r.ReadAsync());
+        Assert.Equal(("ก็อบลินยามประตู (ตัวหัวหน้า)", 17, 25, 40, 10),
+            (r.GetString(0), r.GetInt32(1), r.GetInt32(2), r.GetInt32(3), r.GetInt32(4)));
+    }
+
+    [Fact]
+    public async Task Fields_that_are_not_sent_keep_their_value()
+    {
+        // PATCH ไม่ใช่ PUT — ส่งมาแค่ HP ต้องไม่ล้างค่าอื่นเป็น 0/null
+        var response = await PatchMonsterAsync(_dmToken, _visibleMonsterId, new { hitPoints = 33 });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var body = await response.Content.ReadFromJsonAsync<MonsterItem>(JsonOptions);
+        Assert.Equal(33, body!.HitPoints);
+        Assert.Equal((VisibleMonsterName, 15, 30, 5), (body.Name, body.ArmorClass, body.SpeedFeet, body.ReachFeet));
+        Assert.Equal("goblin-warrior", body.SrdKey);
+    }
+
+    [Fact]
+    public async Task Adjusted_reach_is_what_opportunity_attacks_will_use()
+    {
+        // reach คือค่าที่ Sprint H Part 7 ใช้ตัดสิน OA จริง — แก้แล้วต้องมีผลกับกลไก ไม่ใช่แค่ตัวเลขโชว์
+        await PatchMonsterAsync(_dmToken, _visibleMonsterId, new { reachFeet = 15 });
+        var monsters = await GetMonstersAsync(_dmToken, _campaignId);
+        Assert.Equal(15, monsters.Single(m => m.Id == _visibleMonsterId).ReachFeet);
+    }
+
+    [Theory]
+    // AC/HP ต่ำกว่า 1 ไม่มีความหมายในกฎ · reach ต่ำกว่า 5 ขัด SRD "Reach" ตรง ๆ · ค่าติดลบคือพิมพ์พลาด
+    [InlineData("{\"armorClass\":0}", "invalid_armor_class")]
+    [InlineData("{\"armorClass\":-5}", "invalid_armor_class")]
+    [InlineData("{\"armorClass\":100}", "invalid_armor_class")]
+    [InlineData("{\"hitPoints\":0}", "invalid_hit_points")]
+    [InlineData("{\"hitPoints\":-1}", "invalid_hit_points")]
+    [InlineData("{\"speedFeet\":-1}", "invalid_speed")]
+    [InlineData("{\"reachFeet\":0}", "invalid_reach")]
+    [InlineData("{\"reachFeet\":4}", "invalid_reach")]
+    [InlineData("{\"name\":\"\"}", "invalid_name")]
+    [InlineData("{\"name\":\"   \"}", "invalid_name")]
+    public async Task Invalid_values_are_400_with_a_reason_and_change_nothing(string json, string reason)
+    {
+        var response = await AuthedClient(_dmToken).PatchAsync(
+            $"/campaigns/{_campaignId}/monsters/{_visibleMonsterId}",
+            new StringContent(json, System.Text.Encoding.UTF8, "application/json"));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<ErrorBody>(JsonOptions);
+        Assert.Equal(reason, body!.Reason);
+
+        // 400 แล้วต้องไม่มีอะไรเปลี่ยน — ไม่ใช่เขียนไปครึ่งหนึ่งแล้วค่อยปฏิเสธ
+        var monsters = await GetMonstersAsync(_dmToken, _campaignId);
+        var unchanged = monsters.Single(m => m.Id == _visibleMonsterId);
+        Assert.Equal((VisibleMonsterName, 15, 10, 30, 5),
+            (unchanged.Name, unchanged.ArmorClass, unchanged.HitPoints, unchanged.SpeedFeet, unchanged.ReachFeet));
+    }
+
+    [Fact]
+    public async Task Speed_zero_is_allowed_because_some_creatures_cannot_move()
+    {
+        var response = await PatchMonsterAsync(_dmToken, _visibleMonsterId, new { speedFeet = 0 });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<MonsterItem>(JsonOptions);
+        Assert.Equal(0, body!.SpeedFeet);
+    }
+
+    [Fact]
+    public async Task Name_is_trimmed_before_saving()
+    {
+        var response = await PatchMonsterAsync(_dmToken, _visibleMonsterId, new { name = "  ผีเฝ้าสมบัติ  " });
+        var body = await response.Content.ReadFromJsonAsync<MonsterItem>(JsonOptions);
+        Assert.Equal("ผีเฝ้าสมบัติ", body!.Name);
+    }
+
+    [Fact]
+    public async Task A_player_cannot_adjust_monster_stats()
+    {
+        var response = await PatchMonsterAsync(_playerToken, _visibleMonsterId, new { hitPoints = 1 });
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_dm_of_another_campaign_cannot_adjust_this_campaigns_monster()
+    {
+        var response = await PatchMonsterAsync(_outsiderToken, _visibleMonsterId, new { hitPoints = 1 });
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Adjusting_a_monster_of_another_campaign_by_id_is_404_not_a_silent_edit()
+    {
+        // id มีจริงแต่เป็นของแคมเปญอื่น — ต้องไม่ถูกแก้ผ่าน route ของแคมเปญนี้
+        var response = await PatchMonsterAsync(_dmToken, _otherCampaignMonsterId, new { hitPoints = 1 });
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+
+        await using var conn = new NpgsqlConnection(OwnerConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT hit_points FROM monster_stat_blocks WHERE id = @id", conn);
+        cmd.Parameters.AddWithValue("id", _otherCampaignMonsterId);
+        Assert.Equal(5, (int)(await cmd.ExecuteScalarAsync())!);
+    }
+
+    [Fact]
+    public async Task Adjusting_requires_login()
+    {
+        var response = await _factory.CreateClient().PatchAsJsonAsync(
+            $"/campaigns/{_campaignId}/monsters/{_visibleMonsterId}", new { hitPoints = 1 });
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Unknown_monster_id_is_404()
+    {
+        var response = await PatchMonsterAsync(_dmToken, Guid.NewGuid(), new { hitPoints = 1 });
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    /// <summary>
+    /// ชั้นสุดท้ายที่ไม่พึ่ง validate ของ endpoint เลย — ถ้ามีใครเพิ่มเส้นทางเขียนใหม่แล้วลืม validate
+    /// ฐานต้องยังปฏิเสธเอง (CHECK `ck_monster_stat_block_numbers`)
+    /// </summary>
+    [Theory]
+    [InlineData("armor_class = 0")]
+    [InlineData("hit_points = 0")]
+    [InlineData("speed_feet = -1")]
+    [InlineData("reach_feet = 4")]
+    public async Task The_database_itself_rejects_impossible_numbers(string assignment)
+    {
+        await using var conn = new NpgsqlConnection(OwnerConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            $"UPDATE monster_stat_blocks SET {assignment} WHERE id = @id", conn);
+        cmd.Parameters.AddWithValue("id", _visibleMonsterId);
+
+        var ex = await Assert.ThrowsAsync<PostgresException>(() => cmd.ExecuteNonQueryAsync());
+        Assert.Equal("23514", ex.SqlState); // check_violation
+    }
+
     // ═══ ชื่อของ token ใน GET .../scene ══════════════════════════════════════
 
     [Fact]
@@ -252,6 +416,11 @@ public class MonsterLibraryEndpointsTests : IAsyncLifetime
     private record SceneResponse(Guid Id, List<TokenResponse> Tokens);
 
     private record AuthResponse(string Token, Guid UserId);
+
+    private record ErrorBody(string Reason);
+
+    private async Task<HttpResponseMessage> PatchMonsterAsync(string token, Guid monsterId, object body) =>
+        await AuthedClient(token).PatchAsJsonAsync($"/campaigns/{_campaignId}/monsters/{monsterId}", body);
 
     private async Task<List<MonsterItem>> GetMonstersAsync(string token, Guid campaignId)
     {

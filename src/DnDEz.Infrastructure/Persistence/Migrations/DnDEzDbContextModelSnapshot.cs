@@ -1261,6 +1261,8 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
 
                     b.ToTable("monster_stat_blocks", null, t =>
                         {
+                            t.HasCheckConstraint("ck_monster_stat_block_numbers", "armor_class > 0 AND hit_points > 0 AND speed_feet >= 0 AND reach_feet >= 5");
+
                             t.HasCheckConstraint("ck_review_status_monsterstatblock", "review_status IN ('Pending', 'Approved', 'Rejected')");
                         });
                 });
