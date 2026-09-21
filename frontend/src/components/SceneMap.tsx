@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { healthRatio, isPointRevealed, sceneBounds, tokenInitial } from "@/lib/scene-view";
 import { tokenLabel } from "@/lib/srd-view";
 import type { FogArea, SceneToken } from "@/lib/scene-types";
@@ -11,9 +11,32 @@ import {
   type SceneTerrain,
   type TerrainPaintTool,
 } from "@/lib/terrain-paint";
+import {
+  DEFAULT_CAMERA,
+  DRAG_PAN_THRESHOLD_PX,
+  MAX_ZOOM,
+  MIN_ZOOM,
+  type MapCamera,
+  midpoint,
+  panBy,
+  pinchDistance,
+  visibleRect,
+  wheelZoomFactor,
+  zoomAt,
+} from "@/lib/map-camera";
+import { gridLinePositions, isGridTooDense } from "@/lib/map-grid";
 
 /** หนึ่งช่องบนกริดกินกี่พิกเซลตอนวาด — ใช้เมื่อฉากยังไม่ได้ตั้งกริดเอง */
 const DEFAULT_PIXELS_PER_SQUARE = 50;
+
+/** ลายนิ้วมือของกรอบฉาก — ใช้ดูว่าฉากเปลี่ยนไปจริงไหม (เทียบ object ตรง ๆ ไม่ได้ ตัวตนเปลี่ยนทุก render) */
+const viewKeyOf = (v: { minX: number; minY: number; width: number; height: number }) =>
+  `${v.minX},${v.minY},${v.width},${v.height}`;
+
+/** ปุ่มซูมมุมขวาบนของแผนที่ — ทึบพอให้อ่านออกบนแผนที่ทุกสี */
+const zoomButtonClass =
+  "w-7 h-7 flex items-center justify-center rounded border border-white/25 bg-black/60 text-white " +
+  "hover:bg-black/80 disabled:opacity-30 disabled:hover:bg-black/60";
 
 /** สีของเส้นที่กำลังลาก (ตัวอย่างก่อนปล่อยเมาส์) ตามเครื่องมือ */
 const PAINT_PREVIEW: Record<TerrainPaintTool, string> = {
@@ -59,6 +82,9 @@ export function SceneMap({
   scale = "normal",
   emptyHint,
   pixelsPerSquare = DEFAULT_PIXELS_PER_SQUARE,
+  gridOffsetX = 0,
+  gridOffsetY = 0,
+  showGrid: showGridDefault = true,
   reachable,
   draggableTokenIds,
   onTokenDrop,
@@ -79,6 +105,17 @@ export function SceneMap({
   emptyHint?: string;
   /** ขนาดหนึ่งช่องเป็นพิกเซล — มาจาก `scenes.grid` ที่ DM ตั้งไว้ */
   pixelsPerSquare?: number;
+  /**
+   * จุดเริ่มของกริดบนรูป — มาจาก `scenes.grid.offsetX/offsetY` ที่ DM ตั้งไว้
+   *
+   * **เพิ่งต่อเข้าการวาดจริงตอนทำเส้นกริด (2026-09-22)** — ก่อนหน้านี้ `parseSceneGrid` แกะค่ามาแล้วทิ้งไว้เฉย ๆ
+   * (เขียนกำกับไว้ใน `scene-grid.ts` ว่ายังไม่ได้ต่อ) ซึ่งแปลว่าช่อง "เลื่อน x/y" ในหน้าจัดกริดกดแล้วไม่เกิดอะไรขึ้น
+   * · พอกริดมองเห็นได้แล้ว ค่านี้จำเป็นทันที: แผนที่ที่ตารางบนรูปไม่ได้เริ่มที่มุมซ้ายบนพอดีจะเห็นเส้นเหลื่อมชัดเจน
+   */
+  gridOffsetX?: number;
+  gridOffsetY?: number;
+  /** วาดเส้นกริดไหม — ปิดได้เมื่อรูปแผนที่มีตารางพิมพ์มาอยู่แล้ว (ซ้อนกันสองชั้นอ่านยากกว่าเดิม) */
+  showGrid?: boolean;
   /** ช่องที่เดินไปได้จริง (server คำนวณตามกฎ) — ไฮไลต์ตอนลาก */
   reachable?: ReachableCell[];
   /**
@@ -107,6 +144,21 @@ export function SceneMap({
   const [measured, setMeasured] = useState<{ url: string; w: number; h: number } | null>(null);
   const [dragCell, setDragCell] = useState<{ x: number; y: number } | null>(null);
   const [dragTokenId, setDragTokenId] = useState<string | null>(null);
+  const [camera, setCamera] = useState<MapCamera>(DEFAULT_CAMERA);
+  /** prop `showGrid` เป็น **ค่าตั้งต้น** ส่วนปุ่มสลับเป็นของคนดูคนนั้น (จอกลางไม่มีปุ่มจึงคงค่าตั้งต้นตลอด) */
+  const [gridVisible, setGridVisible] = useState(showGridDefault);
+  /** นิ้ว/เมาส์ที่กดค้างอยู่บนแผนที่ — เก็บเพื่อรู้ว่ามีสองนิ้ว (pinch) ไหม และคำนวณระยะระหว่างนิ้ว */
+  const pointers = useRef(new Map<number, { x: number; y: number }>());
+  /** ระยะสองนิ้วครั้งก่อน — ใช้เทียบหาอัตราซูมของ pinch */
+  const lastPinch = useRef<number | null>(null);
+  /** จุดเริ่มลากเพื่อเลื่อนแผนที่ (null = ไม่ได้ลากเลื่อนอยู่) · `moved` แยกการลากออกจากการคลิก */
+  const panStart = useRef<{ clientX: number; clientY: number; moved: boolean } | null>(null);
+  /**
+   * token ที่เพิ่งถูกกด — ต้องเป็น ref ไม่ใช่ state เพราะ `pointerdown` ของ token bubble ขึ้นไปถึง svg
+   * **ในจังหวะเดียวกัน** ซึ่งตอนนั้น state ยังเป็นค่าเก่า · ถ้าอ่านจาก state ฝั่ง svg จะเข้าใจว่า "กดที่ว่าง"
+   * แล้วเริ่มลากเลื่อนแผนที่พร้อมกับลาก token
+   */
+  const dragTokenRef = useRef<string | null>(null);
   const [stroke, setStroke] = useState<Cell[] | null>(null);
   // ref คือแหล่งจริงของเส้นที่กำลังลาก (state มีไว้วาดตัวอย่างเท่านั้น) — pointerup กับ pointerleave
   // ยิงติดกันได้หลังปล่อย pointer capture ถ้าอ่านจาก state (ยังเป็นค่าเก่าใน closure) เส้นเดียวจะถูกส่งซ้ำ
@@ -131,28 +183,51 @@ export function SceneMap({
     };
   }, [imageUrl]);
 
-  const imageSize =
-    measured && imageUrl && measured.url === imageUrl
-      ? { w: measured.w, h: measured.h }
-      : null;
+  // memo ด้วยเหตุผลเดียวกับ `view` ด้านล่าง — ตัวตนต้องคงที่เมื่อค่าไม่เปลี่ยน ไม่งั้น memo ของ `view`
+  // ที่พึ่งค่านี้ก็พังตามไปด้วย · เทียบ `measured.url` กับ `imageUrl` เพื่อไม่ใช้ขนาดของรูปเก่าตอนสลับแผนที่
+  const imageSize = useMemo(
+    () =>
+      measured && imageUrl && measured.url === imageUrl
+        ? { w: measured.w, h: measured.h }
+        : null,
+    [measured, imageUrl],
+  );
 
   const pps = pixelsPerSquare > 0 ? pixelsPerSquare : DEFAULT_PIXELS_PER_SQUARE;
-  /** ช่อง → พิกเซลของ "กึ่งกลางช่อง" (token ยืนกลางช่อง ไม่ใช่มุมช่อง) */
+  /** ช่อง → พิกเซลของ "กึ่งกลางช่อง" (token ยืนกลางช่อง ไม่ใช่มุมช่อง) — คิด offset ของกริดด้วย */
   const cellToPx = (cell: number) => cell * pps + pps / 2;
+  const cellToPxX = (cell: number) => cellToPx(cell) + gridOffsetX;
+  const cellToPxY = (cell: number) => cellToPx(cell) + gridOffsetY;
   /** มุมซ้ายบนของช่อง — ใช้วาดสี่เหลี่ยมเต็มช่อง (พื้น/ขอบเขตเดิน) ได้จาก cellToPx ไม่คิดสูตรใหม่ */
-  const cellCornerPx = (cell: number) => cellToPx(cell) - pps / 2;
+  const cellCornerPxX = (cell: number) => cellToPxX(cell) - pps / 2;
+  const cellCornerPxY = (cell: number) => cellToPxY(cell) - pps / 2;
 
   // ไม่มีรูป → ใช้กรอบจากเนื้อหา แล้วขยายเป็นพิกเซลด้วยสเกลเดียวกัน
   const contentCells = sceneBounds(tokens, revealedAreas);
-  const view = imageSize
-    ? { minX: 0, minY: 0, width: imageSize.w, height: imageSize.h }
-    : {
-        minX: contentCells.minX * pps,
-        minY: contentCells.minY * pps,
-        width: Math.max(contentCells.width * pps, pps * 4),
-        height: Math.max(contentCells.height * pps, pps * 4),
-      };
+  // memo เพื่อให้ **ตัวตนของ object คงที่เมื่อค่าไม่เปลี่ยน** — ไม่ใช่เรื่องความเร็ว แต่เพราะ `view`
+  // เป็น dependency ของ effect ที่ผูก listener ล้อเมาส์ ถ้า object ใหม่ทุก render จะถอด/ใส่ listener
+  // ใหม่ทุกครั้งที่อะไรก็ตามในหน้าขยับ
+  const view = useMemo(
+    () =>
+      imageSize
+        ? { minX: 0, minY: 0, width: imageSize.w, height: imageSize.h }
+        : {
+            minX: contentCells.minX * pps,
+            minY: contentCells.minY * pps,
+            width: Math.max(contentCells.width * pps, pps * 4),
+            height: Math.max(contentCells.height * pps, pps * 4),
+          },
+    [
+      imageSize,
+      contentCells.minX,
+      contentCells.minY,
+      contentCells.width,
+      contentCells.height,
+      pps,
+    ],
+  );
 
+  const showGrid = gridVisible;
   const isTable = scale === "table";
   const tokenRadius = pps * (isTable ? 0.42 : 0.38);
   const strokeWidth = Math.max(view.width, view.height) * 0.004;
@@ -164,13 +239,26 @@ export function SceneMap({
   const reachableKeys = new Set((reachable ?? []).map((c) => `${c.x},${c.y}`));
   const occupiedKeys = new Set(tokens.map((t) => `${Math.round(t.x)},${Math.round(t.y)}`));
 
+  /** พิกัดบนจอ → พิกัดในภาพ (หน่วยเดียวกับ `viewBox`) — จุดแปลงหน่วยจุดเดียว ทุกอย่างที่เหลือใช้ต่อจากนี้ */
+  const pointToImage = (clientX: number, clientY: number) => {
+    const ctm = svgRef.current?.getScreenCTM();
+    if (!ctm) return null;
+    return new DOMPoint(clientX, clientY).matrixTransform(ctm.inverse());
+  };
+
   /** พิกัดบนจอ → ช่องบนกริด (ผ่าน CTM ของ SVG เพื่อให้ถูกต้องทุกขนาดจอ/ทุกการซูม) */
   const pointToCell = (clientX: number, clientY: number) => {
-    const svg = svgRef.current;
-    const ctm = svg?.getScreenCTM();
-    if (!svg || !ctm) return null;
-    const p = new DOMPoint(clientX, clientY).matrixTransform(ctm.inverse());
-    return { x: Math.floor(p.x / pps), y: Math.floor(p.y / pps) };
+    const p = pointToImage(clientX, clientY);
+    return p
+      ? { x: Math.floor((p.x - gridOffsetX) / pps), y: Math.floor((p.y - gridOffsetY) / pps) }
+      : null;
+  };
+
+  /** ระยะบนจอ → ระยะในภาพ — ใช้ตอนลากเลื่อนแผนที่ (ลากไป 10 พิกเซลบนจอ ภาพต้องเลื่อนตามเท่าที่ตาเห็น
+   *  ไม่ว่าจะซูมอยู่ระดับไหน) · `a` ของ CTM คือสเกลแกน x ซึ่งเท่ากับแกน y เสมอในที่นี้ (ไม่มีการบิด) */
+  const screenToImageScale = () => {
+    const ctm = svgRef.current?.getScreenCTM();
+    return ctm && ctm.a !== 0 ? 1 / ctm.a : null;
   };
 
   /** ส่งเส้นที่ลากครั้งเดียว — อ่าน/ล้าง ref ก่อน จึงเรียกซ้ำได้โดยไม่ส่งซ้ำ */
@@ -186,26 +274,120 @@ export function SceneMap({
   const dropIsLegal =
     dragCell !== null && (!constrainToReachable || reachableKeys.has(`${dragCell.x},${dragCell.y}`));
 
+  const rect = visibleRect(camera, view);
+  const zoomedIn = camera.scale > MIN_ZOOM;
+
+  /** ซูมโดยตรึงจุดบนจอที่ระบุ — ใช้ร่วมกันทั้งล้อเมาส์และ pinch */
+  const zoomAtClient = (factor: number, clientX: number, clientY: number) => {
+    const anchor = pointToImage(clientX, clientY);
+    if (!anchor) return;
+    setCamera((current) => zoomAt(current, view, factor, anchor));
+  };
+
+  /** ซูมจากปุ่ม — ไม่มีเคอร์เซอร์ให้ตรึง จึงตรึงกึ่งกลางของกรอบที่เห็นอยู่ */
+  const zoomFromButton = (factor: number) => {
+    setCamera((current) => {
+      const r = visibleRect(current, view);
+      return zoomAt(current, view, factor, { x: r.x + r.width / 2, y: r.y + r.height / 2 });
+    });
+  };
+
+  // ฉากเปลี่ยน (อัปโหลดแผนที่ใหม่/สลับ session) = กรอบอ้างอิงเปลี่ยนทั้งชุด → กล้องเดิมใช้ต่อไม่ได้
+  // (ค่า x/y ที่เคยอยู่ในกรอบเก่าอาจหลุดนอกกรอบใหม่) รีเซ็ตกลับไปเห็นทั้งฉากเสมอ
+  //
+  // ปรับ state **ระหว่าง render** ไม่ใช่ใน effect — เป็นแพทเทิร์นที่ React แนะนำสำหรับ "รีเซ็ต state
+  // เมื่อ prop เปลี่ยน" (ทำใน effect จะ render ด้วยกล้องเก่าหนึ่งเฟรมก่อน แล้วค่อยกระตุกกลับ และชน
+  // กฎ `react-hooks/set-state-in-effect` ของ React 19.2 ตรง ๆ)
+  const [cameraViewKey, setCameraViewKey] = useState(() => viewKeyOf(view));
+  const viewKey = viewKeyOf(view);
+  if (cameraViewKey !== viewKey) {
+    setCameraViewKey(viewKey);
+    setCamera(DEFAULT_CAMERA);
+  }
+
+  // ล้อเมาส์ต้องผูกแบบ native — React ผูก `wheel` เป็น passive listener ที่ root ทำให้ preventDefault
+  // ไม่มีผล แล้วหน้าเว็บจะเลื่อนตามไปด้วยทุกครั้งที่ซูม
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const ctm = svg.getScreenCTM();
+      if (!ctm) return;
+      const anchor = new DOMPoint(e.clientX, e.clientY).matrixTransform(ctm.inverse());
+      setCamera((current) => zoomAt(current, view, wheelZoomFactor(e.deltaY), anchor));
+    };
+
+    svg.addEventListener("wheel", onWheel, { passive: false });
+    return () => svg.removeEventListener("wheel", onWheel);
+  }, [view]);
+
   return (
     <div className="relative w-full overflow-hidden rounded border border-black/10 dark:border-white/10 bg-neutral-950">
       <svg
         ref={svgRef}
-        viewBox={`${view.minX} ${view.minY} ${view.width} ${view.height}`}
+        viewBox={`${rect.x} ${rect.y} ${rect.width} ${rect.height}`}
         className={isTable ? "w-full aspect-[16/10]" : "w-full aspect-[4/3]"}
-        style={paintMode ? { cursor: "crosshair", touchAction: "none" } : undefined}
+        // `touchAction: none` ตลอดเวลา ไม่ใช่เฉพาะโหมดวาด — ถ้าไม่ปิด เบราว์เซอร์จะกินการลากนิ้วไปเลื่อนหน้าเว็บ
+        // ทำให้ทั้ง pinch ซูม ลากเลื่อนแผนที่ และลาก token บนจอสัมผัสใช้ไม่ได้เลย
+        style={{
+          touchAction: "none",
+          cursor: paintMode ? "crosshair" : zoomedIn ? "grab" : undefined,
+        }}
         role="img"
         aria-label="แผนที่ฉาก"
         onPointerDown={(e) => {
-          if (!paintMode) return;
-          const cell = pointToCell(e.clientX, e.clientY);
-          if (!cell) return;
-          // จับ pointer ไว้ — ลากออกนอกแผนที่ชั่วคราวแล้วกลับเข้ามา เส้นยังต่อเนื่อง
-          e.currentTarget.setPointerCapture?.(e.pointerId);
-          lastPaintCell.current = cell;
-          strokeRef.current = [cell];
-          setStroke([cell]);
+          pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+          if (paintMode) {
+            const cell = pointToCell(e.clientX, e.clientY);
+            if (!cell) return;
+            // จับ pointer ไว้ — ลากออกนอกแผนที่ชั่วคราวแล้วกลับเข้ามา เส้นยังต่อเนื่อง
+            e.currentTarget.setPointerCapture?.(e.pointerId);
+            lastPaintCell.current = cell;
+            strokeRef.current = [cell];
+            setStroke([cell]);
+            return;
+          }
+
+          // นิ้วที่สอง = เริ่ม pinch → ยกเลิกทุกอย่างที่นิ้วแรกกำลังทำอยู่ (ลาก token / ลากเลื่อน)
+          // ไม่งั้นพอปล่อยนิ้ว จะกลายเป็นการวาง token ที่ไหนก็ไม่รู้ตามจุดที่นิ้วอยู่ตอนนั้น
+          if (pointers.current.size === 2) {
+            const [a, b] = [...pointers.current.values()];
+            lastPinch.current = pinchDistance(a, b);
+            panStart.current = null;
+            dragTokenRef.current = null;
+            setDragCell(null);
+            setDragTokenId(null);
+            return;
+          }
+
+          // กดบนที่ว่าง (ไม่ได้จับ token) = เตรียมลากเลื่อนแผนที่ · ยังไม่รู้ว่าเป็นคลิกหรือลาก
+          // จนกว่าจะขยับเกินเกณฑ์ — ตัดสินตอน pointerup
+          if (dragTokenRef.current === null) {
+            e.currentTarget.setPointerCapture?.(e.pointerId);
+            panStart.current = { clientX: e.clientX, clientY: e.clientY, moved: false };
+          }
         }}
         onPointerMove={(e) => {
+          if (pointers.current.has(e.pointerId)) {
+            pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+          }
+
+          // pinch มาก่อนเสมอ — สองนิ้วบนจอไม่ใช่การวาดหรือการลากไม่ว่าจะอยู่โหมดไหน
+          if (pointers.current.size === 2) {
+            const [a, b] = [...pointers.current.values()];
+            const distance = pinchDistance(a, b);
+            const previous = lastPinch.current;
+            lastPinch.current = distance;
+            if (previous && previous > 0 && distance > 0) {
+              const center = midpoint(a, b);
+              zoomAtClient(distance / previous, center.x, center.y);
+            }
+            return;
+          }
+
           if (paintMode) {
             const last = lastPaintCell.current;
             if (strokeRef.current === null || last === null) return;
@@ -216,31 +398,63 @@ export function SceneMap({
             setStroke(strokeRef.current);
             return;
           }
-          if (dragCell === null) return;
-          const cell = pointToCell(e.clientX, e.clientY);
-          if (cell) setDragCell(cell);
+
+          if (dragCell !== null) {
+            const cell = pointToCell(e.clientX, e.clientY);
+            if (cell) setDragCell(cell);
+            return;
+          }
+
+          // ลากเลื่อนแผนที่ — เลื่อนเท่าที่ตาเห็น (แปลงระยะบนจอเป็นระยะในภาพตามสเกลปัจจุบัน)
+          const start = panStart.current;
+          if (!start) return;
+          const dxScreen = e.clientX - start.clientX;
+          const dyScreen = e.clientY - start.clientY;
+          if (!start.moved && Math.hypot(dxScreen, dyScreen) < DRAG_PAN_THRESHOLD_PX) return;
+          const toImage = screenToImageScale();
+          if (toImage === null) return;
+          start.moved = true;
+          start.clientX = e.clientX;
+          start.clientY = e.clientY;
+          setCamera((current) => panBy(current, view, -dxScreen * toImage, -dyScreen * toImage));
         }}
         onPointerUp={(e) => {
+          pointers.current.delete(e.pointerId);
+          if (pointers.current.size < 2) lastPinch.current = null;
+
           if (paintMode) {
             finishStroke();
             return;
           }
+
+          const panned = panStart.current?.moved ?? false;
+          panStart.current = null;
+
           if (dragCell !== null && dragTokenId !== null) {
             if (dropIsLegal) onTokenDrop?.(dragTokenId, dragCell);
-          } else if (onEmptyCellClick) {
+          } else if (onEmptyCellClick && !panned) {
             // ไม่ได้ลากอะไรอยู่ = คลิกเปล่าบนแผนที่ → ใช้วาง token ใหม่ (เฉพาะช่องที่ยังว่าง
-            // เพื่อไม่ให้วางทับตัวที่มีอยู่แล้วโดยไม่ตั้งใจ)
+            // เพื่อไม่ให้วางทับตัวที่มีอยู่แล้วโดยไม่ตั้งใจ) · ลากเลื่อนแผนที่แล้วต้องไม่นับเป็นคลิก
             const cell = pointToCell(e.clientX, e.clientY);
             if (cell && !occupiedKeys.has(`${cell.x},${cell.y}`)) onEmptyCellClick(cell);
           }
+          dragTokenRef.current = null;
           setDragCell(null);
           setDragTokenId(null);
+        }}
+        onPointerCancel={(e) => {
+          pointers.current.delete(e.pointerId);
+          lastPinch.current = null;
+          panStart.current = null;
+          dragTokenRef.current = null;
         }}
         onPointerLeave={() => {
           if (paintMode) {
             finishStroke();
             return;
           }
+          panStart.current = null;
+          dragTokenRef.current = null;
           setDragCell(null);
           setDragTokenId(null);
         }}
@@ -252,8 +466,8 @@ export function SceneMap({
             {revealedAreas.map((a) => (
               <circle
                 key={a.id}
-                cx={cellToPx(a.x)}
-                cy={cellToPx(a.y)}
+                cx={cellToPxX(a.x)}
+                cy={cellToPxY(a.y)}
                 r={a.radius * pps}
                 fill="black"
               />
@@ -283,14 +497,42 @@ export function SceneMap({
           />
         )}
 
+        {/* เส้นกริด — อยู่เหนือรูปแต่ใต้ทุกอย่างที่เหลือ: มันคือ "กระดาษตาราง" ที่ของอื่นวางทับ ไม่ใช่ของที่ต้องเด่น
+            · `vectorEffect="non-scaling-stroke"` ทำให้เส้นบางเท่าเดิมบนจอทุกระดับซูม (ถ้าไม่ใส่ ซูมเข้า 8 เท่า
+            แล้วเส้นจะหนาเป็นแถบทึบจนบังแผนที่) · ไม่รับ pointer event เด็ดขาด ไม่งั้นบังการคลิกวาง token */}
+        {showGrid && (
+          <g stroke="#ffffff" strokeOpacity={0.18} strokeWidth={1} style={{ pointerEvents: "none" }}>
+            {gridLinePositions(view.minX, view.minX + view.width, pps, gridOffsetX).map((x) => (
+              <line
+                key={`gx-${x}`}
+                x1={x}
+                y1={view.minY}
+                x2={x}
+                y2={view.minY + view.height}
+                vectorEffect="non-scaling-stroke"
+              />
+            ))}
+            {gridLinePositions(view.minY, view.minY + view.height, pps, gridOffsetY).map((y) => (
+              <line
+                key={`gy-${y}`}
+                x1={view.minX}
+                y1={y}
+                x2={view.minX + view.width}
+                y2={y}
+                vectorEffect="non-scaling-stroke"
+              />
+            ))}
+          </g>
+        )}
+
         {/* พื้นอยู่ใต้หมอก — ของ DM (หมอกโปร่ง) ที่อยู่ในพื้นที่ปิดจะดูจางลงเหมือน token ในหมอก */}
         {terrain && (
           <g>
             {terrain.difficult.map((c) => (
               <rect
                 key={`difficult-${c.x},${c.y}`}
-                x={cellCornerPx(c.x)}
-                y={cellCornerPx(c.y)}
+                x={cellCornerPxX(c.x)}
+                y={cellCornerPxY(c.y)}
                 width={pps}
                 height={pps}
                 fill={`url(#${difficultPatternId})`}
@@ -304,8 +546,8 @@ export function SceneMap({
             {terrain.blocked.map((c) => (
               <rect
                 key={`blocked-${c.x},${c.y}`}
-                x={cellCornerPx(c.x)}
-                y={cellCornerPx(c.y)}
+                x={cellCornerPxX(c.x)}
+                y={cellCornerPxY(c.y)}
                 width={pps}
                 height={pps}
                 fill="#57534e"
@@ -335,8 +577,8 @@ export function SceneMap({
           (reachable ?? []).map((c) => (
             <rect
               key={`reach-${c.x},${c.y}`}
-              x={cellCornerPx(c.x)}
-              y={cellCornerPx(c.y)}
+              x={cellCornerPxX(c.x)}
+              y={cellCornerPxY(c.y)}
               width={pps}
               height={pps}
               fill="#22c55e"
@@ -350,8 +592,8 @@ export function SceneMap({
         {revealedAreas.map((a) => (
           <circle
             key={`edge-${a.id}`}
-            cx={cellToPx(a.x)}
-            cy={cellToPx(a.y)}
+            cx={cellToPxX(a.x)}
+            cy={cellToPxY(a.y)}
             r={a.radius * pps}
             fill="none"
             stroke="#22c55e"
@@ -367,8 +609,8 @@ export function SceneMap({
             fogStyle === "translucent" && !isPointRevealed(t.x, t.y, revealedAreas);
           const isMonster = t.entityType === "Monster";
           const isDraggable = canDrag && draggableSet.has(t.id);
-          const cx = cellToPx(t.x);
-          const cy = cellToPx(t.y);
+          const cx = cellToPxX(t.x);
+          const cy = cellToPxY(t.y);
 
           return (
             <g key={t.id}>
@@ -389,6 +631,7 @@ export function SceneMap({
                   isDraggable
                     ? (e) => {
                         e.currentTarget.releasePointerCapture?.(e.pointerId);
+                        dragTokenRef.current = t.id;
                         setDragCell({ x: Math.round(t.x), y: Math.round(t.y) });
                         setDragTokenId(t.id);
                       }
@@ -438,8 +681,8 @@ export function SceneMap({
           stroke.map((c) => (
             <rect
               key={`stroke-${c.x},${c.y}`}
-              x={cellCornerPx(c.x)}
-              y={cellCornerPx(c.y)}
+              x={cellCornerPxX(c.x)}
+              y={cellCornerPxY(c.y)}
               width={pps}
               height={pps}
               fill={PAINT_PREVIEW[paintTool]}
@@ -453,8 +696,8 @@ export function SceneMap({
         {/* ตัวอย่างตำแหน่งที่จะไปตก — เขียวคือวางได้ แดงคือเกินระยะ (บอกก่อนปล่อยมือ) */}
         {dragCell !== null && (
           <circle
-            cx={cellToPx(dragCell.x)}
-            cy={cellToPx(dragCell.y)}
+            cx={cellToPxX(dragCell.x)}
+            cy={cellToPxY(dragCell.y)}
             r={tokenRadius}
             fill={dropIsLegal ? "#22c55e" : "#ef4444"}
             fillOpacity={0.35}
@@ -465,10 +708,67 @@ export function SceneMap({
         )}
       </svg>
 
+      {/* กริดถี่เกินจนไม่วาด — ต้องบอกว่าทำไมหาย ไม่งั้น DM ที่พิมพ์ "พิกเซลต่อช่อง" ผิดจะเห็นกริดหายเฉย ๆ
+          แล้วไม่รู้ว่าต้องไปแก้ตรงไหน */}
+      {showGrid && isGridTooDense(view.width, view.height, pps) && (
+        <p className="absolute bottom-2 left-2 rounded bg-black/70 px-2 py-1 text-[11px] text-white">
+          ช่องเล็กเกินจนวาดตารางไม่ไหว — ตรวจค่า &quot;พิกเซล/ช่อง&quot; ในหัวข้อจัดกริด
+        </p>
+      )}
+
       {showEmptyHint && emptyHint && (
         <p className="absolute inset-0 flex items-center justify-center px-6 text-center text-sm opacity-60">
           {emptyHint}
         </p>
+      )}
+
+      {/* ปุ่มซูม — ล้อเมาส์กับ pinch เป็นทางหลัก แต่ต้องมีปุ่มด้วยเพราะ (ก) ไม่มีอะไรบอกผู้ใช้ว่าซูมได้
+          (ข) ทัชแพดบางรุ่น/เมาส์ไม่มีล้อ (ค) คีย์บอร์ดล้วนเข้าถึงได้ · จอกลาง (`table`) ไม่มีปุ่ม
+          ตาม §13.1 ที่ระบุว่าช่อง Input ของจอกลางคือ "ไม่มีเลย" */}
+      {!isTable && (
+        <div className="absolute right-2 top-2 flex flex-col gap-1">
+          <button
+            type="button"
+            onClick={() => zoomFromButton(1.4)}
+            disabled={camera.scale >= MAX_ZOOM}
+            aria-label="ซูมเข้า"
+            className={zoomButtonClass}
+          >
+            +
+          </button>
+          <button
+            type="button"
+            onClick={() => zoomFromButton(1 / 1.4)}
+            disabled={camera.scale <= MIN_ZOOM}
+            aria-label="ซูมออก"
+            className={zoomButtonClass}
+          >
+            −
+          </button>
+          {/* สลับกริด — แผนที่หลายใบมีตารางพิมพ์มาในรูปอยู่แล้ว ซ้อนอีกชั้นทำให้อ่านยากกว่าเดิม
+              (สถานะอยู่ที่ตัว component เพราะเป็นความชอบของคนดูแต่ละคน ไม่ใช่ค่าของฉากที่ต้องตรงกันทุกจอ) */}
+          <button
+            type="button"
+            onClick={() => setGridVisible((v) => !v)}
+            aria-pressed={showGrid}
+            aria-label={showGrid ? "ซ่อนเส้นตาราง" : "แสดงเส้นตาราง"}
+            title={showGrid ? "ซ่อนเส้นตาราง" : "แสดงเส้นตาราง"}
+            className={`${zoomButtonClass} ${showGrid ? "" : "opacity-50"}`}
+          >
+            #
+          </button>
+          {zoomedIn && (
+            <button
+              type="button"
+              onClick={() => setCamera(DEFAULT_CAMERA)}
+              aria-label="ดูทั้งแผนที่"
+              title={`ซูม ${camera.scale.toFixed(1)}× — กดเพื่อดูทั้งแผนที่`}
+              className={`${zoomButtonClass} text-[10px] tabular-nums`}
+            >
+              {camera.scale.toFixed(1)}×
+            </button>
+          )}
+        </div>
       )}
     </div>
   );

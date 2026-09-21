@@ -57,6 +57,8 @@ export function DmMapTools({
   terrain,
   imageUrl,
   pixelsPerSquare,
+  gridOffsetX,
+  gridOffsetY,
   characters,
   nameOf,
 }: {
@@ -68,6 +70,9 @@ export function DmMapTools({
   terrain: SceneTerrain;
   imageUrl: string | null;
   pixelsPerSquare: number;
+  /** จุดเริ่มของกริดบนรูป — ส่งต่อให้ `SceneMap` ตรง ๆ (ดูเหตุผลใน doc comment ของ prop ฝั่งนั้น) */
+  gridOffsetX: number;
+  gridOffsetY: number;
   characters: CharacterSummary[];
   nameOf: (entityId: string) => string | undefined;
 }) {
@@ -176,6 +181,8 @@ export function DmMapTools({
         fogStyle="translucent"
         emptyHint="ยังไม่มีอะไรบนแผนที่ — เลือกตัวละครด้านล่างแล้วคลิกบนแผนที่เพื่อวาง"
         pixelsPerSquare={pixelsPerSquare}
+        gridOffsetX={gridOffsetX}
+        gridOffsetY={gridOffsetY}
         reachable={reachable.squares}
         draggableTokenIds={draggableTokenIds}
         onTokenDrop={handleTokenDrop}

@@ -199,6 +199,8 @@ export function PlayerView({ campaignId }: { campaignId: string }) {
                       fogStyle="opaque"
                       emptyHint="ยังไม่มีอะไรบนแผนที่"
                       pixelsPerSquare={parseSceneGrid(scene.scene?.grid).pixelsPerSquare}
+                          gridOffsetX={parseSceneGrid(scene.scene?.grid).offsetX}
+                          gridOffsetY={parseSceneGrid(scene.scene?.grid).offsetY}
                       reachable={reachable.squares}
                       draggableTokenIds={ownTokenIds}
                       onTokenDrop={handleTokenDrop}

@@ -126,6 +126,8 @@ export function TableView({ campaignId }: { campaignId: string }) {
           scale="table"
           emptyHint="ยังไม่มีอะไรบนแผนที่"
           pixelsPerSquare={parseSceneGrid(scene?.grid).pixelsPerSquare}
+                          gridOffsetX={parseSceneGrid(scene?.grid).offsetX}
+                          gridOffsetY={parseSceneGrid(scene?.grid).offsetY}
         />
       )}
 

@@ -466,6 +466,8 @@ export function DmConsole({ campaignId }: { campaignId: string }) {
                       terrain={scene.terrain}
                       imageUrl={scene.scene?.imageUrl ?? null}
                       pixelsPerSquare={parseSceneGrid(scene.scene?.grid).pixelsPerSquare}
+                          gridOffsetX={parseSceneGrid(scene.scene?.grid).offsetX}
+                          gridOffsetY={parseSceneGrid(scene.scene?.grid).offsetY}
                       characters={ws.characters}
                       nameOf={nameOf}
                     />
