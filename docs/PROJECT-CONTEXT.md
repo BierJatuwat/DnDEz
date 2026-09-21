@@ -1072,9 +1072,29 @@ source import, image generation, refresh token/HTTPS redirect/CI-CD/staging (เ
   ที่มา/วิธีตรวจ/สิ่งที่ยังไม่ได้นำเข้าอยู่ใน doc comment ของ migration `ImportSrd521` และ `tools/srd-import/README.md`
 - **endpoint**: `GET /srd/monsters[/{key}]` · `GET /srd/corpus[/{category}/{key}]` · `GET /srd/attribution` ·
   `POST /campaigns/{id}/monsters/from-srd` (DM คัดลอกเข้าแคมเปญ → ได้แม่แบบ Approved พร้อม speed/reach จริงสำหรับ OA)
-- **ยังไม่ได้ทำ**: UI (คลังมอนสเตอร์/หน้าเวท/tooltip condition) · แสดงข้อความ attribution ในหน้าจอ (**ข้อบังคับของสัญญาอนุญาต**) ·
-  คลาส/สปีชีส์/ฟีท/อาวุธ/เกราะ/ไอเทมเวทมนตร์ · กฎในบท Rules Glossary ที่ไม่มีป้าย (~110 รายการ แยกหัวข้อยังไม่แม่น) ·
-  เวทเรียกอัญเชิญ (stat block ขึ้นกับระดับช่องเวท) · เชื่อม `actions` ของมอนสเตอร์เข้า action catalog
+- **UI (2026-09-21 รอบเดียวกัน)**: `MonsterLibraryPanel` (DM ค้น → ดู stat block → กดเพิ่มเข้าแคมเปญ) ·
+  `RulesReferencePanel` (สถานะ/เวท/กฎ เปิดให้ทั้ง DM และผู้เล่น **ไม่เรียก AI** ตาม §2) · `SrdAttribution`
+  (ข้อความสัญญาอนุญาตมาจาก server ทุก response ห้าม hardcode ฝั่ง frontend)
+  - **สองชิ้นที่ต้องเพิ่มฝั่ง API ให้โซ่ครบ**: `GET /campaigns/{id}/monsters` (DM-only — ไม่เคยมีเส้นทางดูแม่แบบ
+    ของแคมเปญเลย DM จึงเลือกมอนสเตอร์มาวางไม่ได้) และ `TokenResponse.Name` (มอนสเตอร์ไม่ได้อยู่ในลิสต์ตัวละคร
+    ที่หน้าจอถืออยู่ token จึงขึ้นคำว่า "Monster" แทนชื่อจริง) · ชื่อถูกกรองหลังด่านหมอกแล้วเท่านั้น —
+    ล็อกด้วยเทสต์ adversarial `Player_response_raw_json_contains_no_trace_of_a_monster_hidden_by_fog`
+    (พิสูจน์ว่าจับได้จริงด้วยการทำให้ leak ชั่วคราวแล้วดูเทสต์แดง ก่อน revert)
+  - **แก้เทสต์ flaky 3 ตัวที่หาสาเหตุได้แล้ว** (ไม่ใช่ "แก้เทสต์ให้ผ่าน" — เทสต์เขียนผิดจริงทั้งคู่ และพิสูจน์ว่า
+    เวอร์ชันใหม่ยังจับบั๊กได้จริงด้วยการทำให้ production code พังชั่วคราวแล้วดูเทสต์แดง ก่อน revert):
+    `SceneTokenEndpointsTests` ยืนยันว่า flush แล้ว/ยังไม่ flush ด้วยการค้นตัวเลขลอย ๆ ใน JSON (`DoesNotContain("99", …)`)
+    ซึ่งไปแมตช์เลขกลาง **GUID** ได้ → เปลี่ยนเป็น parse แล้วอ่านพิกัดของ token ตัวนั้นจริง (ฝั่ง `Contains` อันตรายกว่า
+    เพราะผ่านแบบ vacuous ได้) · `CombatResolutionTests.…does_not_broadcast_HpUpdated` สมัคร listener ครั้งเดียว
+    ก่อนลูปทอยใหม่จนกว่าจะพลาด — ทอยได้ 20 ธรรมชาติ (5%) จะ broadcast จริงแล้วค้างให้รอบถัดไปเห็น →
+    ต่อ connection ใหม่ทุกรอบ ให้ listener ที่ถูก assert เห็นการโจมตีครั้งเดียวเท่านั้น ·
+    `ApiKeyCrudTests…on_rotate` เทียบเวลาของ response ครั้งแรก (ค่าในหน่วยความจำ 7 หลัก) กับครั้งที่สอง
+    (อ่านกลับจาก Postgres ซึ่งเก็บได้ 6 หลัก) → เทียบที่ความละเอียดของฐานข้อมูล ซึ่งยังพิสูจน์เจตนาเดิมครบ
+    (ถ้าโค้ดเขียนทับด้วยเวลาใหม่จะต่างระดับมิลลิวินาที ไม่ใช่หลักที่ 7)
+  - **ยุบ builder ของ scene response เหลือทางเดียว** — เดิมมีสองตัว (DM-only กับ GET) ที่ต้องเติมฟิลด์ใหม่ทั้งคู่เอง
+    ถ้าลืมที่ใดที่หนึ่งจะเงียบ (กับดัก §2.4 ที่เกือบเกิดจริงรอบนี้)
+- **ยังไม่ได้ทำ**: คลาส/สปีชีส์/ฟีท/อาวุธ/เกราะ/ไอเทมเวทมนตร์ · กฎในบท Rules Glossary ที่ไม่มีป้าย (~110 รายการ
+  แยกหัวข้อยังไม่แม่น) · เวทเรียกอัญเชิญ (stat block ขึ้นกับระดับช่องเวท) · เชื่อม `actions` ของมอนสเตอร์เข้า
+  action catalog · **มอนสเตอร์ยังไม่มี HP รายตัว** จึงยังโจมตีผ่านระบบไม่ได้ (วาง token/เป็นภัยคุกคาม/เกิด OA ได้แล้ว)
 
 ### 🔜 Sprint G — ทำให้ concept จริง (spatial play) (เสนอ 2026-09-05)
 

@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import { healthRatio, isPointRevealed, sceneBounds, tokenInitial } from "@/lib/scene-view";
+import { tokenLabel } from "@/lib/srd-view";
 import type { FogArea, SceneToken } from "@/lib/scene-types";
 import {
   addStrokeCells,
@@ -360,7 +361,7 @@ export function SceneMap({
         ))}
 
         {tokens.map((t) => {
-          const name = nameOf(t.entityId);
+          const name = tokenLabel(t, nameOf);
           const ratio = healthRatio(t.currentHp, t.maxHp);
           const hiddenFromPlayers =
             fogStyle === "translucent" && !isPointRevealed(t.x, t.y, revealedAreas);
@@ -371,6 +372,9 @@ export function SceneMap({
 
           return (
             <g key={t.id}>
+              {/* บน token เขียนได้แค่ตัวอักษรแรก (วงกลมเล็ก) — ชื่อเต็มอยู่ใน title ให้ชี้ค้างแล้วอ่านได้
+                  มีประโยชน์ขึ้นมากตั้งแต่ token ของมอนสเตอร์มีชื่อจริง ไม่ใช่ "?" เหมือนเดิม */}
+              <title>{name}</title>
               <circle
                 cx={cx}
                 cy={cy}

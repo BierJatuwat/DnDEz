@@ -204,7 +204,7 @@ public static class SceneEndpoints
             var imageUrl = await CreateSignedUrlAsync(s3, storage, mapAsset.StorageKey);
             return Results.Created(
                 $"/campaigns/{campaignId}/sessions/{sessionId}/scene",
-                ToResponse(scene, imageUrl));
+                await ToResponseAsync(db, scene, imageUrl));
         }).RequireAuthorization();
 
         // ── อ่าน scene ที่ active ของ session ─────────────────────────────────
@@ -313,7 +313,7 @@ public static class SceneEndpoints
             var imageUrl = scene.MapAsset is null
                 ? null
                 : await CreateSignedUrlAsync(s3, storage, scene.MapAsset.StorageKey);
-            return Results.Ok(ToResponse(scene, imageUrl));
+            return Results.Ok(await ToResponseAsync(db, scene, imageUrl));
         }).RequireAuthorization();
     }
 
@@ -364,40 +364,13 @@ public static class SceneEndpoints
         return storage.RewriteSignedUrlToHttp ? url.Replace("https://", "http://", StringComparison.Ordinal) : url;
     }
 
-    private static SceneResponse ToResponse(Scene scene, string? imageUrl) =>
-        ToResponse(scene, imageUrl, pendingPositions: null);
-
     /// <summary>
-    /// Sprint G Part 5 — <paramref name="pendingPositions"/> คือตำแหน่งที่ยังไม่ flush ลง Postgres
-    /// (มาจาก Redis) เอาไว้ทับตำแหน่งใน `scene.Tokens` ก่อนส่งออก **เฉพาะตอน GET** — ถ้าไม่ทับตรงนี้
-    /// การ refresh หน้าทันทีหลังลาก token จะเห็นตำแหน่งเก่า (ยังไม่ flush) ซึ่งขัด novice check ของ
-    /// Part นี้ตรง ๆ ("ลาก token แล้วตำแหน่งรอดหลัง refresh หน้า")
+    /// response ของ endpoint DM-only (สร้างฉาก / จัดกริด) — ไม่มีอะไรต้องกรอง แต่ **เรียกตัวเดียวกับทางของ GET**
+    /// โดยตั้งใจ: มี builder สองตัวที่ต้องคอยทำให้ผลตรงกันเองคือกับดักที่ design doc §2.4 เตือนไว้ (ครั้งนี้
+    /// เกือบเกิดจริง — ตอนเพิ่มชื่อ token เข้า response ถ้าแยกสองทางไว้ ฝั่ง DM-only จะไม่มีชื่อเงียบ ๆ)
     /// </summary>
-    private static SceneResponse ToResponse(
-        Scene scene, string? imageUrl, IReadOnlyDictionary<Guid, TokenPosition>? pendingPositions)
-    {
-        var tokens = SceneTokenSerialization.Parse(scene.Tokens);
-        if (pendingPositions is { Count: > 0 })
-        {
-            for (var i = 0; i < tokens.Count; i++)
-            {
-                if (pendingPositions.TryGetValue(tokens[i].Id, out var pos))
-                {
-                    tokens[i] = tokens[i] with { X = pos.X, Y = pos.Y };
-                }
-            }
-        }
-
-        var fogAreas = FogLayerSerialization.ParseRevealedAreas(scene.FogLayer)
-            .Select(a => new FogAreaResponse(a.Id, a.X, a.Y, a.Radius)).ToList();
-
-        // helper นี้ใช้เฉพาะ response ของ endpoint DM-only (สร้างฉาก / จัดกริด) — token ก็ส่งครบไม่กรอง
-        // อยู่แล้ว พื้นจึงส่งครบทั้งฉากเหมือนกัน (isDm: true)
-        return new SceneResponse(
-            scene.Id, scene.SessionId, scene.Name, scene.Grid, scene.MapAssetId, imageUrl, scene.IsActive,
-            tokens.Select(t => new TokenResponse(t.Id, t.EntityType, t.EntityId, t.X, t.Y)).ToList(),
-            fogAreas, ProjectTerrain(scene, [], isDm: true));
-    }
+    private static Task<SceneResponse> ToResponseAsync(DnDEzDbContext db, Scene scene, string? imageUrl) =>
+        BuildProjectedResponseAsync(db, scene, imageUrl, pendingPositions: null, isDm: true);
 
     /// <summary>
     /// Sprint G Part 6 (design doc §13.1, §13.3) — ใช้เฉพาะ GET scene (endpoint เดียวที่ไม่ใช่
@@ -409,17 +382,23 @@ public static class SceneEndpoints
     ///     (ControlledByDm=true) ใช้ <see cref="CharacterStatsVisibility.IsVisibleTo"/> เดิมเป๊ะ ๆ
     ///     (เกณฑ์เดียวกับที่ CharacterEndpoints ใช้ กันสองจุดเพี้ยนจากกัน) token ที่ผูกกับ Monster
     ///     ไม่มี HP ให้แสดง (monster_stat_blocks ไม่มี current-hp tracking เลย เก็บแค่ stat block นิ่ง)
+    ///  3. **ชื่อ** ของ token ที่เหลือรอดจากข้อ 1 — ทั้ง Character และ Monster · ชื่อของสิ่งที่มองเห็นได้
+    ///     ไม่ใช่ความลับ (ผู้เล่นเห็นมันอยู่บนแผนที่ตรงหน้าอยู่แล้ว และ affordance ก็ส่งชื่อเป้าให้ตั้งแต่
+    ///     Sprint H Part 7) ความลับคือ "มีอะไรอยู่ในหมอกบ้าง" ซึ่งข้อ 1 ตัดทิ้งไปก่อนถึงตรงนี้แล้ว
     /// </summary>
     private static async Task<SceneResponse> BuildProjectedResponseAsync(
         DnDEzDbContext db, Scene scene, string? imageUrl,
-        IReadOnlyDictionary<Guid, TokenPosition> pendingPositions, bool isDm)
+        IReadOnlyDictionary<Guid, TokenPosition>? pendingPositions, bool isDm)
     {
         var tokens = SceneTokenSerialization.Parse(scene.Tokens);
-        for (var i = 0; i < tokens.Count; i++)
+        if (pendingPositions is { Count: > 0 })
         {
-            if (pendingPositions.TryGetValue(tokens[i].Id, out var pos))
+            for (var i = 0; i < tokens.Count; i++)
             {
-                tokens[i] = tokens[i] with { X = pos.X, Y = pos.Y };
+                if (pendingPositions.TryGetValue(tokens[i].Id, out var pos))
+                {
+                    tokens[i] = tokens[i] with { X = pos.X, Y = pos.Y };
+                }
             }
         }
 
@@ -436,17 +415,27 @@ public static class SceneEndpoints
             : await db.Characters.Where(c => characterIds.Contains(c.Id)).ToListAsync();
         var charactersById = characters.ToDictionary(c => c.Id);
 
+        // ชื่อมอนสเตอร์ — query แยกเพราะคนละตาราง · ดึงเฉพาะ token ที่ผ่านด่านหมอกมาแล้วเท่านั้น
+        // (ถ้าดึงทั้งฉากมาก่อนแล้วค่อยกรอง ชื่อของตัวที่อยู่ในหมอกจะเคยอยู่ในมือ server ฝั่ง response แล้ว
+        //  — §1.2 บอกให้กรองก่อนคำนวณเสมอ ไม่ใช่คำนวณแล้วค่อยกรอง)
+        var monsterIds = visibleTokens.Where(t => t.EntityType == "Monster").Select(t => t.EntityId).ToList();
+        var monsterNames = monsterIds.Count == 0
+            ? []
+            : await db.MonsterStatBlocks.Where(m => monsterIds.Contains(m.Id))
+                .ToDictionaryAsync(m => m.Id, m => m.Name);
+
         var tokenResponses = visibleTokens.Select(t =>
         {
             if (t.EntityType != "Character" || !charactersById.TryGetValue(t.EntityId, out var character))
             {
-                return new TokenResponse(t.Id, t.EntityType, t.EntityId, t.X, t.Y);
+                monsterNames.TryGetValue(t.EntityId, out var monsterName);
+                return new TokenResponse(t.Id, t.EntityType, t.EntityId, t.X, t.Y, Name: monsterName);
             }
 
             var hpVisible = CharacterStatsVisibility.IsVisibleTo(character.ControlledByDm, character.NpcStatsVisibleToParty, isDm);
             return hpVisible
-                ? new TokenResponse(t.Id, t.EntityType, t.EntityId, t.X, t.Y, character.CurrentHp, character.MaxHp)
-                : new TokenResponse(t.Id, t.EntityType, t.EntityId, t.X, t.Y);
+                ? new TokenResponse(t.Id, t.EntityType, t.EntityId, t.X, t.Y, character.CurrentHp, character.MaxHp, character.Name)
+                : new TokenResponse(t.Id, t.EntityType, t.EntityId, t.X, t.Y, Name: character.Name);
         }).ToList();
 
         return new SceneResponse(

@@ -263,6 +263,31 @@ public class SceneTokenEndpointsTests : IAsyncLifetime
         return (string)(await cmd.ExecuteScalarAsync())!;
     }
 
+    /// <summary>
+    /// ตำแหน่งของ token ตัวหนึ่งที่เก็บอยู่ใน Postgres จริง — null = ไม่มี token นั้นในแถว
+    ///
+    /// **ทำไมต้อง parse ไม่ใช่ค้นสตริง** (แก้ 2026-09-21): เทสต์กลุ่มนี้เคยยืนยันว่า flush แล้ว/ยังไม่ flush
+    /// ด้วย `Assert.DoesNotContain("99", tokensJson)` ซึ่งไปแมตช์เลขที่อยู่กลาง **GUID** ได้
+    /// (เคสจริงที่ทำให้ตก: entityId `…b5f5e85699f5` มี "99" อยู่ข้างใน) — สุ่มพังตาม GUID ที่ได้ในรอบนั้น
+    /// ฝั่ง `Assert.Contains` อันตรายกว่าอีกเพราะผ่านแบบ vacuous ได้ (เลขไปตรงกับ GUID ทั้งที่ยังไม่ได้เขียนจริง)
+    /// · เจตนาของเทสต์คือ "พิกัดของ token ตัวนี้ในฐานเป็นเท่าไร" จึงต้องอ่านค่าจริงจาก JSON ไม่ใช่ค้นตัวเลขลอย ๆ
+    /// </summary>
+    private static async Task<(double X, double Y)?> GetStoredPositionAsync(
+        NpgsqlConnection conn, Guid sceneId, Guid tokenId)
+    {
+        var json = await GetTokensJsonAsync(conn, sceneId);
+        using var doc = JsonDocument.Parse(json);
+        foreach (var element in doc.RootElement.EnumerateArray())
+        {
+            if (element.GetProperty("id").GetGuid() == tokenId)
+            {
+                return (element.GetProperty("x").GetDouble(), element.GetProperty("y").GetDouble());
+            }
+        }
+
+        return null;
+    }
+
     private record AuthResponse(string Token, Guid UserId);
     private record TokenResponse(Guid Id, string EntityType, Guid EntityId, double X, double Y);
     private record TokenErrorResponse(string Reason);
@@ -354,8 +379,8 @@ public class SceneTokenEndpointsTests : IAsyncLifetime
         // (พิสูจน์ทางอ้อมว่ายังไม่ flush: อ่าน Postgres ตรง ๆ ต้องยังเป็นตำแหน่งเก่า)
         await using var conn = new NpgsqlConnection(OwnerConnectionString);
         await conn.OpenAsync();
-        var rawTokensBeforeFlush = await GetTokensJsonAsync(conn, _sceneId);
-        Assert.DoesNotContain("99", rawTokensBeforeFlush);
+        var storedBeforeFlush = await GetStoredPositionAsync(conn, _sceneId, tokenId);
+        Assert.Equal((1.0, 1.0), storedBeforeFlush);
 
         var sceneResponse = await AuthedClient(_dmToken).GetAsync($"/campaigns/{_campaignId}/sessions/{_sessionId}/scene");
         var scene = await sceneResponse.Content.ReadFromJsonAsync<SceneResponse>(JsonOptions);
@@ -378,8 +403,7 @@ public class SceneTokenEndpointsTests : IAsyncLifetime
         // ต้องเขียนลง Postgres ตรง ๆ ทันที (ไม่ใช่แค่ตอบ 200 แล้วข้อมูลหาย)
         await using var conn = new NpgsqlConnection(OwnerConnectionString);
         await conn.OpenAsync();
-        var rawTokens = await GetTokensJsonAsync(conn, _sceneId);
-        Assert.Contains("42", rawTokens);
+        Assert.Equal((42.0, 24.0), await GetStoredPositionAsync(conn, _sceneId, tokenId));
     }
 
     [Fact]
@@ -440,9 +464,9 @@ public class SceneTokenEndpointsTests : IAsyncLifetime
 
         await using var conn = new NpgsqlConnection(OwnerConnectionString);
         await conn.OpenAsync();
-        var rawTokens = await GetTokensJsonAsync(conn, _sceneId);
-        Assert.DoesNotContain(tokenId.ToString(), rawTokens);
-        Assert.DoesNotContain("50", rawTokens); // pending เก่าไม่ควรฟื้นคืนชีพตอน flush
+        // ลบแล้วต้องไม่มี token ตัวนี้เหลือในฐานเลย — ถ้า pending เก่าฟื้นคืนชีพตอน flush จะโผล่กลับมาที่ (50,50)
+        Assert.Null(await GetStoredPositionAsync(conn, _sceneId, tokenId));
+        Assert.DoesNotContain(tokenId.ToString(), await GetTokensJsonAsync(conn, _sceneId));
     }
 
     // ── flush ─────────────────────────────────────────────────────────────
@@ -459,8 +483,7 @@ public class SceneTokenEndpointsTests : IAsyncLifetime
 
         await using var conn = new NpgsqlConnection(OwnerConnectionString);
         await conn.OpenAsync();
-        var rawTokens = await GetTokensJsonAsync(conn, _sceneId);
-        Assert.Contains("77", rawTokens);
+        Assert.Equal((77.0, 66.0), await GetStoredPositionAsync(conn, _sceneId, tokenId));
 
         var store = _factory.Services.GetRequiredService<ISceneTokenStore>();
         var pending = await store.GetPendingPositionsAsync(_sceneId);

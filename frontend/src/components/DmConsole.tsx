@@ -9,6 +9,8 @@ import { useCombatActions } from "@/lib/use-combat-actions";
 import { useScene } from "@/lib/use-scene";
 import type { ApiKeyInfo, CampaignMember } from "@/lib/campaign-types";
 import { DmMapTools } from "./DmMapTools";
+import { MonsterLibraryPanel } from "./MonsterLibraryPanel";
+import { RulesReferencePanel } from "./RulesReferencePanel";
 import { SceneSetupPanel } from "./SceneSetupPanel";
 import { parseSceneGrid } from "@/lib/scene-grid";
 import { ReactionPrompt } from "./ReactionPrompt";
@@ -540,6 +542,12 @@ export function DmConsole({ campaignId }: { campaignId: string }) {
                 )}
               </section>
 
+              {/* คลังมอนสเตอร์อยู่ใต้แผนที่เพราะเป็นขั้นก่อนหน้าของงานเดียวกัน: เพิ่มเข้าแคมเปญที่นี่ →
+                  ขึ้นไปวางลงแผนที่ในช่อง "วางตัวใหม่" ของเครื่องมือด้านบน */}
+              <section className={sectionClass}>
+                <MonsterLibraryPanel campaignId={campaignId} />
+              </section>
+
               <EncounterPanel
                 combat={combat}
                 characters={ws.characters}
@@ -687,6 +695,11 @@ export function DmConsole({ campaignId }: { campaignId: string }) {
               </section>
             </>
           )}
+
+          {/* คู่มือกฎอยู่คอลัมน์ขวาคู่กับ log — เป็นของที่เปิดอ่านระหว่างเล่น ไม่ใช่ของที่ต้องตั้งค่าก่อนเริ่ม */}
+          <section className={sectionClass}>
+            <RulesReferencePanel />
+          </section>
 
           <LogPanel log={ws.log} />
         </WorkspaceColumn>

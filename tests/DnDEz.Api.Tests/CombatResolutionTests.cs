@@ -774,6 +774,14 @@ public class CombatResolutionTests : IAsyncLifetime
     /// broadcast — miss/automatic-miss ไม่มี HP เปลี่ยนแปลงจริง จึงต้องไม่มี HpUpdated ยิงออกไปเลย
     /// (bounded wait 2 วินาที มิเรอร์ pattern เดียวกับ
     /// Outsider_connection_that_never_joined_group_does_not_receive_broadcast ใน DiceRollCrudTests)
+    ///
+    /// **ทำไมต้องต่อ connection ใหม่ทุกรอบที่ทอยใหม่** (แก้ 2026-09-21 — เทสต์นี้ตกสุ่ม ~5%): เป้า AC 50
+    /// โดนได้ทางเดียวคือทอยได้ 20 ธรรมชาติ ซึ่งเกิดจริง 5% ต่อการทอยหนึ่งครั้ง · โค้ดเดิมสมัคร listener
+    /// **ครั้งเดียวก่อนเข้าลูป** แล้วทอยซ้ำจนกว่าจะพลาด — พอรอบแรกทอยได้ 20 มันโจมตีโดนจริง ดาเมจเข้าจริง
+    /// และ broadcast จริง (ถูกต้องตามกฎทุกประการ) แต่ listener ตัวเดิมยังค้างอยู่ พอรอบถัดไปพลาดแล้วมาเช็ค
+    /// จึงเจอ broadcast ของรอบก่อนค้างอยู่ → ตกทั้งที่ระบบทำงานถูก · ตั้ง TCS ใหม่เฉย ๆ ไม่พอ เพราะ
+    /// broadcast ของรอบก่อนเดินทางผ่าน Redis มาแบบ async อาจมาถึงหลังรีเซ็ตได้ · ต่อใหม่ทั้ง connection
+    /// จึงเป็นทางเดียวที่รับประกันว่า listener ที่ถูก assert **เห็นการโจมตีครั้งเดียวคือครั้งที่พลาดนั้น**
     /// </summary>
     [Fact]
     public async Task Post_attacks_that_misses_does_not_broadcast_HpUpdated()
@@ -781,18 +789,16 @@ public class CombatResolutionTests : IAsyncLifetime
         await using var conn = new NpgsqlConnection(OwnerConnectionString);
         await conn.OpenAsync();
 
-        await using var connection = BuildConnection(_memberToken);
-
-        var received = new TaskCompletionSource<HpUpdatedBroadcastDto>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        connection.On<HpUpdatedBroadcastDto>("HpUpdated", broadcast => received.TrySetResult(broadcast));
-
-        await connection.StartAsync();
-        await connection.InvokeAsync("JoinCampaign", _campaignId);
-
-        AttackResolutionResponse? body = null;
         for (var attempt = 0; attempt < MaxRetries; attempt++)
         {
+            await using var connection = BuildConnection(_memberToken);
+            var received = new TaskCompletionSource<HpUpdatedBroadcastDto>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            connection.On<HpUpdatedBroadcastDto>("HpUpdated", broadcast => received.TrySetResult(broadcast));
+
+            await connection.StartAsync();
+            await connection.InvokeAsync("JoinCampaign", _campaignId);
+
             var disposableTargetId = Guid.NewGuid();
             await InsertCharacterAsync(conn, disposableTargetId, _campaignId, $"Miss Broadcast Target {attempt}", armorClass: 50);
 
@@ -806,21 +812,25 @@ public class CombatResolutionTests : IAsyncLifetime
                 });
 
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-            body = await response.Content.ReadFromJsonAsync<AttackResolutionResponse>(JsonOptions);
+            var body = await response.Content.ReadFromJsonAsync<AttackResolutionResponse>(JsonOptions);
             Assert.NotNull(body);
-            if (!body!.Hit)
+
+            if (body!.Hit)
             {
-                break;
+                // ทอยได้ 20 ธรรมชาติ — โดนจริง ดาเมจเข้าจริง broadcast จริง ถูกต้องตามกฎ ไม่ใช่เคสที่เทสต์นี้ดู
+                // ทิ้งทั้งรอบ (รวม connection ที่เห็น broadcast นั้นไปแล้ว) แล้วเริ่มใหม่หมด
+                await connection.StopAsync();
+                continue;
             }
+
+            await Task.WhenAny(received.Task, Task.Delay(TimeSpan.FromSeconds(2)));
+            Assert.False(received.Task.IsCompleted, "attack ที่ miss ต้องไม่ broadcast HpUpdated เลย");
+
+            await connection.StopAsync();
+            return;
         }
 
-        Assert.NotNull(body);
-        Assert.False(body!.Hit, $"CriticalHit เกิดขึ้น {MaxRetries} รอบติดกัน (โอกาสจริง ~{Math.Pow(0.05, MaxRetries):E2}) — น่าสงสัยว่า RNG ผิดปกติ");
-
-        await Task.WhenAny(received.Task, Task.Delay(TimeSpan.FromSeconds(2)));
-        Assert.False(received.Task.IsCompleted, "attack ที่ miss ต้องไม่ broadcast HpUpdated เลย");
-
-        await connection.StopAsync();
+        Assert.Fail($"CriticalHit เกิดขึ้น {MaxRetries} รอบติดกัน (โอกาสจริง ~{Math.Pow(0.05, MaxRetries):E2}) — น่าสงสัยว่า RNG ผิดปกติ");
     }
 
     // ── attacks — validation (400 ก่อนแตะ DB/CSPRNG เลย) ────────────────────

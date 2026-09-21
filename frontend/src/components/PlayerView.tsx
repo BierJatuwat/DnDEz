@@ -11,6 +11,7 @@ import { useReachable } from "@/lib/use-reachable";
 import { useMovement } from "@/lib/use-movement";
 import type { CampaignMember } from "@/lib/campaign-types";
 import { SceneMap } from "./SceneMap";
+import { RulesReferencePanel } from "./RulesReferencePanel";
 import { parseSceneGrid } from "@/lib/scene-grid";
 import { CharacterPresetPicker } from "./CharacterPresetPicker";
 import { AffordancePanel } from "./AffordancePanel";
@@ -347,6 +348,12 @@ export function PlayerView({ campaignId }: { campaignId: string }) {
             isError={ws.autonomySettingsQuery.isError}
             editable={false}
           />
+
+          {/* คู่มือกฎจาก SRD — ผู้เล่นเปิดอ่านเองได้ว่า "ล้มลง" หรือ "โดนพิษ" แปลว่าอะไร โดยไม่ต้องถาม DM
+              และไม่เรียก AI (PROJECT-CONTEXT §2 ล็อกว่า tooltip ของสถานะต้องมาจาก RulesCorpus) */}
+          <section className={sectionClass}>
+            <RulesReferencePanel />
+          </section>
 
           <LogPanel log={ws.log} />
         </WorkspaceColumn>

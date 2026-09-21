@@ -4,6 +4,8 @@ import { useState } from "react";
 import { SceneMap } from "./SceneMap";
 import { TerrainLegend } from "./TerrainLegend";
 import { useSceneTokens } from "@/lib/use-scene-tokens";
+import { useCampaignMonsters } from "@/lib/use-srd";
+import { tokenLabel } from "@/lib/srd-view";
 import { useSceneTerrain } from "@/lib/use-scene-terrain";
 import { useReachable } from "@/lib/use-reachable";
 import { useMovement } from "@/lib/use-movement";
@@ -70,11 +72,15 @@ export function DmMapTools({
   nameOf: (entityId: string) => string | undefined;
 }) {
   const [mode, setMode] = useState<Mode>("setup");
-  const [placingEntityId, setPlacingEntityId] = useState<string>("");
+  // ค่าในช่องเลือกเป็น "ชนิด:id" เพราะ id ของตัวละครกับมอนสเตอร์อยู่คนละตาราง — ส่ง id เปล่าไปจะไม่รู้ว่า
+  // ต้องบอก server ว่า entityType อะไร (และ id ซ้ำกันข้ามตารางได้ในทางทฤษฎี)
+  const [placingValue, setPlacingValue] = useState<string>("");
   const [movingCharacterId, setMovingCharacterId] = useState<string>("");
   const [paintTool, setPaintTool] = useState<TerrainPaintTool>("Difficult");
 
   const { placeToken, moveToken, removeToken } = useSceneTokens(campaignId, sceneId);
+  // มอนสเตอร์ของแคมเปญ — ดึงเฉพาะตอนอยู่โหมดจัดฉากซึ่งเป็นโหมดเดียวที่ใช้ลิสต์นี้
+  const { monsters } = useCampaignMonsters(campaignId, mode === "setup");
   const { paint } = useSceneTerrain(campaignId, sceneId);
   const reachable = useReachable(campaignId, sessionId, mode === "rules" ? movingCharacterId || null : null);
   const movement = useMovement(campaignId, sessionId);
@@ -104,8 +110,10 @@ export function DmMapTools({
   };
 
   const handleEmptyCellClick = (cell: { x: number; y: number }) => {
-    if (mode !== "setup" || !placingEntityId) return;
-    placeToken.mutate({ entityType: "Character", entityId: placingEntityId, x: cell.x, y: cell.y });
+    if (mode !== "setup" || !placingValue) return;
+    const [entityType, entityId] = placingValue.split(":");
+    if (entityType !== "Character" && entityType !== "Monster") return;
+    placeToken.mutate({ entityType, entityId, x: cell.x, y: cell.y });
   };
 
   const placedEntityIds = new Set(tokens.map((t) => t.entityId));
@@ -184,24 +192,41 @@ export function DmMapTools({
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm opacity-60">วางตัวใหม่:</span>
           <select
-            value={placingEntityId}
-            onChange={(e) => setPlacingEntityId(e.target.value)}
+            value={placingValue}
+            onChange={(e) => setPlacingValue(e.target.value)}
             className={selectClass}
-            aria-label="ตัวละครที่จะวางลงแผนที่"
+            aria-label="ตัวที่จะวางลงแผนที่"
           >
-            <option value="">— เลือกตัวละคร —</option>
-            {characters.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-                {c.controlledByDm ? " [NPC]" : ""}
-                {placedEntityIds.has(c.id) ? " (วางแล้ว)" : ""}
-              </option>
-            ))}
+            <option value="">— เลือกตัวละครหรือมอนสเตอร์ —</option>
+            <optgroup label="ตัวละคร / NPC">
+              {characters.map((c) => (
+                <option key={c.id} value={`Character:${c.id}`}>
+                  {c.name}
+                  {c.controlledByDm ? " [NPC]" : ""}
+                  {placedEntityIds.has(c.id) ? " (วางแล้ว)" : ""}
+                </option>
+              ))}
+            </optgroup>
+            {/* มอนสเตอร์ตัวเดียวกันวางซ้ำได้หลายตัวบนแผนที่ (ก็อบลิน 3 ตัวใช้แม่แบบเดียวกัน) จึงไม่ขึ้น
+                ว่า "วางแล้ว" เหมือนตัวละคร — บอกจำนวนที่วางไปแล้วแทนเพื่อให้ DM นับถูก */}
+            <optgroup label="มอนสเตอร์ในแคมเปญ">
+              {monsters.map((m) => {
+                const placed = tokens.filter((t) => t.entityId === m.id).length;
+                return (
+                  <option key={m.id} value={`Monster:${m.id}`}>
+                    {m.name} (AC {m.armorClass} · HP {m.hitPoints})
+                    {placed > 0 ? ` — บนแผนที่ ${placed} ตัว` : ""}
+                  </option>
+                );
+              })}
+            </optgroup>
           </select>
           <span className="text-xs opacity-60">
-            {placingEntityId
+            {placingValue
               ? "→ คลิกช่องว่างบนแผนที่เพื่อวาง"
-              : "เลือกตัวละครก่อน แล้วคลิกช่องว่างบนแผนที่"}
+              : monsters.length === 0
+                ? "เลือกตัวก่อน แล้วคลิกช่องว่างบนแผนที่ — ยังไม่มีมอนสเตอร์ในแคมเปญ เพิ่มได้จากคลังมอนสเตอร์ด้านล่าง"
+                : "เลือกตัวก่อน แล้วคลิกช่องว่างบนแผนที่"}
           </span>
         </div>
       )}
@@ -242,7 +267,7 @@ export function DmMapTools({
             {tokens.map((t) => (
               <li key={t.id} className="flex items-center justify-between gap-2">
                 <span className="truncate">
-                  {nameOf(t.entityId) ?? t.entityType}
+                  {tokenLabel(t, nameOf)}
                   <span className="ml-2 tabular-nums opacity-50">
                     ({Math.round(t.x)}, {Math.round(t.y)})
                   </span>

@@ -213,13 +213,32 @@ public class ApiKeyCrudTests : IAsyncLifetime
         var secondBody = await second.Content.ReadFromJsonAsync<ApiKeyResponse>(JsonOptions);
 
         Assert.Equal("Active", secondBody!.Status);
-        Assert.Equal(firstBody.LastValidatedAt, secondBody.LastValidatedAt);
+        Assert.Equal(ToPostgresPrecision(firstBody.LastValidatedAt), ToPostgresPrecision(secondBody.LastValidatedAt));
 
         // แต่ key เดิมยังถูกแทนที่ด้วยค่าใหม่จริง (rotate ยังทำงานปกติ แค่ status/LastValidatedAt
         // ไม่ถูกแตะ)
         var (_, encryptedKey) = await ReadRawRowAsync(_userId, "anthropic");
         Assert.Equal(unknownOutcomeKey, DecryptViaRealDataProtector(encryptedKey));
     }
+
+    /// <summary>
+    /// ปัดเวลาลงเป็นความละเอียดของ Postgres (ไมโครวินาที) ก่อนเทียบ
+    ///
+    /// **ทำไมต้องมี** (แก้ 2026-09-21 — เทสต์นี้ตกสุ่มมานาน): `timestamptz` ของ Postgres เก็บได้ถึงไมโครวินาที
+    /// (ทศนิยม 6 หลัก) ส่วน `DateTimeOffset` ของ .NET เก็บเป็น tick ละ 100 นาโนวินาที (7 หลัก) — response
+    /// ของ PUT **ครั้งแรก** คืนค่าที่ยังอยู่ในหน่วยความจำ (7 หลัก) ส่วนครั้งที่สองอ่านกลับมาจากฐานแล้ว (6 หลัก)
+    /// สองค่านี้จึงต่างกันที่หลักสุดท้ายเมื่อหลักที่ 7 ไม่ใช่ศูนย์ เช่นเคสจริงที่ทำให้ตก:
+    /// `…48.6852788` เทียบกับ `…48.6852780`
+    ///
+    /// เจตนาของ assert คือ "ค่าเดิมถูกคงไว้ ไม่ถูกล้างหรือเขียนทับด้วยเวลาใหม่" ซึ่งการเทียบที่ความละเอียด
+    /// ของฐานข้อมูลยังพิสูจน์ได้ครบ — ถ้าโค้ดเขียนทับด้วย `UtcNow` ใหม่ ค่าจะต่างกันระดับมิลลิวินาทีขึ้นไป
+    /// ไม่ใช่หลักที่ 7
+    /// </summary>
+    private static DateTimeOffset? ToPostgresPrecision(DateTimeOffset? value) =>
+        value is null
+            ? null
+            : new DateTimeOffset(
+                value.Value.Ticks - (value.Value.Ticks % TimeSpan.TicksPerMicrosecond), value.Value.Offset);
 
     [Fact]
     public async Task Put_api_key_encrypts_value_at_rest_and_round_trips_correctly()

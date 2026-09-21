@@ -556,6 +556,7 @@ app.MapStoryBeatEndpoints();
 // ── Sprint G Part 3: scene-prep — monster/npc ของ beat ที่ระบุ (design doc §13.2) — DM-only ──
 app.MapScenePrepEndpoints();
 app.MapSrdEndpoints();
+app.MapMonsterEndpoints();
 
 // ── Sprint G Part 4: อัปโหลดแผนที่ + scene + จัดกริด (design doc §11.1, §22) — DM-only ──
 app.MapSceneEndpoints();

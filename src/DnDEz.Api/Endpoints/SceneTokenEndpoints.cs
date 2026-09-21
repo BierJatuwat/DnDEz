@@ -261,7 +261,16 @@ internal record MoveTokenRequest(double X, double Y);
 /// คำนวณเฉพาะใน GET scene (design doc §13.1 projection) endpoint create/move/delete ในไฟล์นี้ไม่ต้อง
 /// รู้เรื่อง role ของผู้ดู เลยปล่อย null เสมอ — ไม่ใช่ omission แต่เป็นขอบเขตที่ตั้งใจ (คนละหน้าที่)
 /// </summary>
+// `Name` เพิ่มตอนทำคลังมอนสเตอร์ (2026-09-21): ก่อนหน้านี้หน้าจอหาชื่อจากลิสต์ตัวละครเอง ซึ่งใช้กับ token
+// ของมอนสเตอร์ไม่ได้เลย (มอนสเตอร์ไม่ได้อยู่ในลิสต์นั้น) จึงขึ้นคำว่า "Monster" แทนชื่อจริงทุกตัว
+//
+// ⚠️ ไม่ใช่ข้อมูลใหม่ที่หลุดเพิ่ม: token ที่ยังอยู่ในหมอก **ถูกตัดทิ้งไปก่อนแล้ว** ใน
+// `SceneEndpoints.BuildProjectedResponseAsync` (§13.3) · ชื่อของตัวละครที่มองเห็นได้ สมาชิกอ่านได้อยู่แล้วจาก
+// `GET /campaigns/{id}/characters` และชื่อมอนสเตอร์ที่มองเห็นได้ก็ถูกส่งให้ผู้เล่นผ่าน affordance
+// มาตั้งแต่ Sprint H Part 7 (`AffordanceTarget.Name`) — เทสต์ adversarial ที่ล็อกเรื่องนี้อยู่ใน
+// `MonsterLibraryEndpointsTests.Player_response_raw_json_contains_no_trace_of_a_monster_hidden_by_fog`
 internal record TokenResponse(
-    Guid Id, string EntityType, Guid EntityId, double X, double Y, int? CurrentHp = null, int? MaxHp = null);
+    Guid Id, string EntityType, Guid EntityId, double X, double Y, int? CurrentHp = null, int? MaxHp = null,
+    string? Name = null);
 
 internal record TokenErrorResponse(string Reason);
