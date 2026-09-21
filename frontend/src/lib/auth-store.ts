@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
-import { apiFetch } from "./api";
+import { apiFetch, setUnauthorizedHandler } from "./api";
 
 type AuthState = {
   token: string | null;
@@ -33,6 +33,18 @@ export const useAuthStore = create<AuthState>()(
     },
   ),
 );
+
+/**
+ * token หมดอายุ (1 ชั่วโมง ยังไม่มี refresh token) = จบ session ทันที
+ *
+ * หน้าแรกกับ layout ของแคมเปญ redirect ไป `/login` เองอยู่แล้วเมื่อ `token` เป็น null จึงไม่ต้องสั่ง
+ * navigate จากตรงนี้ · ถ้าไม่ทำ หน้าจอจะยังคิดว่าล็อกอินอยู่แล้วแสดง "ยังไม่ได้อยู่โต๊ะไหนเลย"
+ * ทั้งที่แคมเปญยังอยู่ครบ — ผู้ใช้เจอจริงแล้วเข้าใจว่าแคมเปญหาย (ดู doc comment ใน `api.ts`)
+ */
+setUnauthorizedHandler(() => {
+  const { token, logout } = useAuthStore.getState();
+  if (token) logout();
+});
 
 export async function login(email: string, password: string) {
   const result = await apiFetch<{ token: string; userId: string }>(

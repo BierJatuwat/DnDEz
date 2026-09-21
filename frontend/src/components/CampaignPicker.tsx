@@ -100,8 +100,14 @@ export function CampaignPicker() {
               </button>
             </li>
           ))}
-          {campaigns.length === 0 && (
+          {/* ⚠️ "ยังไม่ได้อยู่โต๊ะไหนเลย" ต้องขึ้นเฉพาะตอนที่ **รู้จริง** ว่าไม่มีโต๊ะ — ตอนโหลดไม่สำเร็จ
+              ลิสต์ก็ว่างเหมือนกัน แต่ความหมายคนละเรื่อง (ข้อความนี้เคยทำให้ผู้ใช้เข้าใจว่าแคมเปญหายไปแล้ว
+              ทั้งที่แค่ token หมดอายุ) · ตอนกำลังโหลดก็ไม่ต้องขึ้นเช่นกัน ไม่งั้นเห็นแว้บทุกครั้งที่เปิดหน้า */}
+          {campaigns.length === 0 && campaignsQuery.isSuccess && (
             <li className="opacity-50 text-sm">ยังไม่ได้อยู่โต๊ะไหนเลย — สร้างใหม่ หรือเข้าร่วมด้วยโค้ด</li>
+          )}
+          {campaigns.length === 0 && campaignsQuery.isPending && (
+            <li className="opacity-50 text-sm">กำลังโหลดรายชื่อโต๊ะ...</li>
           )}
         </ul>
       </section>
