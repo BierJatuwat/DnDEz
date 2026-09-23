@@ -12,38 +12,28 @@ using Microsoft.EntityFrameworkCore;
 namespace DnDEz.Api.Endpoints;
 
 /// <summary>
-/// Sprint E Part 3 — extraction ของ orchestrator-turn pipeline ที่เดิมอยู่ใน <c>ConsultEndpoints</c>
-/// เท่านั้น (Sprint D Part 2/3) ให้ทั้ง DM (<c>/consult</c>) และผู้เล่น (<c>/actions</c>) เรียกโค้ด
-/// เดียวกันเป๊ะ ตาม PROJECT-CONTEXT §2: "Action ของผู้เล่นทุกอันไหลผ่าน rules engine และ approval
-/// gate เดิม ไม่สร้างเส้นทางแก้ state คู่ขนาน"
+/// Sprint E Part 3 — orchestrator-turn pipeline ของเทิร์นผู้เล่น (<c>PlayerActionEndpoints</c>, `/actions`)
+/// ตาม PROJECT-CONTEXT §2: "Action ของผู้เล่นทุกอันไหลผ่าน rules engine และ approval gate เดิม ไม่สร้าง
+/// เส้นทางแก้ state คู่ขนาน"
 ///
-/// **2026-09-22 — เพิ่ม system prompt (ก่อนหน้านี้ AI ไม่เห็น context ของ session/แคมเปญเลยสักบรรทัด
-/// ผู้ใช้ถามแล้วตรวจโค้ดเจอ)** — ดู `BuildSystemPromptAsync` ท้ายไฟล์ ประกอบจาก: ชื่อแคมเปญ, story beat
-/// ที่ active (เฉพาะ `ReviewStatus.Approved`, ตาม PROJECT-CONTEXT §2 "record ที่ยังไม่ approved ห้าม
-/// ส่งเข้า orchestrator context"), roster ตัวละครผู้เล่น (HP/AC/เลเวล) **⚠️ ไม่เคยใส่
-/// `StoryBeat.DmNotes`/`Secrets` เด็ดขาดใน method นี้** เพราะ method เดียวกันนี้ใช้ทั้ง path DM
-/// (`/consult`, ไม่ broadcast) และ path ผู้เล่น (`/actions`, broadcast เข้ากลุ่มแคมเปญจริง — ดู
-/// `broadcastActionMessages` ด้านล่าง) ถ้าใส่ DmNotes/Secrets เข้าไปแล้ว AI พูดถึงมันตอนตอบ narration
-/// ของ player-action turn เนื้อหานั้นจะหลุดไปหาผู้เล่นทันทีผ่าน broadcast — เป็นบั๊กคลาสเดียวกับที่
-/// security review เจอตอน `ProposalCreated` หลุดไปหา player ใน Sprint E Part 2 (ดู doc comment ด้านล่าง)
-/// เพียงแต่รั่วผ่าน AI narration แทนที่จะรั่วผ่าน broadcast payload ตรง ๆ · จะให้ AI ใช้ DmNotes/Secrets
-/// ได้ต้องเป็น endpoint ใหม่ที่ไม่มีทาง broadcast เด็ดขาด (ที่ปรึกษา DM ส่วนตัว — ยังไม่ทำในรอบนี้)
+/// **2026-09-23** — เดิมไฟล์นี้ใช้ร่วมกับ `/consult` (ช่องที่ DM คุยกับ AI แบบไม่ broadcast) ด้วย จึงมี
+/// พารามิเตอร์ `authorType`/`broadcastActionMessages` แยกสองเส้นทาง ตอนนี้ `/consult` ถูกแทนที่ด้วยผู้ช่วย
+/// DM ช่องเดียว (`AssistantEndpoints`/`AssistantRunner` — ไม่ผ่านไฟล์นี้เลย มี pipeline ของตัวเอง) จึงเหลือ
+/// ผู้เรียกเดียวคือเทิร์นผู้เล่นซึ่ง broadcast เข้ากลุ่มแคมเปญเสมอ — เอาพารามิเตอร์ที่มีค่าเดียวออกทั้งหมด
 ///
-/// **จงใจไม่ broadcast อะไรจาก path ของ DM (<paramref name="broadcastActionMessages"/>=false)** —
-/// `/consult` เป็นช่องทางที่ DM คุยกับ AI ได้ทั้งเรื่อง narration สาธารณะ *และ* คำถามส่วนตัว/สปอยล์
-/// (เช่น "วายร้ายควรมีแผนลับอะไร") ไม่มีทางแยกสองกรณีนี้จาก API shape เดียวกันได้ — ถ้า broadcast
-/// เนื้อหาของ DM เข้ากลุ่มแคมเปญแบบไม่เลือก จะกลายเป็นบั๊กเดียวกับที่ security review เจอใน
-/// Sprint E Part 2 (ProposalCreated เคยหลุดไปหา player) แค่คนละ endpoint เท่านั้น — ผู้เล่นจะเห็นสิ่งที่
-/// DM ไม่ได้ตั้งใจให้เห็น จึงจำกัด broadcast ไว้เฉพาะ path ที่ผู้เล่นเป็นคนเริ่มเทิร์นเอง
-/// (<c>PlayerActionEndpoints</c> เท่านั้นที่ส่ง true) ซึ่งเนื้อหาเป็นของผู้เล่นเองหรือ AI ตอบสนองการ
-/// กระทำของผู้เล่นโดยตรง ไม่มีทางเป็นข้อมูลลับของ DM
+/// system prompt (`BuildSystemPromptAsync` ท้ายไฟล์) ประกอบจาก: ชื่อแคมเปญ, story beat ที่ active (เฉพาะ
+/// `ReviewStatus.Approved`), roster ตัวละครผู้เล่น, encounter ที่ active (Part F) **⚠️ ห้ามใส่
+/// `StoryBeat.DmNotes`/`Secrets` หรือ HP/AC ของมอนสเตอร์ที่ซ่อนไว้เด็ดขาด** — เทิร์นนี้ broadcast
+/// narration เข้ากลุ่มแคมเปญจริงเสมอ ถ้าความลับหลุดเข้า prompt แล้ว Claude พูดถึงตอนตอบ narration
+/// เนื้อหานั้นไปถึงผู้เล่นทันที (บั๊กคลาสเดียวกับที่ security review เจอตอน `ProposalCreated` หลุดไปหา
+/// player ใน Sprint E Part 2 เพียงแต่รั่วผ่าน AI narration แทนที่จะรั่วผ่าน broadcast payload ตรง ๆ)
 ///
-/// **2026-09-22 (Part B) — เพิ่ม tool อ่านอย่างเดียว `lookup_rule`/`lookup_monster`** เพื่อให้ AI ตอบ
-/// คำถามกฎ/สเตทมอนสเตอร์ได้แม่นจากข้อมูลจริงในระบบ (SRD ที่ import/แปลไว้ + แม่แบบมอนสเตอร์ของแคมเปญ
-/// ที่ DM ปรับเอง) แทนที่จะเดาจากความจำการเทรน — เพราะเป็นการอ่านอย่างเดียว ไม่มี state ให้พัง จึง
+/// **เพิ่ม tool อ่านอย่างเดียว `lookup_rule`/`lookup_monster`** เพื่อให้ AI ตอบคำถามกฎ/สเตทมอนสเตอร์ได้แม่น
+/// จากข้อมูลจริงในระบบแทนที่จะเดาจากความจำการเทรน — เพราะเป็นการอ่านอย่างเดียว ไม่มี state ให้พัง จึง
 /// **ไม่ผ่าน `AutonomySetting`/`Proposal` gate เหมือน `roll_dice`** เสนอให้ Claude เห็นเสมอไม่ว่า dial
 /// จะตั้งเป็นอะไร (ดู `ReadOnlyToolNames`) — ต่างจาก `roll_dice` ที่ยังต้องผ่าน gate เดิมทุกจุดเพราะ
-/// เขียน `dice_rolls` จริง
+/// เขียน `dice_rolls` จริง · `search_campaign_journal` **ไม่เสนอในเทิร์นผู้เล่นเลย** (มีแต่ในผู้ช่วย DM)
+/// เพราะบันทึกแคมเปญมีความลับปนได้เหมือนกัน
 /// </summary>
 internal static class OrchestratorTurnRunner
 {
@@ -112,9 +102,11 @@ internal static class OrchestratorTurnRunner
             required = new[] { "key" },
         });
 
-    /// <summary>2026-09-22 (Part D) — ค้น "บันทึกแคมเปญ" (`campaign_journal_entries`) ที่ DM เขียนเอง
-    /// หรือ AI สรุปไว้ · หลักการคือ **ไม่ยัดบันทึกเข้า system prompt** (โตไม่จำกัดตามอายุแคมเปญ และ DM
-    /// จ่ายค่า token เองแบบ BYOK) แต่ให้ AI ค้นเอาเองเมื่อต้องการจริง — เหมือน `lookup_rule`</summary>
+    /// <summary>ค้น "บันทึกแคมเปญ" (`campaign_journal_entries`) ที่ DM เขียนเองหรือ AI สรุปไว้ · หลักการ
+    /// คือ **ไม่ยัดบันทึกเข้า system prompt** (โตไม่จำกัดตามอายุแคมเปญ และ DM จ่ายค่า token เองแบบ BYOK)
+    /// แต่ให้ AI ค้นเอาเองเมื่อต้องการจริง — เหมือน `lookup_rule` · **2026-09-23** ใช้โดยผู้ช่วย DM
+    /// (`AssistantTools`) เท่านั้น — เทิร์นผู้เล่นไม่เสนอเลยเพราะบันทึกมีความลับของ DM ปนได้ ดู
+    /// doc comment ของคลาส</summary>
     internal static readonly AnthropicToolDefinition SearchCampaignJournalTool = new(
         Name: "search_campaign_journal",
         Description: "Search this campaign's journal — notes the DM wrote (or you summarised earlier) " +
@@ -136,11 +128,13 @@ internal static class OrchestratorTurnRunner
         });
 
     /// <summary>ชื่อ tool ที่อ่านอย่างเดียว ไม่เขียน state เลย — ไม่ต้องผ่าน AutonomySetting/Proposal
-    /// gate (ดู doc comment ของคลาสส่วน Part B) ต่างจาก <see cref="RollDiceTool"/> ที่เขียน dice_rolls
-    /// จริงและต้องผ่าน gate เดิม</summary>
-    private static readonly HashSet<string> ReadOnlyToolNames =
-        ["lookup_rule", "lookup_monster", "search_campaign_journal"];
+    /// gate (ดู doc comment ของคลาส) ต่างจาก <see cref="RollDiceTool"/> ที่เขียน dice_rolls จริงและ
+    /// ต้องผ่าน gate เดิม · `search_campaign_journal` ไม่อยู่ในนี้เพราะเทิร์นผู้เล่นไม่เสนอเลย
+    /// (ดูเหตุผลใน doc comment ของคลาส)</summary>
+    private static readonly HashSet<string> ReadOnlyToolNames = ["lookup_rule", "lookup_monster"];
 
+    /// <summary>รันเทิร์นของผู้เล่นหนึ่งครั้ง — broadcast `ActionMessageCreated` เข้ากลุ่มแคมเปญเสมอ
+    /// (ต่างจากผู้ช่วย DM ที่มี pipeline ของตัวเองแยกต่างหากใน `AssistantRunner`)</summary>
     internal static async Task<ConsultResponse> RunTurnAsync(
         DnDEzDbContext db,
         IAnthropicClient anthropicClient,
@@ -150,68 +144,38 @@ internal static class OrchestratorTurnRunner
         Guid sessionId,
         string rawApiKey,
         string content,
-        MessageAuthorType authorType,
-        ActionSource source,
-        Guid? authorUserId,
-        Guid? characterId,
-        bool broadcastActionMessages)
+        Guid authorUserId,
+        Guid characterId)
     {
         var autonomyLevel = await GetEffectiveAutonomyLevelAsync(db, campaign.Id, AutonomySubsystem.RulesCombat);
         // lookup tools อ่านอย่างเดียว เสนอเสมอไม่ว่า autonomy dial จะเป็นอะไร — เฉพาะ roll_dice (เขียน
         // state จริง) ที่ตัดออกตอน Manual (ดู doc comment ของ ReadOnlyToolNames ด้านบน)
         var toolsToOffer = new List<AnthropicToolDefinition> { LookupRuleTool, LookupMonsterTool };
-
-        // ⚠️ **`search_campaign_journal` เสนอเฉพาะเทิร์นที่ DM เป็นคนเริ่มเท่านั้น** (2026-09-22, Part D)
-        // เพราะบันทึกแคมเปญมีความลับของ DM ปนได้ (รายการที่ AI สรุปให้มาจาก `/advisor` ซึ่งเห็น
-        // `StoryBeat.DmNotes`/`Secrets`) ส่วนเทิร์นของผู้เล่น (`/actions`) **broadcast narration เข้ากลุ่ม
-        // แคมเปญจริง** ถ้าเสนอ tool นี้ให้ด้วย Claude อาจดึงความลับมาเล่าในเนื้อ narration ที่ทุกคนเห็น —
-        // เป็นบั๊กคลาสเดียวกับที่กัน DmNotes/Secrets ออกจาก system prompt ไว้แล้วใน Part A
-        //
-        // RLS (`dm_only` บน `campaign_journal_entries`) กันซ้ำอีกชั้นอยู่แล้ว — เทิร์นของผู้เล่นรันด้วย
-        // `app.user_id` ของผู้เล่น (ดู middleware ใน Program.cs) `app_is_dm()` จึงเป็น false แล้ว query
-        // คืน 0 แถว — **แต่ห้ามพึ่งชั้นนั้นชั้นเดียว** เพราะถ้าวันหนึ่ง policy ถูกผ่อน (เช่นเพิ่มคอลัมน์
-        // `visibility` แล้วเปิดให้สมาชิกอ่านบางรายการ) การเสนอ tool นี้บน path ที่ broadcast จะกลาย
-        // เป็นช่องรั่วทันทีโดยไม่มีใครรู้ตัว · อีกเหตุผลคือถ้าเสนอไปแล้ว tool คืน 0 แถวเสมอ Claude จะ
-        // ได้ context ที่ชวนเข้าใจผิดว่า "แคมเปญนี้ไม่มีบันทึกอะไรเลย" ทั้งที่มี
-        if (authorType == MessageAuthorType.Dm)
-        {
-            toolsToOffer.Add(SearchCampaignJournalTool);
-        }
         if (autonomyLevel != AutonomyLevel.Manual)
         {
             toolsToOffer.Add(RollDiceTool);
         }
 
-        var systemPrompt = await BuildSystemPromptAsync(db, campaign, sessionId, authorType);
-
-        // เทิร์นที่ไม่ broadcast (`/consult`) = ช่องส่วนตัวของ DM — ข้อความทั้งสองฝั่งของเทิร์นนี้ลับ และ
-        // เห็น history ลับได้ · เทิร์นที่ broadcast ห้ามเห็น history ลับเด็ดขาด ไม่ว่าคนกดจะเป็นใคร — ผูกกับ
-        // การ broadcast ไม่ใช่ตัวตน เพราะ DM ที่เล่นตัวละครตัวเองผ่าน `/actions` ก็ broadcast และ RLS ปล่อย
-        // ให้ DM อ่านแถวลับได้ filter ตรงนี้จึงเป็นตัวกันจริงของเคสนั้น (ดู `Message.DmPrivate`)
-        var dmPrivate = !broadcastActionMessages;
-        var history = await BuildHistoryAsync(db, sessionId, includeDmPrivate: dmPrivate);
+        var systemPrompt = await BuildSystemPromptAsync(db, campaign, sessionId);
+        var history = await BuildHistoryAsync(db, sessionId);
         history.Add(new AnthropicHistoryMessage("user", content));
 
         var incomingMessage = new Message
         {
             Id = Guid.NewGuid(),
             SessionId = sessionId,
-            AuthorType = authorType,
+            AuthorType = MessageAuthorType.Player,
             AuthorUserId = authorUserId,
             CharacterId = characterId,
             Content = content,
             ToolCalls = null,
-            Source = source,
-            DmPrivate = dmPrivate,
+            Source = ActionSource.Player,
+            DmPrivate = false,
             CreatedAt = DateTimeOffset.UtcNow,
         };
         db.Messages.Add(incomingMessage);
         await db.SaveChangesAsync();
-
-        if (broadcastActionMessages)
-        {
-            await BroadcastActionMessageAsync(hubContext, logger, campaign.Id, incomingMessage);
-        }
+        await BroadcastActionMessageAsync(hubContext, logger, campaign.Id, incomingMessage);
 
         var firstTurn = await anthropicClient.SendTurnAsync(
             rawApiKey, systemPrompt, history, toolsToOffer, CancellationToken.None);
@@ -219,23 +183,19 @@ internal static class OrchestratorTurnRunner
         if (firstTurn.ToolUse is null)
         {
             // Claude ตอบ narration จบเลย ไม่มี tool ให้ต้องตัดสินใจ auto/gate เลย — เหมือนกันทุก level
-            var narrationMessage = BuildAiMessage(sessionId, firstTurn.Text, toolCallsJson: null, dmPrivate);
+            var narrationMessage = BuildAiMessage(sessionId, firstTurn.Text, toolCallsJson: null);
             db.Messages.Add(narrationMessage);
             await db.SaveChangesAsync();
-
-            if (broadcastActionMessages)
-            {
-                await BroadcastActionMessageAsync(hubContext, logger, campaign.Id, narrationMessage);
-            }
+            await BroadcastActionMessageAsync(hubContext, logger, campaign.Id, narrationMessage);
 
             return new ConsultResponse(narrationMessage.Id, narrationMessage.Content, ToolCall: null, Pending: null);
         }
 
         if (ReadOnlyToolNames.Contains(firstTurn.ToolUse.Name))
         {
-            // 2026-09-22 (Part B) — อ่านอย่างเดียว ไม่มี state ให้พัง จึง execute ทันทีเสมอ ไม่ผ่าน
-            // AutonomySetting/Proposal gate เลย (gate มีไว้กันการ "เขียน" ที่ผิดพลาดแก้คืนยาก ไม่ใช่
-            // การอ่าน) — โครงเหมือน Autonomous branch ของ roll_dice ด้านล่างทุกประการ ต่างแค่ executor
+            // อ่านอย่างเดียว ไม่มี state ให้พัง จึง execute ทันทีเสมอ ไม่ผ่าน AutonomySetting/Proposal
+            // gate เลย (gate มีไว้กันการ "เขียน" ที่ผิดพลาดแก้คืนยาก ไม่ใช่การอ่าน) — โครงเหมือน
+            // Autonomous branch ของ roll_dice ด้านล่างทุกประการ ต่างแค่ executor
             var readOnlyResult = await ExecuteReadOnlyToolAsync(
                 db, campaign.Id, firstTurn.ToolUse.Name, firstTurn.ToolUse.Input);
             var afterLookupTurn = await anthropicClient.ContinueWithToolResultAsync(
@@ -248,14 +208,10 @@ internal static class OrchestratorTurnRunner
                 new { name = lookupToolCallResponse.Name, input = lookupToolCallResponse.Input, result = lookupToolCallResponse.Result },
             });
 
-            var lookupAiMessage = BuildAiMessage(sessionId, afterLookupTurn.Text, lookupToolCallsJson, dmPrivate);
+            var lookupAiMessage = BuildAiMessage(sessionId, afterLookupTurn.Text, lookupToolCallsJson);
             db.Messages.Add(lookupAiMessage);
             await db.SaveChangesAsync();
-
-            if (broadcastActionMessages)
-            {
-                await BroadcastActionMessageAsync(hubContext, logger, campaign.Id, lookupAiMessage);
-            }
+            await BroadcastActionMessageAsync(hubContext, logger, campaign.Id, lookupAiMessage);
 
             return new ConsultResponse(lookupAiMessage.Id, lookupAiMessage.Content, lookupToolCallResponse, Pending: null);
         }
@@ -273,8 +229,7 @@ internal static class OrchestratorTurnRunner
                     firstTurn.ToolUse.Id,
                     firstTurn.RawAssistantContent,
                     history,
-                    systemPrompt,
-                    dmPrivate)),
+                    systemPrompt)),
                 Reason = string.IsNullOrWhiteSpace(firstTurn.Text) ? null : firstTurn.Text,
                 Status = ProposalStatus.Pending,
                 CreatedAt = DateTimeOffset.UtcNow,
@@ -284,9 +239,8 @@ internal static class OrchestratorTurnRunner
 
             try
             {
-                // DM-only เสมอ ไม่ว่าใครเป็นคนเริ่มเทิร์น (player action หรือ DM consult) — ผู้เล่น
-                // ห้ามเห็นคิว proposal ตาม locked decision เดิม (ดู doc comment ของ ConsultEndpoints
-                // และบั๊กที่ security review เจอใน Sprint E Part 2)
+                // DM-only เสมอ — ผู้เล่นห้ามเห็นคิว proposal ตาม locked decision เดิม (บั๊กที่ security
+                // review เจอใน Sprint E Part 2)
                 await hubContext.Clients.User(campaign.OwnerUserId.ToString()).SendAsync(
                     "ProposalCreated",
                     new ProposalCreatedBroadcast(
@@ -316,14 +270,10 @@ internal static class OrchestratorTurnRunner
             new { name = toolCallResponse.Name, input = toolCallResponse.Input, result = toolCallResponse.Result },
         });
 
-        var aiMessage = BuildAiMessage(sessionId, secondTurn.Text, toolCallsJson, dmPrivate);
+        var aiMessage = BuildAiMessage(sessionId, secondTurn.Text, toolCallsJson);
         db.Messages.Add(aiMessage);
         await db.SaveChangesAsync();
-
-        if (broadcastActionMessages)
-        {
-            await BroadcastActionMessageAsync(hubContext, logger, campaign.Id, aiMessage);
-        }
+        await BroadcastActionMessageAsync(hubContext, logger, campaign.Id, aiMessage);
 
         return new ConsultResponse(aiMessage.Id, aiMessage.Content, toolCallResponse, Pending: null);
     }
@@ -361,24 +311,23 @@ internal static class OrchestratorTurnRunner
     }
 
     /// <summary>
-    /// ประกอบ system prompt ของเทิร์นนี้ — ดู doc comment ของคลาสว่าทำไม `DmNotes`/`Secrets` ห้ามอยู่
-    /// ในนี้เด็ดขาด (method นี้ใช้ร่วมกันทั้ง path DM และ path ผู้เล่นที่ broadcast จริง)
+    /// ประกอบ system prompt ของเทิร์นผู้เล่น — ดู doc comment ของคลาสว่าทำไม `DmNotes`/`Secrets` ห้ามอยู่
+    /// ในนี้เด็ดขาด (เทิร์นนี้ broadcast เข้ากลุ่มแคมเปญจริงเสมอ)
     ///
     /// ขอบเขตสะสม: ชื่อแคมเปญ + story beat ที่ active (เฉพาะ approved) + roster ตัวละครผู้เล่น
-    /// (HP/AC/เลเวล) (Part A) · **2026-09-22 (Part F) เพิ่ม encounter ที่ active ของ session นี้** —
-    /// ลำดับเทิร์น + ใครกำลังเดินอยู่ + HP/AC สดของผู้เข้าร่วมทุกตัว (ทั้งตัวละครผู้เล่นและมอนสเตอร์ที่
-    /// spawn จาก Part E) ทำให้คำถามกลางไฟต์แบบ "บอสเหลือเลือดเท่าไหร่ ควรทำไง" มีตัวเลขจริงให้ AI คิดต่อ
+    /// (HP/AC/เลเวล) + encounter ที่ active ของ session นี้ — ลำดับเทิร์น + ใครกำลังเดินอยู่ + HP/AC สด
+    /// ของผู้เข้าร่วมทุกตัว (ทั้งตัวละครผู้เล่นและมอนสเตอร์ที่ spawn) ทำให้คำถามกลางไฟต์แบบ "บอสเหลือ
+    /// เลือดเท่าไหร่ ควรทำไง" มีตัวเลขจริงให้ AI คิดต่อ
     ///
-    /// ⚠️ **HP/AC ของมอนสเตอร์ที่ `NpcStatsVisibleToParty=false` ถูกซ่อนจาก prompt ของเทิร์นผู้เล่น**
-    /// (ใช้ `CharacterStatsVisibility.IsVisibleTo` ตัวเดียวกับที่ `GET /campaigns/{id}/characters` ใช้ —
-    /// เกณฑ์ต้องตรงกันเป๊ะ ไม่ใช่สร้างเกณฑ์คู่ขนาน) เหตุผลเดียวกับที่กัน `DmNotes`/`Secrets` ไว้: เทิร์น
-    /// ของผู้เล่น (`/actions`) broadcast narration จริง ถ้าเลขที่ควรซ่อนอยู่ใน prompt Claude มีโอกาส
-    /// พูดตัวเลขนั้นออกมาตอนตอบ narration ซึ่งหลุดไปหาผู้เล่นทันที — ตรงข้ามกับหลักการที่ผู้เล่นต้อง
-    /// ค้นหา AC/HP ศัตรูเอาเองในเกม (ดู `CharacterStatsVisibility` doc comment) เทิร์นของ DM เห็นเลขเต็ม
-    /// เสมอเพราะ DM รู้ค่าที่แท้จริงอยู่แล้ว
+    /// ⚠️ **HP/AC ของมอนสเตอร์ที่ `NpcStatsVisibleToParty=false` ถูกซ่อนจาก prompt เสมอ** (ใช้
+    /// `CharacterStatsVisibility.IsVisibleTo` ตัวเดียวกับที่ `GET /campaigns/{id}/characters` ใช้ —
+    /// เกณฑ์ต้องตรงกันเป๊ะ ไม่ใช่สร้างเกณฑ์คู่ขนาน) เหตุผลเดียวกับที่กัน `DmNotes`/`Secrets` ไว้: ถ้าเลข
+    /// ที่ควรซ่อนอยู่ใน prompt Claude มีโอกาสพูดตัวเลขนั้นออกมาตอนตอบ narration ซึ่งหลุดไปหาผู้เล่นทันที
+    /// — ตรงข้ามกับหลักการที่ผู้เล่นต้องค้นหา AC/HP ศัตรูเอาเองในเกม (ดู `CharacterStatsVisibility`
+    /// doc comment) · เทิร์นของ DM (ผ่านผู้ช่วย DM) เห็นเลขเต็มเสมอ แต่นั่นเป็น prompt คนละก้อนใน
+    /// `AssistantPrompt` ไม่ใช่ก้อนนี้
     /// </summary>
-    private static async Task<string> BuildSystemPromptAsync(
-        DnDEzDbContext db, Campaign campaign, Guid sessionId, MessageAuthorType authorType)
+    private static async Task<string> BuildSystemPromptAsync(DnDEzDbContext db, Campaign campaign, Guid sessionId)
     {
         var sb = new StringBuilder();
         sb.AppendLine(
@@ -438,7 +387,6 @@ internal static class OrchestratorTurnRunner
 
         if (activeEncounter is not null)
         {
-            var isDmTurn = authorType == MessageAuthorType.Dm;
             var participants = await db.EncounterParticipants.AsNoTracking()
                 .Where(p => p.EncounterId == activeEncounter.Id)
                 .OrderBy(p => p.TurnOrder)
@@ -460,7 +408,7 @@ internal static class OrchestratorTurnRunner
                 foreach (var p in participants)
                 {
                     var turnMarker = p.Id == activeEncounter.CurrentParticipantId ? " (current turn)" : string.Empty;
-                    var statsVisible = CharacterStatsVisibility.IsVisibleTo(p.ControlledByDm, p.NpcStatsVisibleToParty, isDmTurn);
+                    var statsVisible = CharacterStatsVisibility.IsVisibleTo(p.ControlledByDm, p.NpcStatsVisibleToParty, callerIsDm: false);
                     var stats = statsVisible
                         ? $"HP {p.CurrentHp}/{p.MaxHp}, AC {p.ArmorClass}"
                         : "stats hidden from the party — never state exact numbers, describe its condition qualitatively instead (e.g. \"badly wounded\")";
@@ -472,11 +420,12 @@ internal static class OrchestratorTurnRunner
         return sb.ToString();
     }
 
-    private static async Task<List<AnthropicHistoryMessage>> BuildHistoryAsync(
-        DnDEzDbContext db, Guid sessionId, bool includeDmPrivate)
+    /// <summary>ประวัติที่ผู้เล่นเห็นอยู่แล้วเท่านั้น (`!DmPrivate`) — เทิร์นผู้เล่น broadcast จริง จึงห้าม
+    /// เห็นแถวลับของ DM เด็ดขาด ไม่ว่าใครเป็นคนกด (ดู `Message.DmPrivate`)</summary>
+    private static async Task<List<AnthropicHistoryMessage>> BuildHistoryAsync(DnDEzDbContext db, Guid sessionId)
     {
         var existingMessages = await db.Messages
-            .Where(m => m.SessionId == sessionId && (includeDmPrivate || !m.DmPrivate))
+            .Where(m => m.SessionId == sessionId && !m.DmPrivate)
             .OrderBy(m => m.CreatedAt)
             .Select(m => new { m.AuthorType, m.Content })
             .ToListAsync();
@@ -486,7 +435,7 @@ internal static class OrchestratorTurnRunner
             .ToList();
     }
 
-    internal static Message BuildAiMessage(Guid sessionId, string content, string? toolCallsJson, bool dmPrivate) => new()
+    internal static Message BuildAiMessage(Guid sessionId, string content, string? toolCallsJson) => new()
     {
         Id = Guid.NewGuid(),
         SessionId = sessionId,
@@ -496,7 +445,7 @@ internal static class OrchestratorTurnRunner
         Content = content,
         ToolCalls = toolCallsJson,
         Source = ActionSource.Ai,
-        DmPrivate = dmPrivate,
+        DmPrivate = false,
         CreatedAt = DateTimeOffset.UtcNow,
     };
 
@@ -712,8 +661,7 @@ internal static class OrchestratorTurnRunner
     }
 }
 
-// PendingProposalPayload อยู่ใน ConsultEndpoints.cs (ประกาศไว้ก่อนไฟล์นี้ถูกแตกออกมา) — เพิ่ม field
-// `SystemPrompt` ที่นั่นแล้วเช่นกัน (ดูเหตุผลใน doc comment ของ BuildSystemPromptAsync ด้านบน)
+// PendingProposalPayload อยู่ใน ProposalEndpoints.cs (ประกาศไว้ก่อนไฟล์นี้ถูกแตกออกมา)
 
 /// <summary>payload ที่ broadcast เข้า SignalR group ของแคมเปญ (ไม่ใช่ DM-only) ตอนมี Message ใหม่
 /// จาก player-action turn — ดู doc comment ของคลาสว่าทำไม DM consult ไม่ broadcast แบบนี้</summary>

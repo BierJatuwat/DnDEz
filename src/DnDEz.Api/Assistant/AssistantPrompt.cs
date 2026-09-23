@@ -63,8 +63,8 @@ internal static class AssistantPrompt
     }
 
     /// <summary>
-    /// บริบทแคมเปญที่รวมความลับ — ย้ายมาจาก `AdvisorEndpoints` (ที่ปรึกษาเดิมเรียกตัวนี้จนกว่าจะถูกลบ)
-    /// · ยังกรอง `ReviewStatus.Approved` ตาม PROJECT-CONTEXT §2: "เห็นความลับได้" ไม่ได้แปลว่า
+    /// บริบทแคมเปญที่รวมความลับ — เดิมย้ายมาจาก `AdvisorEndpoints` (ถูกลบไปแล้วหลังผู้ช่วย DM ช่องเดียว
+    /// แทนที่ครบ) · ยังกรอง `ReviewStatus.Approved` ตาม PROJECT-CONTEXT §2: "เห็นความลับได้" ไม่ได้แปลว่า
     /// "เห็นของที่ยังไม่ผ่าน review ได้"
     /// </summary>
     internal static async Task<Guid?> AppendCampaignContextAsync(StringBuilder sb, DnDEzDbContext db, Campaign campaign)

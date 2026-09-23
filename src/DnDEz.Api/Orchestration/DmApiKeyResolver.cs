@@ -7,14 +7,13 @@ using Microsoft.EntityFrameworkCore;
 namespace DnDEz.Api.Orchestration;
 
 /// <summary>
-/// ดึงคีย์ BYOK ของ DM ออกมาใช้งาน (2026-09-22 — แยกออกมาจาก <c>ConsultEndpoints</c> ตอน Part C
-/// เพราะมีจุดเรียกครบ 3 ที่แล้ว: `/consult`, resolve-proposal, และ `/advisor` ตัวใหม่ — เป็นการรวม
-/// ของซ้ำจริง ไม่ใช่ abstraction ดักหน้า)
+/// ดึงคีย์ BYOK ของ DM ออกมาใช้งาน (2026-09-22 — แยกออกมาจากไฟล์ endpoint ตอนมีจุดเรียกหลายที่ — เป็นการ
+/// รวมของซ้ำจริง ไม่ใช่ abstraction ดักหน้า) **2026-09-23** เหลือจุดเรียก 2 ที่: resolve-proposal
+/// (<c>ProposalEndpoints</c>) และผู้ช่วย DM ช่องเดียว (<c>AssistantEndpoints</c>)
 ///
 /// ⚠️ **ผู้เรียกต้องยืนยันก่อนแล้วว่า caller คือ DM เจ้าของแคมเปญ** — RLS ของ `api_keys`
 /// (`own_rows_only`) กรองด้วย `app.user_id` ของผู้เรียกเท่านั้น ถ้าเรียกด้วย user ที่ไม่ใช่เจ้าของคีย์
-/// query จะว่างเปล่าเสมอ (ไม่ใช่ error) — ดู doc comment ของ <c>ConsultEndpoints</c> สำหรับเหตุผลเต็ม
-/// ว่าทำไมทุก endpoint ที่ใช้คีย์นี้ถึงต้องเป็น DM-only
+/// query จะว่างเปล่าเสมอ (ไม่ใช่ error) — ทุก endpoint ที่ใช้คีย์นี้จึงต้องเป็น DM-only
 /// </summary>
 internal static class DmApiKeyResolver
 {

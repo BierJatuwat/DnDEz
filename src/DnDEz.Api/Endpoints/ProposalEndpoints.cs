@@ -14,33 +14,35 @@ using Microsoft.EntityFrameworkCore;
 namespace DnDEz.Api.Endpoints;
 
 /// <summary>
-/// Sprint D Part 2/3 — tool-calling loop + approval gate: narration → tool_use (roll_dice) → (ตัดสิน
-/// จาก `AutonomySetting` ว่า auto-execute ทันทีหรือรอ DM approve ก่อน) → tool_result → narration
+/// คิว proposal ของเทิร์นผู้เล่น (Sprint D Part 3) — approval gate: narration → tool_use (roll_dice) →
+/// (ตัดสินจาก `AutonomySetting` ว่า auto-execute ทันทีหรือรอ DM approve ก่อน) → tool_result → narration
 ///
-/// contract เต็มอยู่ใน <c>tests/DnDEz.Api.Tests/ConsultEndpointsTests.cs</c> — ห้ามแก้เทสต์เพื่อให้ผ่าน
+/// **2026-09-23** — เดิมไฟล์นี้ (`ConsultEndpoints`) มี `POST .../consult` ให้ DM คุยกับ AI ด้วย ตอนนี้
+/// ถูกแทนที่ทั้งหมดด้วยผู้ช่วย DM ช่องเดียว (`AssistantEndpoints`, ดู `AssistantRunner`) ที่ทำได้ทั้งถาม
+/// ข้อมูลและสั่งงานหลายขั้น ส่วนที่เหลืออยู่ในไฟล์นี้คือ**คิว proposal ของเทิร์นผู้เล่น** (`/actions`) ล้วน
+/// ๆ — เมื่อ AI เจอ action ของผู้เล่นที่อยาก roll_dice แต่ dial เป็น Suggest จะสร้างเป็น proposal รอ DM
+/// อนุมัติที่นี่ (ผู้ช่วย DM ใช้กลไกอนุมัติของตัวเอง คนละกลไกกับตารางนี้ ดู `ToolGate` ใน `AssistantTools`)
 ///
-/// ขอบเขต (ดู PROJECT-CONTEXT §4 "Sprint D" Part 2/3):
-///  • **จำกัดผู้เรียกไว้แค่ DM (campaign owner) เท่านั้น** ทั้ง consult และ resolve-proposal —
-///    เหตุผลไม่ใช่แค่ product design ("quick play ใช้ key ของ DM เท่านั้น" ตาม dm-side-design.md §7)
-///    แต่เป็นเหตุผลทาง RLS ล้วน ๆ: RLS ของ `api_keys` (`own_rows_only`) กรองด้วย `app.user_id` ของ
-///    **ผู้เรียก** เท่านั้น ถ้าเปิดให้ player เรียกได้ query หา "key ของ DM" จะโดน RLS กรองว่างเปล่า
-///    เสมอ (เว้นแต่ทำ `SECURITY DEFINER` function แบบ `app_create_campaign()` ซึ่งเกินขอบเขต skeleton)
+/// contract เต็มอยู่ใน <c>tests/DnDEz.Api.Tests/ProposalEndpointsTests.cs</c> — ห้ามแก้เทสต์เพื่อให้ผ่าน
+///
+/// ขอบเขต:
+///  • **จำกัดผู้เรียกไว้แค่ DM (campaign owner) เท่านั้น** — เหตุผลไม่ใช่แค่ product design แต่เป็น
+///    เหตุผลทาง RLS ล้วน ๆ: RLS ของ `api_keys` (`own_rows_only`) กรองด้วย `app.user_id` ของ**ผู้เรียก**
+///    เท่านั้น ถ้าเปิดให้ player เรียกได้ query หา "key ของ DM" จะโดน RLS กรองว่างเปล่าเสมอ
 ///  • **จำกัด 1 รอบ tool round-trip เท่านั้น** ต่อการ resolve หนึ่งครั้ง — ยังไม่ใช่ agentic loop
-///    เต็มรูปที่ Claude เรียก tool ต่อเนื่องได้หลายครั้งในเทิร์นเดียว
+///    เต็มรูปที่ Claude เรียก tool ต่อเนื่องได้หลายครั้งในเทิร์นเดียว (ผู้ช่วย DM ทำแบบนั้นได้แล้วแยกต่างหาก)
 ///  • เรียก Anthropic จริงไม่ได้ในเทสต์อัตโนมัติ — เทสต์ทั้งหมดสลับ `IAnthropicClient` เป็น fake
 ///    (ดู tests/DnDEz.Api.Tests/Fakes/FakeAnthropicClient.cs) ไม่มีการยิง HTTP ออกไปจริงในเทสต์เลย
 ///
-/// **Approval gate (Part 3)** — ผูกกับ `AutonomySetting.Subsystem = RulesCombat` ของแคมเปญ:
+/// **Approval gate** — ผูกกับ `AutonomySetting.Subsystem = RulesCombat` ของแคมเปญ:
 ///  • ไม่มีแถว `AutonomySetting` เลย (ยังไม่เคยตั้งค่า) → ถือว่าเป็น `Suggest` (default เดียวกับที่
-///    entity ประกาศไว้เอง — campaign ใหม่ทุกอันยังไม่ seed แถวนี้ให้ตั้งแต่ Sprint A จึงเป็น default
-///    จริงของทุกแคมเปญตอนนี้)
-///  • `Manual` → ไม่เสนอ tool `roll_dice` ให้ Claude เห็นเลย (Claude ตอบ narration ล้วน ๆ ไม่มีทาง
-///    เรียก tool ได้แม้จะอยากทำ)
+///    entity ประกาศไว้เอง)
+///  • `Manual` → ไม่เสนอ tool `roll_dice` ให้ Claude เห็นเลย
 ///  • `Suggest` → ถ้า Claude อยากเรียก tool จะ**ไม่ execute ทันที** สร้างเป็น `Proposal` (Pending)
 ///    แทน + broadcast แจ้ง DM console ผ่าน SignalR (`ProposalCreated`) DM ต้องเรียก
 ///    `POST .../proposals/{id}/resolve` เองถึงจะ execute จริง — narration ที่ Claude พูดก่อนจะ
 ///    เรียก tool (ถ้ามี) เก็บไว้เป็น `Proposal.Reason` ให้ DM เห็นบริบท
-///  • `Autonomous` → execute ทันทีเหมือน Part 2 เดิม ไม่ต้องรอใคร confirm
+///  • `Autonomous` → execute ทันทีไม่ต้องรอใคร confirm
 ///
 /// จุดที่ห้ามพลาด:
 ///  • roll_dice ที่ AI เรียกต้อง persist เป็นแถว `dice_rolls` จริงเหมือนทุกการทอยในระบบนี้ (PROJECT-
@@ -49,75 +51,13 @@ namespace DnDEz.Api.Endpoints;
 ///    Suggest ด้วย — ห้ามทอยดักไว้ล่วงหน้าตอนสร้าง Proposal เด็ดขาด (ยังไม่รู้ผลจนกว่า DM จะ approve
 ///    จริง ไม่งั้นผลจะรั่วให้ AI/DM เห็นก่อน approve ซึ่งขัดกับความหมายของการ "รอ approve")**
 ///  • expression ที่ AI ส่งมาผิดรูปแบบต้องกลายเป็น tool_result ข้อความ error ไม่ใช่โยน exception
-///  • broadcast (`ProposalCreated`) wrap ด้วย try/catch log-and-swallow เหมือนที่แก้ไว้ใน Sprint C
-///    Part 3 — broadcast fail ต้องไม่ทำให้ Proposal ที่ persist สำเร็จไปแล้วถูก rollback
+///  • broadcast (`ProposalCreated`) wrap ด้วย try/catch log-and-swallow — broadcast fail ต้องไม่ทำให้
+///    Proposal ที่ persist สำเร็จไปแล้วถูก rollback
 /// </summary>
-public static class ConsultEndpoints
+public static class ProposalEndpoints
 {
-    private const int MaxContentLength = 4000;
-
-    public static void MapConsultEndpoints(this WebApplication app)
+    public static void MapProposalEndpoints(this WebApplication app)
     {
-        app.MapPost("/campaigns/{campaignId:guid}/sessions/{sessionId:guid}/consult", async (
-            Guid campaignId,
-            Guid sessionId,
-            ConsultRequest request,
-            ClaimsPrincipal principal,
-            DnDEzDbContext db,
-            IDataProtectionProvider dataProtectionProvider,
-            IAnthropicClient anthropicClient,
-            IHubContext<CampaignHub> hubContext,
-            ILoggerFactory loggerFactory) =>
-        {
-            // ConsultEndpoints เป็น static class จึงใช้เป็น type argument ของ ILogger<T> ไม่ได้
-            // (CS0718) — สร้าง logger ผ่าน ILoggerFactory.CreateLogger(Type) แทน (เหมือน CombatEndpoints)
-            var logger = loggerFactory.CreateLogger(typeof(ConsultEndpoints));
-
-            if (string.IsNullOrWhiteSpace(request.Content))
-            {
-                return Results.BadRequest();
-            }
-
-            var content = request.Content.Trim();
-            if (content.Length > MaxContentLength)
-            {
-                return Results.BadRequest();
-            }
-
-            var callerUserId = principal.GetUserId();
-            if (callerUserId is null)
-            {
-                return Results.Unauthorized();
-            }
-
-            var (campaign, failure) = await CampaignAuthorization.RequireCampaignDmAsync(db, campaignId, callerUserId.Value);
-            if (failure is not null)
-            {
-                return failure;
-            }
-
-            var sessionExists = await db.Sessions.AnyAsync(s => s.Id == sessionId && s.CampaignId == campaignId);
-            if (!sessionExists)
-            {
-                return Results.NotFound();
-            }
-
-            var rawApiKey = await DmApiKeyResolver.ResolveAsync(db, dataProtectionProvider, callerUserId.Value);
-            if (rawApiKey is null)
-            {
-                return Results.BadRequest(new ConsultErrorResponse("dm_api_key_not_set"));
-            }
-
-            // broadcastActionMessages: false — ดู doc comment ของ OrchestratorTurnRunner ว่าทำไม
-            // DM consult ห้าม broadcast เนื้อหาเข้ากลุ่มแคมเปญ (อาจมีคำถาม/สปอยล์ส่วนตัวของ DM ปนอยู่)
-            var result = await OrchestratorTurnRunner.RunTurnAsync(
-                db, anthropicClient, hubContext, logger, campaign!, sessionId, rawApiKey, content,
-                MessageAuthorType.Dm, ActionSource.DmOverride, callerUserId.Value, characterId: null,
-                broadcastActionMessages: false);
-
-            return Results.Ok(result);
-        }).RequireAuthorization();
-
         app.MapPost("/campaigns/{campaignId:guid}/proposals/{proposalId:guid}/resolve", async (
             Guid campaignId,
             Guid proposalId,
@@ -239,9 +179,7 @@ public static class ConsultEndpoints
                 new { name = toolCallResponse.Name, input = toolCallResponse.Input, result = toolCallResponse.Result },
             });
 
-            // proposal ที่เก่ากว่าคอลัมน์ `OriginDmPrivate` (null) ถือว่าลับไว้ก่อน — fail closed
-            var aiMessage = OrchestratorTurnRunner.BuildAiMessage(
-                proposal.SessionId, secondTurn.Text, toolCallsJson, payload.OriginDmPrivate ?? true);
+            var aiMessage = OrchestratorTurnRunner.BuildAiMessage(proposal.SessionId, secondTurn.Text, toolCallsJson);
             db.Messages.Add(aiMessage);
             await db.SaveChangesAsync();
 
@@ -293,10 +231,7 @@ public static class ConsultEndpoints
         }).RequireAuthorization();
     }
 
-    // GetActiveDmApiKeyAsync ย้ายไป `DmApiKeyResolver` (2026-09-22) ตอนมีจุดเรียกที่ 3 คือ `/advisor`
 }
-
-internal record ConsultRequest(string? Content);
 
 internal record ConsultErrorResponse(string Error);
 
@@ -315,19 +250,19 @@ internal record ProposalResolutionResponse(
 
 /// <summary>เก็บใน Proposal.ToolCallJson ระหว่างรอ DM approve — ต้องมีครบทุกอย่างที่ต้องใช้ resume
 /// บทสนทนาต่อได้โดยไม่ต้องพึ่ง state อื่นที่อาจเปลี่ยนไปแล้วระหว่างรอ (เช่น messages ใหม่ที่เพิ่มมาคั่น)
-/// <c>SystemPrompt</c> (2026-09-22) ต้องเป็นค่าเดียวกับตอน `SendTurnAsync` รอบแรกเป๊ะ — ห้ามประกอบใหม่
-/// ตอน resolve เพราะ roster/beat อาจเปลี่ยนไปแล้วระหว่างรอ DM approve (เช่น มีคนตายกลางทาง)
-/// <c>OriginDmPrivate</c> (2026-09-23) — เทิร์นต้นทางเป็นช่องลับของ DM (`/consult`) หรือเทิร์นผู้เล่น
-/// ที่ broadcast · คำตอบ AI หลัง approve ต้องได้ `Message.DmPrivate` ตามต้นทาง ไม่ใช่ตามคนกด approve
-/// (ซึ่งเป็น DM เสมอ)</summary>
+/// <c>SystemPrompt</c> ต้องเป็นค่าเดียวกับตอน `SendTurnAsync` รอบแรกเป๊ะ — ห้ามประกอบใหม่ตอน resolve
+/// เพราะ roster/beat อาจเปลี่ยนไปแล้วระหว่างรอ DM approve (เช่น มีคนตายกลางทาง)
+///
+/// **2026-09-23** — ไม่มี `OriginDmPrivate` แล้ว: proposal มาจากเทิร์นผู้เล่น (`/actions`) เท่านั้น
+/// (ช่องส่วนตัวของ DM ย้ายไปผู้ช่วย DM ที่ไม่ใช้ตาราง `proposals`) คำตอบหลัง approve จึงเป็นสาธารณะเสมอ
+/// ดู `OrchestratorTurnRunner.BuildAiMessage`</summary>
 internal record PendingProposalPayload(
     string ToolName,
     JsonElement ToolInput,
     string ToolUseId,
     JsonElement RawAssistantContent,
     List<AnthropicHistoryMessage> History,
-    string? SystemPrompt,
-    bool? OriginDmPrivate = null);
+    string? SystemPrompt);
 
 internal record ProposalCreatedBroadcast(
     Guid ProposalId, Guid SessionId, string Subsystem, string ToolName, JsonElement ToolInput, string? Reason);

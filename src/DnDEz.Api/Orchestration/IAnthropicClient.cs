@@ -13,7 +13,7 @@ namespace DnDEz.Api.Orchestration;
 /// ให้เสร็จในตัว) มาแยกเป็น 2 เมธอด เพราะ **approval gate (Suggest level) ต้องหยุดรอระหว่าง "ได้ยินว่า
 /// Claude อยากเรียก tool" กับ "tool ถูก execute จริง"** — ช่วงรอนี้อาจกินเวลาข้าม HTTP request (DM
 /// ต้องกด approve ทีหลัง) จึงต้องมีจุดตัดที่ endpoint หยุดแล้ว persist state ไว้ก่อนได้ (ดู `Proposal`
-/// entity + `ConsultEndpoints.MapConsultEndpoints`)
+/// entity + `ProposalEndpoints.MapProposalEndpoints`)
 /// </summary>
 public interface IAnthropicClient
 {

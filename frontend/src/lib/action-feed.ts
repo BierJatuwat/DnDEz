@@ -40,8 +40,7 @@ export function normalizeActionMessageCreated(payload: unknown): ActionMessage |
 const MAX_FEED_LENGTH = 50;
 
 /**
- * เติมข้อความใหม่ท้าย feed (เรียงเก่า -> ใหม่ เหมือน consultMessages ใน console-store) dedupe
- * ด้วย id + cap ความยาวไว้ที่ MAX_FEED_LENGTH (pattern เดียวกับ console-store.appendConsultMessage)
+ * เติมข้อความใหม่ท้าย feed (เรียงเก่า -> ใหม่) dedupe ด้วย id + cap ความยาวไว้ที่ MAX_FEED_LENGTH
  * กัน feed ยาวไม่จำกัดถ้า session เปิดค้างไว้นาน ๆ
  */
 export function appendActionMessage(

@@ -19,7 +19,7 @@ namespace DnDEz.Api.Endpoints;
 /// (ดู `OrchestratorTurnRunner`) เมื่อ DM ถามอะไรที่ recap ตอบไม่ได้
 ///
 /// **DM-only ทุก endpoint** — เนื้อหาบันทึกมีความลับของแคมเปญปนได้เสมอ โดยเฉพาะรายการที่ AI สรุปให้
-/// (AI เห็น `StoryBeat.DmNotes`/`Secrets` ผ่าน `/advisor`) · ชั้น DB ก็ปิดซ้ำด้วย policy `dm_only`
+/// (AI เห็น `StoryBeat.DmNotes`/`Secrets` ผ่านผู้ช่วย DM) · ชั้น DB ก็ปิดซ้ำด้วย policy `dm_only`
 /// ในย migration `AddCampaignJournalEntries` (defense in depth ไม่ใช่พึ่งเช็คใน C# ชั้นเดียว)
 /// </summary>
 public static class CampaignJournalEndpoints

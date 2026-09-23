@@ -12,17 +12,17 @@ namespace DnDEz.Api.Tests;
 
 /// <summary>
 /// Part B ของแผน "DM AI Assistant — session-context grounding" (2026-09-22) — tool อ่านอย่างเดียว
-/// `lookup_rule`/`lookup_monster` ที่ `OrchestratorTurnRunner` เสนอให้ Claude เรียกผ่าน `/consult`
-/// (path เดียวกับ `roll_dice` แต่**ไม่ผ่าน `AutonomySetting`/`Proposal` gate เลย** — อ่านอย่างเดียว
-/// ไม่มี state ให้พัง ดู doc comment ของ `OrchestratorTurnRunner` ส่วน Part B)
+/// `lookup_rule`/`lookup_monster` ที่ `OrchestratorTurnRunner` เสนอให้ Claude เรียกผ่านเทิร์นผู้เล่น
+/// (`/actions`) — เหมือน `roll_dice` แต่**ไม่ผ่าน `AutonomySetting`/`Proposal` gate เลย** — อ่านอย่างเดียว
+/// ไม่มี state ให้พัง ดู doc comment ของ `OrchestratorTurnRunner`
 ///
 /// อาศัยข้อมูล SRD จริงที่ migration `ImportSrd521`/`AddSrdThaiTranslations` seed ไว้แล้วในฐานนี้
 /// (330 มอนสเตอร์ + 380 รายการกฎ/เวท/สถานะ) — ไม่ต้อง seed เอง เหมือนที่ `SrdTranslationTests.cs`
 /// ทำ · seed เฉพาะที่เป็น per-campaign override (`monster_stat_blocks`) เอง
 ///
-/// **ห้ามยิง HTTP จริงไปหา Anthropic** — สลับ `IAnthropicClient` เป็น `FakeAnthropicClient` เหมือน
-/// `ConsultEndpointsTests` ทั้งไฟล์ (ดู doc comment ของ `FakeAnthropicClient` สำหรับ trigger keyword
-/// `lookup-rule:<key>` / `lookup-monster:<key>`)
+/// **ห้ามยิง HTTP จริงไปหา Anthropic** — สลับ `IAnthropicClient` เป็น `FakeAnthropicClient` ทั้งไฟล์
+/// (ดู doc comment ของ `FakeAnthropicClient` สำหรับ trigger keyword `lookup-rule:<key>` /
+/// `lookup-monster:<key>`)
 /// </summary>
 public class LookupToolsEndpointTests : IAsyncLifetime
 {
@@ -36,13 +36,15 @@ public class LookupToolsEndpointTests : IAsyncLifetime
 
     private readonly string _suffix = Guid.NewGuid().ToString("N");
 
-    // แคมเปญหลัก — ไม่ seed AutonomySetting เลย = default Suggest (เหมือน ConsultEndpointsTests)
+    // แคมเปญหลัก — ไม่ seed AutonomySetting เลย = default Suggest
     private readonly Guid _campaignId = Guid.NewGuid();
     private readonly Guid _sessionId = Guid.NewGuid();
+    private readonly Guid _heroId = Guid.NewGuid();
 
     // RulesCombat=Manual — ทดสอบว่า lookup tool ยังถูกเสนออยู่แม้ roll_dice ถูกตัดออก
     private readonly Guid _campaignManualId = Guid.NewGuid();
     private readonly Guid _sessionManualId = Guid.NewGuid();
+    private readonly Guid _heroManualId = Guid.NewGuid();
 
     private WebApplicationFactory<Program> _factory = null!;
     private FakeAnthropicClient _fakeAnthropicClient = null!;
@@ -74,6 +76,10 @@ public class LookupToolsEndpointTests : IAsyncLifetime
         await InsertSessionAsync(conn, _sessionId, _campaignId);
         await InsertSessionAsync(conn, _sessionManualId, _campaignManualId);
         await InsertAutonomySettingAsync(conn, _campaignManualId, "RulesCombat", "Manual");
+        // ยิงผ่านเทิร์นผู้เล่นจริง (`/actions`) — DM เป็นเจ้าของตัวละครนี้ได้เหมือนผู้เล่นทั่วไป
+        // (RequireCharacterOwnerAsync เช็คแค่ OwnerUserId ไม่สนใจ role)
+        await InsertCharacterAsync(conn, _heroId, _campaignId, _dmUserId, "Lookup Hero");
+        await InsertCharacterAsync(conn, _heroManualId, _campaignManualId, _dmUserId, "Manual Hero");
 
         var putKeyResponse = await AuthedClient().PutAsJsonAsync(
             "/users/me/api-keys/anthropic", new { ApiKey = DmValidApiKey });
@@ -83,11 +89,11 @@ public class LookupToolsEndpointTests : IAsyncLifetime
     // ── lookup_rule — ต้นฉบับ SRD จริงในฐาน ────────────────────────────────
 
     [Fact]
-    public async Task Consult_lookup_rule_tool_returns_real_srd_content_for_known_condition_key()
+    public async Task PlayerAction_lookup_rule_tool_returns_real_srd_content_for_known_condition_key()
     {
         var response = await AuthedClient().PostAsJsonAsync(
-            $"/campaigns/{_campaignId}/sessions/{_sessionId}/consult",
-            new { Content = "lookup-rule:blinded please" });
+            $"/campaigns/{_campaignId}/sessions/{_sessionId}/actions",
+            new { CharacterId = _heroId, Content = "lookup-rule:blinded please" });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<ConsultResponse>(JsonOptions);
@@ -101,11 +107,11 @@ public class LookupToolsEndpointTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Consult_lookup_rule_tool_with_unknown_key_returns_error_string_not_500()
+    public async Task PlayerAction_lookup_rule_tool_with_unknown_key_returns_error_string_not_500()
     {
         var response = await AuthedClient().PostAsJsonAsync(
-            $"/campaigns/{_campaignId}/sessions/{_sessionId}/consult",
-            new { Content = "lookup-rule:not-a-real-srd-key-at-all please" });
+            $"/campaigns/{_campaignId}/sessions/{_sessionId}/actions",
+            new { CharacterId = _heroId, Content = "lookup-rule:not-a-real-srd-key-at-all please" });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<ConsultResponse>(JsonOptions);
@@ -116,11 +122,11 @@ public class LookupToolsEndpointTests : IAsyncLifetime
     // ── lookup_monster — SRD default vs campaign override ──────────────────
 
     [Fact]
-    public async Task Consult_lookup_monster_tool_returns_srd_default_when_campaign_has_no_override()
+    public async Task PlayerAction_lookup_monster_tool_returns_srd_default_when_campaign_has_no_override()
     {
         var response = await AuthedClient().PostAsJsonAsync(
-            $"/campaigns/{_campaignId}/sessions/{_sessionId}/consult",
-            new { Content = "lookup-monster:goblin-warrior please" });
+            $"/campaigns/{_campaignId}/sessions/{_sessionId}/actions",
+            new { CharacterId = _heroId, Content = "lookup-monster:goblin-warrior please" });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<ConsultResponse>(JsonOptions);
@@ -130,7 +136,7 @@ public class LookupToolsEndpointTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Consult_lookup_monster_tool_prefers_campaign_override_over_srd_default()
+    public async Task PlayerAction_lookup_monster_tool_prefers_campaign_override_over_srd_default()
     {
         var monsterId = Guid.NewGuid();
         await using var conn = new NpgsqlConnection(OwnerConnectionString);
@@ -146,8 +152,8 @@ public class LookupToolsEndpointTests : IAsyncLifetime
             ("id", monsterId), ("c", _campaignId), ("srdKey", "goblin-warrior"));
 
         var response = await AuthedClient().PostAsJsonAsync(
-            $"/campaigns/{_campaignId}/sessions/{_sessionId}/consult",
-            new { Content = "lookup-monster:goblin-warrior please" });
+            $"/campaigns/{_campaignId}/sessions/{_sessionId}/actions",
+            new { CharacterId = _heroId, Content = "lookup-monster:goblin-warrior please" });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<ConsultResponse>(JsonOptions);
@@ -158,11 +164,11 @@ public class LookupToolsEndpointTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Consult_lookup_monster_tool_with_unknown_key_returns_error_string_not_500()
+    public async Task PlayerAction_lookup_monster_tool_with_unknown_key_returns_error_string_not_500()
     {
         var response = await AuthedClient().PostAsJsonAsync(
-            $"/campaigns/{_campaignId}/sessions/{_sessionId}/consult",
-            new { Content = "lookup-monster:not-a-real-monster-key please" });
+            $"/campaigns/{_campaignId}/sessions/{_sessionId}/actions",
+            new { CharacterId = _heroId, Content = "lookup-monster:not-a-real-monster-key please" });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<ConsultResponse>(JsonOptions);
@@ -173,12 +179,12 @@ public class LookupToolsEndpointTests : IAsyncLifetime
     // ── gate/offer semantics — จุดที่ต่างจาก roll_dice โดยตั้งใจ ─────────────
 
     [Fact]
-    public async Task Consult_lookup_tools_are_offered_and_executed_even_under_manual_autonomy()
+    public async Task PlayerAction_lookup_tools_are_offered_and_executed_even_under_manual_autonomy()
     {
         // Manual ตัด roll_dice ออกจากที่เสนอ แต่ lookup tool อ่านอย่างเดียว ไม่เกี่ยวกับ dial นี้เลย
         var response = await AuthedClient().PostAsJsonAsync(
-            $"/campaigns/{_campaignManualId}/sessions/{_sessionManualId}/consult",
-            new { Content = "lookup-rule:blinded please" });
+            $"/campaigns/{_campaignManualId}/sessions/{_sessionManualId}/actions",
+            new { CharacterId = _heroManualId, Content = "lookup-rule:blinded please" });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<ConsultResponse>(JsonOptions);
@@ -188,11 +194,11 @@ public class LookupToolsEndpointTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Consult_roll_dice_is_not_offered_under_manual_autonomy_even_though_lookup_tools_are()
+    public async Task PlayerAction_roll_dice_is_not_offered_under_manual_autonomy_even_though_lookup_tools_are()
     {
         var response = await AuthedClient().PostAsJsonAsync(
-            $"/campaigns/{_campaignManualId}/sessions/{_sessionManualId}/consult",
-            new { Content = "please roll for it" });
+            $"/campaigns/{_campaignManualId}/sessions/{_sessionManualId}/actions",
+            new { CharacterId = _heroManualId, Content = "please roll for it" });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<ConsultResponse>(JsonOptions);
@@ -226,6 +232,20 @@ public class LookupToolsEndpointTests : IAsyncLifetime
             "INSERT INTO sessions (id, campaign_id, mode, status, join_code, started_at, ended_at) " +
             "VALUES (@id, @campaignId, 'Online', 'Active', NULL, now(), NULL)",
             ("id", id), ("campaignId", campaignId));
+
+    private static async Task InsertCharacterAsync(
+        NpgsqlConnection conn, Guid id, Guid campaignId, Guid ownerUserId, string name) =>
+        await ExecAsync(conn,
+            """
+            INSERT INTO characters
+                (id, campaign_id, owner_user_id, name, sheet, current_hp, max_hp, current_temp_hp,
+                 armor_class, damage_resistances, damage_vulnerabilities, damage_immunities, level,
+                 controlled_by_dm, harvest_consent, is_orphan, created_at)
+            VALUES
+                (@id, @campaignId, @ownerUserId, @name, '{}', 20, 20, 0, 10, ARRAY[]::text[],
+                 ARRAY[]::text[], ARRAY[]::text[], 1, false, false, false, now())
+            """,
+            ("id", id), ("campaignId", campaignId), ("ownerUserId", ownerUserId), ("name", name));
 
     private static async Task InsertAutonomySettingAsync(
         NpgsqlConnection conn, Guid campaignId, string subsystem, string level) =>

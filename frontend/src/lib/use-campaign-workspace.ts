@@ -49,8 +49,6 @@ export function useCampaignWorkspace(campaignId: string) {
   const hubStatus = useConsoleStore((s) => s.hubStatus);
   const log = useConsoleStore((s) => s.log);
   const rollExpression = useConsoleStore((s) => s.rollExpression);
-  const consultInput = useConsoleStore((s) => s.consultInput);
-  const consultMessages = useConsoleStore((s) => s.consultMessages);
   const actionInput = useConsoleStore((s) => s.actionInput);
   const actionFeed = useConsoleStore((s) => s.actionFeed);
   const reactionPrompt = useConsoleStore((s) => s.reactionPrompt);
@@ -60,8 +58,6 @@ export function useCampaignWorkspace(campaignId: string) {
   const setJoinedCampaignId = useConsoleStore((s) => s.setJoinedCampaignId);
   const setHubStatus = useConsoleStore((s) => s.setHubStatus);
   const setRollExpression = useConsoleStore((s) => s.setRollExpression);
-  const setConsultInput = useConsoleStore((s) => s.setConsultInput);
-  const appendConsultMessage = useConsoleStore((s) => s.appendConsultMessage);
   const appendLog = useConsoleStore((s) => s.appendLog);
   const setActionInput = useConsoleStore((s) => s.setActionInput);
   const appendActionFeedMessage = useConsoleStore((s) => s.appendActionFeedMessage);
@@ -178,45 +174,6 @@ export function useCampaignWorkspace(campaignId: string) {
     },
   });
 
-  const consult = useMutation({
-    mutationFn: (content: string) =>
-      apiFetch<ConsultResponse>(
-        `/campaigns/${campaignId}/sessions/${selectedSessionId}/consult`,
-        { method: "POST", token, body: { content } },
-      ),
-    onSuccess: (result) => {
-      // response มีได้สามแบบไม่ทับกัน: narration ล้วน / tool รันอัตโนมัติแล้ว / รอ proposal อนุมัติ
-      if (result.content) {
-        appendConsultMessage("ai", result.content);
-      }
-      if (result.pending) {
-        appendConsultMessage(
-          "system",
-          `สร้างคำขอ "${result.pending.toolName}" รอการอนุมัติแล้ว — ดูรายละเอียดที่คิว proposal ด้านล่าง`,
-        );
-      }
-      if (result.toolCall) {
-        appendConsultMessage(
-          "system",
-          `รันเครื่องมือ "${result.toolCall.name}" ให้อัตโนมัติแล้ว ผลลัพธ์: ${JSON.stringify(
-            result.toolCall.result,
-          )}`,
-        );
-      }
-    },
-    onError: (err) => {
-      if (err instanceof ApiError) {
-        // dev env นี้อาจยังไม่มีใครตั้งค่า BYOK key จริง endpoint นี้จึงมีโอกาสสูงที่จะ error
-        // ต้อง log ให้อ่านออกเสมอ ห้ามเงียบ
-        if (err.status === 403) {
-          appendLog("ปรึกษา AI ไม่สำเร็จ: DM เท่านั้นที่ใช้งานได้");
-        } else {
-          appendLog(`ปรึกษา AI ไม่สำเร็จ: HTTP ${err.status}`);
-        }
-      }
-    },
-  });
-
   // Sprint E Part 3 — player action input: ปุ่ม/free text ทั้งสองทางส่ง content เดียวกันมาที่นี่
   // (ดู player-side-design.md §2 — ปุ่มเป็นแค่ template ข้อความ ไม่ใช่เส้นทางแยก) ไหลเข้า
   // orchestrator เดียวกับ /consult ฝั่ง API (OrchestratorTurnRunner) แต่ auth เป็นเจ้าของตัวละคร
@@ -259,8 +216,10 @@ export function useCampaignWorkspace(campaignId: string) {
         removeProposal(old, variables.proposalId),
       );
       appendLog(`${variables.action === "approve" ? "อนุมัติ" : "ปฏิเสธ"} proposal สำเร็จ`);
+      // ผลของ AI หลัง approve เคยแสดงใน consultMessages (ช่องปรึกษา AI เดิมที่ถูกลบไปแล้ว) — ตอนนี้ไม่มี
+      // ที่แสดงบทสนทนาแบบนั้นในหน้า DM แล้ว log ไว้ให้เห็นอย่างน้อยว่า AI ตอบว่าอะไร
       if (variables.action === "approve" && result.content) {
-        appendConsultMessage("ai", result.content);
+        appendLog(`AI: ${result.content}`);
       }
     },
     onError: (err, variables) => {
@@ -400,10 +359,6 @@ export function useCampaignWorkspace(campaignId: string) {
     log,
     rollExpression,
     setRollExpression,
-    consultInput,
-    setConsultInput,
-    consultMessages,
-    appendConsultMessage,
     actionInput,
     setActionInput,
     actionFeed,
@@ -413,7 +368,6 @@ export function useCampaignWorkspace(campaignId: string) {
     createCharacter,
     rollDice,
     setAutonomyLevel,
-    consult,
     postAction,
     resolveProposal,
   };

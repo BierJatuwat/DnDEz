@@ -301,14 +301,14 @@ public class SessionSummaryEndpointsTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Advisor_picks_up_the_generated_dm_recap_as_memory()
+    public async Task Assistant_picks_up_the_generated_dm_recap_as_memory()
     {
-        // ปิดวง: `/advisor` อ่าน recap ล่าสุดเข้า system prompt มาตั้งแต่ Part C แต่ไม่เคยมีอะไรเขียน
+        // ปิดวง: ผู้ช่วย DM อ่าน recap ล่าสุดเข้า system prompt แต่ก่อนหน้านี้ไม่เคยมีอะไรเขียนลงเลย
         await GenerateRecapAsync(_sessionId);
 
-        var advisor = await AuthedClient(_dmToken).PostAsJsonAsync(
-            $"/campaigns/{_campaignId}/advisor", new { Content = "ตอนที่แล้วเกิดอะไรขึ้นบ้าง" });
-        Assert.Equal(HttpStatusCode.OK, advisor.StatusCode);
+        var assistant = await AuthedClient(_dmToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignId}/assistant", new { Content = "ตอนที่แล้วเกิดอะไรขึ้นบ้าง" });
+        Assert.Equal(HttpStatusCode.OK, assistant.StatusCode);
 
         Assert.Contains(SecretMarker, _fake.LastSystemPromptReceived);
     }

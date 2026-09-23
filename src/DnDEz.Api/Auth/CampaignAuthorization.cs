@@ -11,8 +11,9 @@ namespace DnDEz.Api.Auth;
 /// เดิมกระจายอยู่ที่:
 ///  • <c>AutonomySettingEndpoints</c> — PUT autonomy-settings
 ///  • <c>CampaignMembershipEndpoints</c> — PUT join-code
-///  • <c>ConsultEndpoints</c> — POST /consult และ GET proposals (สองที่ในไฟล์เดียว)
+///  • <c>ProposalEndpoints</c> — resolve-proposal และ GET proposals (สองที่ในไฟล์เดียว)
 ///  • <c>PlayerActionEndpoints</c> — POST actions (เช็คเจ้าของ "ตัวละคร" ไม่ใช่เจ้าของแคมเปญ)
+///  • <c>AssistantEndpoints</c> — ผู้ช่วย DM ช่องเดียว
 ///
 /// ⚠️ **ลำดับ 404-ก่อน-403 คือ contract ไม่ใช่รายละเอียดการเขียน** — แคมเปญ/ตัวละครที่ผู้เรียก
 /// มองไม่เห็นต้องตอบ 404 เหมือน "ไม่มีอยู่จริง" ห้ามตอบ 403 เพราะ 403 = ยืนยันว่าของชิ้นนี้มีอยู่
@@ -32,7 +33,7 @@ namespace DnDEz.Api.Auth;
 /// รูปแบบ return เป็น tuple <c>(entity, failure)</c> แทนการโยน exception — endpoint เรียกแล้ว
 /// `if (failure is not null) return failure;` ได้ตรง ๆ และยังได้ entity ที่โหลดมาแล้วไปใช้ต่อ
 /// โดยไม่ต้อง query ซ้ำ (สาม call site ใช้ entity ต่อจริง: join-code แก้ `JoinCode`,
-/// /consult ส่ง campaign เข้า `OrchestratorTurnRunner`, actions ใช้ `character.Id`)
+/// actions ส่ง campaign เข้า `OrchestratorTurnRunner` และใช้ `character.Id`)
 /// </summary>
 public static class CampaignAuthorization
 {

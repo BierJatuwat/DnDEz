@@ -13,21 +13,21 @@ namespace DnDEz.Api.Endpoints;
 /// <summary>
 /// Sprint E Part 3 — player action input (hybrid buttons + free text). ทั้งสองทางส่ง content
 /// เดียวกันมาที่ endpoint นี้ (ดู `player-side-design.md` §2 — ปุ่มเป็นแค่ template ข้อความ ไม่ใช่
-/// เส้นทางแยก) ไหลเข้า orchestrator pipeline เดียวกับ DM `/consult` ผ่าน <see cref="OrchestratorTurnRunner"/>
-/// ตาม PROJECT-CONTEXT §2: "Action ของผู้เล่นทุกอันไหลผ่าน rules engine และ approval gate เดิม"
+/// เส้นทางแยก) ไหลเข้า <see cref="OrchestratorTurnRunner"/> ตาม PROJECT-CONTEXT §2: "Action ของผู้เล่น
+/// ทุกอันไหลผ่าน rules engine และ approval gate เดิม"
 ///
-/// ต่างจาก `/consult` สองจุด:
-///  • **auth ไม่ใช่ DM-only** — ผู้เล่นโพสต์ action แทนตัวละครของตัวเองได้เท่านั้น (เช็ค
-///    `Character.OwnerUserId == caller` ไม่ใช่ `Campaign.OwnerUserId == caller`) ตาม §6 ที่สงวนสิทธิ์
-///    "เล่นแทนตัวละครคนอื่น" ไว้ให้ DM เท่านั้น
-///  • **API key ของ DM ต้องดึงผ่าน `app_get_dm_api_key()` (SECURITY DEFINER)** ไม่ใช่ query ตรง —
-///    RLS `own_rows_only` ของ `api_keys` กรองด้วย `app.user_id` ของผู้เรียกจริง (ผู้เล่น) เสมอ ถ้า
-///    query ตรงหา "key ของ DM" จะได้ NULL เสมอไม่ว่า C# WHERE จะเขียนถูกแค่ไหน — ดู migration
-///    `AddDmApiKeyLookupFunction` สำหรับเหตุผลเต็มและ defense-in-depth ที่ใส่ไว้ในฟังก์ชันเอง
+/// **auth ไม่ใช่ DM-only** — ผู้เล่นโพสต์ action แทนตัวละครของตัวเองได้เท่านั้น (เช็ค
+/// `Character.OwnerUserId == caller` ไม่ใช่ `Campaign.OwnerUserId == caller`) ตาม §6 ที่สงวนสิทธิ์
+/// "เล่นแทนตัวละครคนอื่น" ไว้ให้ DM เท่านั้น
+///
+/// **API key ของ DM ต้องดึงผ่าน `app_get_dm_api_key()` (SECURITY DEFINER)** ไม่ใช่ query ตรง —
+/// RLS `own_rows_only` ของ `api_keys` กรองด้วย `app.user_id` ของผู้เรียกจริง (ผู้เล่น) เสมอ ถ้า
+/// query ตรงหา "key ของ DM" จะได้ NULL เสมอไม่ว่า C# WHERE จะเขียนถูกแค่ไหน — ดู migration
+/// `AddDmApiKeyLookupFunction` สำหรับเหตุผลเต็มและ defense-in-depth ที่ใส่ไว้ในฟังก์ชันเอง
 ///
 /// broadcast `ActionMessageCreated` เข้ากลุ่มแคมเปญทั้งกลุ่ม (ไม่ใช่ DM-only) — เนื้อหาเป็นของ
-/// ผู้เล่นเองหรือ AI ตอบสนองการกระทำของผู้เล่นโดยตรง ปลอดภัยที่จะให้ทุกคนเห็น (ต่างจาก DM consult
-/// ที่ไม่ broadcast เลย ดู doc comment ของ OrchestratorTurnRunner)
+/// ผู้เล่นเองหรือ AI ตอบสนองการกระทำของผู้เล่นโดยตรง ปลอดภัยที่จะให้ทุกคนเห็นเสมอ (ต่างจากผู้ช่วย DM
+/// ที่ DM คุยส่วนตัว ซึ่งมี pipeline แยกต่างหากใน `AssistantRunner` ไม่ผ่านไฟล์นี้เลย)
 /// </summary>
 public static class PlayerActionEndpoints
 {
@@ -105,8 +105,7 @@ public static class PlayerActionEndpoints
 
             var result = await OrchestratorTurnRunner.RunTurnAsync(
                 db, anthropicClient, hubContext, logger, campaign, sessionId, rawApiKey, content,
-                MessageAuthorType.Player, ActionSource.Player, callerUserId.Value, character!.Id,
-                broadcastActionMessages: true);
+                callerUserId.Value, character!.Id);
 
             return Results.Ok(result);
         }).RequireAuthorization();

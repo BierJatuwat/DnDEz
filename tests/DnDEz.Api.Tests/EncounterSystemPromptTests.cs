@@ -15,9 +15,11 @@ namespace DnDEz.Api.Tests;
 /// `OrchestratorTurnRunner` ปลดล็อกคำถามกลางไฟต์แบบ "บอสเหลือเลือดเท่าไหร่ ควรทำไง" ให้มีตัวเลขจริงให้คิด
 ///
 /// จุดที่ต้องล็อกด้วยเทสต์ (ไม่ใช่แค่เขียน doc comment):
-///  • เทิร์นของ DM (`/consult`) เห็น HP/AC ของทุกตัวในวง — รวมมอนสเตอร์ที่ `NpcStatsVisibleToParty=false`
-///  • เทิร์นของผู้เล่น (`/actions`) **ไม่เห็นตัวเลข** ของมอนสเตอร์ที่ซ่อนไว้ — ป้องกันไม่ให้ narration
-///    ที่ broadcast จริงหลุดเลขที่ผู้เล่นควรต้องค้นหาเอง (ดู `CharacterStatsVisibility`)
+///  • **2026-09-23** ผู้ช่วย DM (`/assistant`, `AssistantPrompt`) เห็น HP/AC ของทุกตัวในวง — รวม
+///    มอนสเตอร์ที่ `NpcStatsVisibleToParty=false` (ช่องนี้ DM-only ไม่มี narration ที่ broadcast เลย
+///    จึงไม่ต้อง mask อะไร ต่างจาก `OrchestratorTurnRunner` ด้านล่าง)
+///  • เทิร์นของผู้เล่น (`/actions`, `OrchestratorTurnRunner`) **ไม่เห็นตัวเลข** ของมอนสเตอร์ที่ซ่อนไว้ —
+///    ป้องกันไม่ให้ narration ที่ broadcast จริงหลุดเลขที่ผู้เล่นควรต้องค้นหาเอง (ดู `CharacterStatsVisibility`)
 ///  • ไม่มี encounter active — prompt ไม่มีหัวข้อ combat เลย (regression guard ของ Part A/B/D เดิม)
 /// </summary>
 public class EncounterSystemPromptTests : IAsyncLifetime
@@ -99,21 +101,21 @@ public class EncounterSystemPromptTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Dm_turn_sees_full_hp_and_ac_of_every_participant_including_hidden_monster()
+    public async Task Assistant_sees_full_hp_and_ac_of_every_participant_including_hidden_monster()
     {
         var response = await AuthedClient(_dmToken).PostAsJsonAsync(
-            $"/campaigns/{_campaignId}/sessions/{_sessionId}/consult",
-            new { Content = "สรุปสถานการณ์ตอนนี้หน่อย" });
+            $"/campaigns/{_campaignId}/assistant",
+            new { Content = "สรุปสถานการณ์ตอนนี้หน่อย", SessionId = _sessionId });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var system = _fakeAnthropicClient.LastSystemPromptReceived;
         Assert.NotNull(system);
 
-        Assert.Contains("active combat encounter", system);
+        Assert.Contains("Active combat encounter", system);
         Assert.Contains("Lyra", system);
         Assert.Contains("HP 18/24, AC 15", system);
 
-        // มอนสเตอร์ที่ NpcStatsVisibleToParty=false ก็ยังเห็นเลขเต็มในเทิร์นของ DM
+        // มอนสเตอร์ที่ NpcStatsVisibleToParty=false ก็ยังเห็นเลขเต็ม — ช่องนี้ DM-only ไม่มีทาง broadcast
         Assert.Contains("Goblin Warrior #1", system);
         Assert.Contains("HP 3/7, AC 15", system);
         Assert.Contains("Goblin Warrior #2", system);
@@ -158,13 +160,13 @@ public class EncounterSystemPromptTests : IAsyncLifetime
         await end.ExecuteNonQueryAsync();
 
         var response = await AuthedClient(_dmToken).PostAsJsonAsync(
-            $"/campaigns/{_campaignId}/sessions/{_sessionId}/consult",
-            new { Content = "คุยเฉยๆ ไม่มีไฟต์" });
+            $"/campaigns/{_campaignId}/assistant",
+            new { Content = "คุยเฉยๆ ไม่มีไฟต์", SessionId = _sessionId });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var system = _fakeAnthropicClient.LastSystemPromptReceived;
         Assert.NotNull(system);
-        Assert.DoesNotContain("active combat encounter", system);
+        Assert.DoesNotContain("Active combat encounter", system);
         Assert.DoesNotContain("Goblin Warrior", system);
     }
 

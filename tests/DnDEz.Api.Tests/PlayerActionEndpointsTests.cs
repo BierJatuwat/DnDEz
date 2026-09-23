@@ -13,17 +13,15 @@ using Npgsql;
 namespace DnDEz.Api.Tests;
 
 /// <summary>
-/// Sprint E Part 3 — player action input: <c>POST /campaigns/{id}/sessions/{id}/actions</c>.
-/// Reuses the same orchestrator pipeline as `/consult` (see `OrchestratorTurnRunner`) but with
-/// player-facing authorization and a group-wide `ActionMessageCreated` broadcast.
+/// Sprint E Part 3 — player action input: <c>POST /campaigns/{id}/sessions/{id}/actions</c>, ผ่าน
+/// <c>OrchestratorTurnRunner</c> เดียวกับที่สร้าง proposal (ดู <c>ProposalEndpointsTests</c>)
 ///
 /// contract:
 ///   body { CharacterId, Content (required, ≤4000 chars after trim) }
-///   200 OK + same shape as ConsultResponse (MessageId?, Content, ToolCall, Pending)
+///   200 OK + { MessageId?, Content, ToolCall, Pending }
 ///   403 เมื่อ caller ไม่ใช่เจ้าของ CharacterId · 404 เมื่อ campaign/session/character ไม่มีอยู่จริง
 ///   หรือ character ไม่ได้อยู่ campaign นี้ · 400 (dm_api_key_not_set) เมื่อ DM ยังไม่ได้ตั้ง key
-///   broadcasts "ActionMessageCreated" เข้ากลุ่มแคมเปญทั้งกลุ่ม (ไม่ใช่ DM-only) — ต่างจาก /consult
-///   ที่ไม่ broadcast อะไรเลย (ดู ConsultEndpointsTests.Consult_never_broadcasts_ActionMessageCreated...)
+///   broadcasts "ActionMessageCreated" เข้ากลุ่มแคมเปญทั้งกลุ่มเสมอ (ไม่ใช่ DM-only)
 /// </summary>
 public class PlayerActionEndpointsTests : IAsyncLifetime
 {
@@ -461,7 +459,7 @@ public class PlayerActionEndpointsTests : IAsyncLifetime
     public async Task Player_turn_is_never_offered_the_campaign_journal_search_tool()
     {
         // บันทึกแคมเปญมีความลับของ DM ปนได้ (รายการที่ AI สรุปให้เห็น StoryBeat.DmNotes/Secrets ผ่าน
-        // /advisor) และ narration ของเทิร์นผู้เล่น **broadcast เข้ากลุ่มแคมเปญจริง** — ถ้า Claude เรียก
+        // ผู้ช่วย DM) และ narration ของเทิร์นผู้เล่น **broadcast เข้ากลุ่มแคมเปญจริง** — ถ้า Claude เรียก
         // tool นี้ได้จากเทิร์นผู้เล่น ความลับมีเส้นทางไปโผล่หน้าจอผู้เล่นทันที
         //
         // RLS (`dm_only`) กันซ้ำอีกชั้น (เทิร์นผู้เล่นรันด้วย app.user_id ของผู้เล่น → app_is_dm() = false)

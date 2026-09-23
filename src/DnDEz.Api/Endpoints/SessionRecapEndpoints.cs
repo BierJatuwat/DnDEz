@@ -10,8 +10,8 @@ using Microsoft.EntityFrameworkCore;
 namespace DnDEz.Api.Endpoints;
 
 /// <summary>
-/// สรุปเซสชัน (`recap_snapshots`) — ชั้นความจำแบบบีบอัดของแผน "DM AI Assistant" ที่ `/advisor` อ่านเข้า
-/// system prompt มาตั้งแต่ Part C แต่ไม่เคยมีอะไรเขียนลงเลยจนถึงไฟล์นี้ (2026-09-23)
+/// สรุปเซสชัน (`recap_snapshots`) — ชั้นความจำแบบบีบอัดของแผน "DM AI Assistant" ที่ผู้ช่วย DM
+/// (`AssistantPrompt`) อ่านเข้า system prompt มาตั้งแต่ Part C แต่ไม่เคยมีอะไรเขียนลงเลยจนถึงไฟล์นี้
 ///
 /// ## สองฉบับในแถวเดียว และทำไมสร้างแยกกันคนละ call
 /// - `DmVersionText` — สำหรับ DM และสำหรับ AI ใช้เป็นความจำ: สร้างจาก log **ทั้งหมด** รวมที่ DM ปรึกษา

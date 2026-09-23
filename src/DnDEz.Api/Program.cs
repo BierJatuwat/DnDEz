@@ -532,16 +532,13 @@ app.MapHub<CampaignHub>(CampaignHubPath).RequireAuthorization();
 // ── Sprint D Part 1: BYOK — เก็บ/ดึง/ลบ API key เข้ารหัสของผู้ใช้ ──────────────
 app.MapApiKeyEndpoints();
 
-// ── Sprint D Part 2: tool-calling loop skeleton (narration + roll_dice, ไม่มี approval gate) ──
-app.MapConsultEndpoints();
+// ── คิว proposal (Sprint D Part 3) — เหลือแค่ resolve/list หลัง 2026-09-23: การคุยกับ AI ทั้งหมดย้าย
+// ไปที่ผู้ช่วย DM ช่องเดียวด้านล่างแล้ว (เดิมไฟล์นี้มี POST /consult ด้วย ตอนนี้ลบออก) ──
+app.MapProposalEndpoints();
 
-// ── Sprint E Part 3: player action input — ไหลเข้า orchestrator เดียวกับ /consult (ดู
-// OrchestratorTurnRunner) แต่ auth เป็น "เจ้าของตัวละคร" ไม่ใช่ DM-only ──────────────────────
+// ── Sprint E Part 3: player action input — ไหลเข้า OrchestratorTurnRunner เดียวกับที่สร้าง
+// proposal ข้างบน แต่ auth เป็น "เจ้าของตัวละคร" ไม่ใช่ DM-only ──────────────────────
 app.MapPlayerActionEndpoints();
-
-// ── DM AI Assistant Part C: แชทที่ปรึกษาส่วนตัวของ DM (ผูกกับแคมเปญ ไม่ใช่ session, text-only,
-// ไม่ broadcast, เก็บที่ consult_messages) — ต่างจาก /consult ทุกข้อ ดู doc comment ของคลาส ──
-app.MapAdvisorEndpoints();
 
 // ── DM AI Assistant Part D: บันทึกแคมเปญ (ชั้นความจำระหว่าง log ดิบกับ recap) — DM-only,
 // AI เข้าถึงผ่าน tool `search_campaign_journal` ไม่ใช่ยัดเข้า system prompt ──

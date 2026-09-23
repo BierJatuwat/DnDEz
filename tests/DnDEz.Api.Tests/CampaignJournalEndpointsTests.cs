@@ -31,7 +31,8 @@ namespace DnDEz.Api.Tests;
 /// GET /campaigns/{campaignId}/journal  [Authorize, DM-only]
 ///   200 OK + [{ Id, Title, Content, SessionId?, AuthoredBy, CreatedAt }] เรียงใหม่สุดก่อน
 ///
-/// tool `search_campaign_journal(query)` — เสนอให้ Claude **เฉพาะ path ของ DM (`/consult`)**
+/// tool `search_campaign_journal(query)` — **2026-09-23** เสนอให้ Claude เฉพาะทางผู้ช่วย DM ช่องเดียว
+///   (`/assistant`, ดู `AssistantEndpoints`) เท่านั้น
 ///   ⚠️ ไม่เสนอใน `/actions` (path ผู้เล่น ที่ narration ถูก broadcast เข้ากลุ่มแคมเปญจริง) ด้วยเหตุผล
 ///   เดียวกับที่ `OrchestratorTurnRunner.BuildSystemPromptAsync` ห้ามใส่ `StoryBeat.DmNotes`/`Secrets`:
 ///   บันทึกแคมเปญมีความลับของ DM ได้ ถ้า AI ค้นเจอแล้วเอ่ยถึงตอนเล่าเทิร์นของผู้เล่น เนื้อหาจะหลุดทันที
@@ -192,8 +193,8 @@ public class CampaignJournalEndpointsTests : IAsyncLifetime
         // ควรได้ 403 ซึ่งขัดกับพฤติกรรมจริงที่ระบบนี้ล็อกไว้แล้ว ตรวจของจริงมาแล้วสองชั้น:
         //  1. RLS ของ `campaigns` คือ `campaign_member_read | SELECT | app_is_member_of(id)` → คนนอก
         //     SELECT แถวแคมเปญไม่เห็นเลย `RequireCampaignDmAsync` จึงได้ null แล้วคืน 404 ไม่ถึงเช็ค owner
-        //  2. precedent มีอยู่แล้ว: `ConsultEndpointsTests` บรรทัด ~788 ยืนยัน 404 สำหรับคนนอกบน `/consult`
-        //     และ `AdvisorEndpointsTests.Advisor_post_by_outsider_returns_404` (Part C) ก็เช่นกัน
+        //  2. precedent มีอยู่แล้ว: `ProposalEndpointsTests`/`AssistantEndpointsTests` ยืนยัน 404 สำหรับ
+        //     คนนอกบน DM-only endpoint แบบเดียวกันนี้อยู่แล้ว
         // 404 ยัง**ปลอดภัยกว่า** 403 ด้วย เพราะไม่ยืนยันให้คนนอกรู้ว่าแคมเปญนี้มีอยู่จริง
         // (สมาชิกที่เป็นผู้เล่นยังได้ 403 ตามเดิม — เห็นแถวแคมเปญได้ แต่ไม่ใช่เจ้าของ ดูเทสต์ด้านบน)
         var get = await AuthedClient(_outsiderToken).GetAsync($"/campaigns/{_campaignId}/journal");
@@ -258,18 +259,17 @@ public class CampaignJournalEndpointsTests : IAsyncLifetime
         Assert.All(items!, i => Assert.DoesNotContain("ของแคมเปญอื่น", i.Title));
     }
 
-    // ── tool `search_campaign_journal` ────────────────────────────────────
+    // ── tool `search_campaign_journal` (ผ่านผู้ช่วย DM ช่องเดียว) ───────────────
 
     [Fact]
-    public async Task Consult_offers_the_journal_search_tool_to_claude()
+    public async Task Assistant_offers_the_journal_search_tool_to_claude()
     {
         var response = await AuthedClient(_dmToken).PostAsJsonAsync(
-            $"/campaigns/{_campaignId}/sessions/{_sessionId}/consult",
-            new { Content = "คุยเฉย ๆ ไม่ต้องเรียก tool" });
+            $"/campaigns/{_campaignId}/assistant", new { Content = "คุยเฉย ๆ ไม่ต้องเรียก tool" });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.NotNull(_fakeAnthropicClient.LastToolNamesOffered);
-        Assert.Contains("search_campaign_journal", _fakeAnthropicClient.LastToolNamesOffered!);
+        Assert.Single(_fakeAnthropicClient.AgentCalls);
+        Assert.Contains("search_campaign_journal", _fakeAnthropicClient.AgentCalls[0].ToolNames);
     }
 
     [Fact]
@@ -282,18 +282,18 @@ public class CampaignJournalEndpointsTests : IAsyncLifetime
                 Content = "วายร้ายตัวจริงของแคมเปญคือลอร์ดเวลรอธ ปาร์ตี้ยังไม่รู้",
             })).EnsureSuccessStatusCode();
 
+        _fakeAnthropicClient.AgentScript.Enqueue(new ScriptedAgentTurn(
+            "", ("search_campaign_journal", new { query = "เวลรอธ" })));
+        _fakeAnthropicClient.AgentScript.Enqueue(new ScriptedAgentTurn("เจอแล้วครับ"));
+
         var response = await AuthedClient(_dmToken).PostAsJsonAsync(
-            $"/campaigns/{_campaignId}/sessions/{_sessionId}/consult",
-            new { Content = "search-journal:เวลรอธ ช่วยเตือนหน่อยว่าเคยบันทึกอะไรไว้" });
+            $"/campaigns/{_campaignId}/assistant",
+            new { Content = "ช่วยเตือนหน่อยว่าเคยบันทึกอะไรไว้เรื่องเวลรอธ" });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        var toolCall = doc.RootElement.GetProperty("toolCall");
-        Assert.Equal("search_campaign_journal", toolCall.GetProperty("name").GetString());
-
-        var result = toolCall.GetProperty("result").GetString();
-        Assert.NotNull(result);
-        Assert.Contains("ลอร์ดเวลรอธเปิดตัว", result!);
+        var body = await response.Content.ReadFromJsonAsync<AssistantTurnResponse>(JsonOptions);
+        Assert.Equal("done", body!.Activity.Single().Status);
+        Assert.Contains("ลอร์ดเวลรอธเปิดตัว", LastToolResultText(_fakeAnthropicClient.AgentCalls[1]));
     }
 
     [Fact]
@@ -312,15 +312,16 @@ public class CampaignJournalEndpointsTests : IAsyncLifetime
                 ("id", Guid.NewGuid()), ("c", _otherCampaignId), ("title", marker));
         }
 
+        _fakeAnthropicClient.AgentScript.Enqueue(new ScriptedAgentTurn(
+            "", ("search_campaign_journal", new { query = marker })));
+        _fakeAnthropicClient.AgentScript.Enqueue(new ScriptedAgentTurn("ไม่เจอครับ"));
+
         var response = await AuthedClient(_dmToken).PostAsJsonAsync(
-            $"/campaigns/{_campaignId}/sessions/{_sessionId}/consult",
-            new { Content = $"search-journal:{marker} มีอะไรบ้าง" });
+            $"/campaigns/{_campaignId}/assistant", new { Content = $"มีอะไรเกี่ยวกับ {marker} บ้าง" });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        var result = doc.RootElement.GetProperty("toolCall").GetProperty("result").GetString();
-        Assert.NotNull(result);
-        Assert.DoesNotContain("ความลับของแคมเปญอื่นที่ห้ามหลุด", result!);
+        Assert.DoesNotContain(
+            "ความลับของแคมเปญอื่นที่ห้ามหลุด", LastToolResultText(_fakeAnthropicClient.AgentCalls[1]));
     }
 
     [Fact]
@@ -328,15 +329,18 @@ public class CampaignJournalEndpointsTests : IAsyncLifetime
     {
         // convention เดียวกับ ExecuteLookupRule/ExecuteLookupMonster — tool ห้าม throw เด็ดขาด
         // ต้องคืนข้อความให้ Claude อ่านเองว่าไม่เจอ ไม่ใช่ทำให้ทั้งเทิร์นพัง
+        var query = $"ไม่มีทางเจอ{_suffix}";
+        _fakeAnthropicClient.AgentScript.Enqueue(new ScriptedAgentTurn(
+            "", ("search_campaign_journal", new { query })));
+        _fakeAnthropicClient.AgentScript.Enqueue(new ScriptedAgentTurn("หาไม่เจอครับ"));
+
         var response = await AuthedClient(_dmToken).PostAsJsonAsync(
-            $"/campaigns/{_campaignId}/sessions/{_sessionId}/consult",
-            new { Content = $"search-journal:ไม่มีทางเจอ{_suffix} นะ" });
+            $"/campaigns/{_campaignId}/assistant", new { Content = $"ลองหา {query} หน่อย" });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        var result = doc.RootElement.GetProperty("toolCall").GetProperty("result").GetString();
-        Assert.NotNull(result);
-        Assert.StartsWith("Error:", result!);
+        var body = await response.Content.ReadFromJsonAsync<AssistantTurnResponse>(JsonOptions);
+        Assert.Equal("error", body!.Activity.Single().Status);
+        Assert.StartsWith("Error:", LastToolResultText(_fakeAnthropicClient.AgentCalls[1]));
     }
 
     [Fact]
@@ -348,31 +352,27 @@ public class CampaignJournalEndpointsTests : IAsyncLifetime
             new { Title = $"บันทึกธรรมดา {_suffix}", Content = "ไม่มีเครื่องหมายเปอร์เซ็นต์อยู่เลย" }))
             .EnsureSuccessStatusCode();
 
+        _fakeAnthropicClient.AgentScript.Enqueue(new ScriptedAgentTurn(
+            "", ("search_campaign_journal", new { query = "%%%" })));
+        _fakeAnthropicClient.AgentScript.Enqueue(new ScriptedAgentTurn("ลองแล้วครับ"));
+
         var response = await AuthedClient(_dmToken).PostAsJsonAsync(
-            $"/campaigns/{_campaignId}/sessions/{_sessionId}/consult",
-            new { Content = "search-journal:%%% ลองดู" });
+            $"/campaigns/{_campaignId}/assistant", new { Content = "ลองค้นด้วย %%% ดู" });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        var result = doc.RootElement.GetProperty("toolCall").GetProperty("result").GetString();
-        Assert.NotNull(result);
-        Assert.DoesNotContain($"บันทึกธรรมดา {_suffix}", result!);
-    }
-
-    [Fact]
-    public async Task Advisor_still_offers_no_tools_at_all()
-    {
-        // regression guard ของขอบเขต Part D: โหมดที่ปรึกษายังเป็น text-only ตามที่ผู้ใช้สั่งไว้
-        // การเพิ่ม tool ใหม่ใน OrchestratorTurnRunner ต้องไม่ไหลไปถึง `/advisor`
-        var response = await AuthedClient(_dmToken).PostAsJsonAsync(
-            $"/campaigns/{_campaignId}/advisor", new { Content = "ช่วยคิดฉากต่อไปหน่อย" });
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.NotNull(_fakeAnthropicClient.LastToolNamesOffered);
-        Assert.Empty(_fakeAnthropicClient.LastToolNamesOffered!);
+        Assert.DoesNotContain($"บันทึกธรรมดา {_suffix}", LastToolResultText(_fakeAnthropicClient.AgentCalls[1]));
     }
 
     // ── helpers ───────────────────────────────────────────────────────────
+
+    private static string LastToolResultText(AgentCall call) =>
+        string.Join("\n", call.Messages.Last(m => m.Role == "user").Content.EnumerateArray()
+            .Select(b => b.GetProperty("content").GetString()));
+
+    private sealed record AssistantActivityItem(string ToolUseId, string Tool, string Summary, string Status);
+
+    private sealed record AssistantTurnResponse(
+        string Status, Guid RunId, Guid? MessageId, string Text, List<AssistantActivityItem> Activity);
 
     private static async Task InsertCampaignAsync(NpgsqlConnection conn, Guid id, Guid ownerUserId, string name) =>
         await ExecAsync(conn,

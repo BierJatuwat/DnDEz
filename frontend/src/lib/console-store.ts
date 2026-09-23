@@ -5,9 +5,6 @@ import type { ReactionPrompt } from "./reaction-prompt";
 export type HubStatus = "disconnected" | "connecting" | "connected";
 export type LogEntry = { at: string; text: string };
 
-export type ConsultRole = "dm" | "ai" | "system";
-export type ConsultMessage = { at: string; role: ConsultRole; text: string };
-
 type ConsoleState = {
   selectedCampaignId: string | null;
   selectedSessionId: string | null;
@@ -15,8 +12,6 @@ type ConsoleState = {
   hubStatus: HubStatus;
   log: LogEntry[];
   rollExpression: string;
-  consultInput: string;
-  consultMessages: ConsultMessage[];
   actionInput: string;
   actionFeed: ActionMessage[];
   reactionPrompt: ReactionPrompt | null;
@@ -26,15 +21,13 @@ type ConsoleState = {
   setHubStatus: (status: HubStatus) => void;
   setRollExpression: (value: string) => void;
   appendLog: (text: string) => void;
-  setConsultInput: (value: string) => void;
-  appendConsultMessage: (role: ConsultRole, text: string) => void;
   setActionInput: (value: string) => void;
   appendActionFeedMessage: (message: ActionMessage) => void;
   /**
    * Sprint G Part 10 — prompt "จะสวนไหม" ที่มาจาก SignalR
    *
    * เก็บใน store ไม่ใช่ `useState` ของ component ให้เหมือน realtime state ตัวอื่นทั้งหมดในไฟล์นี้
-   * (log/action feed/consult) — callback ของ hub ถูกผูกไว้ครั้งเดียวตอนสร้าง manager ค่าที่เขียนผ่าน
+   * (log/action feed) — callback ของ hub ถูกผูกไว้ครั้งเดียวตอนสร้าง manager ค่าที่เขียนผ่าน
    * store จึงไม่ผูกกับ instance ไหนเป็นพิเศษ และรอดตอน component remount · ได้ cascade-clear ตอน
    * สลับเซสชัน/แคมเปญฟรีไปด้วย (prompt ของเซสชันเก่าต้องไม่ค้างข้ามเซสชัน)
    */
@@ -50,8 +43,6 @@ export const useConsoleStore = create<ConsoleState>((set) => ({
   hubStatus: "disconnected",
   log: [],
   rollExpression: "1d20",
-  consultInput: "",
-  consultMessages: [],
   actionInput: "",
   actionFeed: [],
   reactionPrompt: null,
@@ -59,9 +50,7 @@ export const useConsoleStore = create<ConsoleState>((set) => ({
     set({
       selectedCampaignId: id,
       selectedSessionId: null,
-      // แชทปรึกษา AI + action feed ผูกกับเซสชัน — เปลี่ยนแคมเปญคือเปลี่ยนเซสชันไปด้วยอยู่แล้ว ต้องล้างทิ้ง
-      consultMessages: [],
-      consultInput: "",
+      // action feed ผูกกับเซสชัน — เปลี่ยนแคมเปญคือเปลี่ยนเซสชันไปด้วยอยู่แล้ว ต้องล้างทิ้ง
       actionFeed: [],
       actionInput: "",
       reactionPrompt: null,
@@ -69,9 +58,7 @@ export const useConsoleStore = create<ConsoleState>((set) => ({
   setSelectedSessionId: (id) =>
     set({
       selectedSessionId: id,
-      // แชทปรึกษา AI + action feed ผูกกับเซสชัน ห้ามให้ transcript ของเซสชันเก่าเล็ดลอดข้ามไป
-      consultMessages: [],
-      consultInput: "",
+      // action feed ผูกกับเซสชัน ห้ามให้ feed ของเซสชันเก่าเล็ดลอดข้ามไป
       actionFeed: [],
       actionInput: "",
     }),
@@ -84,15 +71,6 @@ export const useConsoleStore = create<ConsoleState>((set) => ({
         { at: new Date().toLocaleTimeString("th-TH"), text },
         ...state.log,
       ].slice(0, 50),
-    })),
-  setConsultInput: (value) => set({ consultInput: value }),
-  appendConsultMessage: (role, text) =>
-    set((state) => ({
-      // ตั้งใจให้เก่าสุดอยู่บน ใหม่สุดอยู่ล่าง (ตรงข้าม appendLog) เพราะนี่คือบทสนทนา อ่านบนลงล่าง
-      consultMessages: [
-        ...state.consultMessages,
-        { at: new Date().toLocaleTimeString("th-TH"), role, text },
-      ].slice(-50),
     })),
   setActionInput: (value) => set({ actionInput: value }),
   setReactionPrompt: (prompt) => set({ reactionPrompt: prompt }),

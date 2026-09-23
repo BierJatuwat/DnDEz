@@ -3,10 +3,11 @@ using Npgsql;
 namespace DnDEz.Api.Tests;
 
 /// <summary>
-/// Part C ของแผน "DM AI Assistant" (2026-09-22) — `consult_messages` เก็บ**แชทที่ปรึกษาส่วนตัวของ DM**
-/// ซึ่งเป็นบทสนทนาที่ AI เห็น `StoryBeat.DmNotes`/`Secrets` ด้วย (ต่างจาก `/consult` ที่จงใจกันสองอย่าง
-/// นี้ออกจาก prompt เพราะ path นั้นใช้ร่วมกับ `/actions` ที่ broadcast) — คำตอบของ AI จึงอ้างถึงความลับ
-/// ของแคมเปญได้ตรง ๆ **ผู้เล่นต้องอ่านไม่ได้แม้แต่แถวเดียวที่ชั้น DB** ไม่ใช่พึ่งเช็คใน C# ชั้นเดียว
+/// Part C ของแผน "DM AI Assistant" — `consult_messages` เก็บ**บทสนทนากับผู้ช่วย DM** (2026-09-23:
+/// ปัจจุบันคือผู้ช่วย DM ช่องเดียว `/assistant` — ก่อนหน้านี้เป็น `/advisor`) ซึ่งเห็น
+/// `StoryBeat.DmNotes`/`Secrets` ได้ (ต่างจาก `/actions` ที่ broadcast และห้ามเห็นความลับเด็ดขาด)
+/// — คำตอบของ AI จึงอ้างถึงความลับของแคมเปญได้ตรง ๆ **ผู้เล่นต้องอ่านไม่ได้แม้แต่แถวเดียวที่ชั้น DB**
+/// ไม่ใช่พึ่งเช็คใน C# ชั้นเดียว
 ///
 /// ตารางนี้เคยได้ policy รวม `campaign_isolation` (`app_is_member()`, FOR ALL) มาจาก loop "ทุกตารางที่มี
 /// campaign_id" ของ migration `RowLevelSecurity` — เคสเดียวกับที่ `autonomy_settings` เคยเจอแล้วต้องมาแก้
@@ -18,7 +19,7 @@ namespace DnDEz.Api.Tests;
 /// ของจริง ไม่ใช่เชื่อเหตุผลบนกระดาษ (บทเรียน Sprint F งานที่ 2a: "false fix ที่ดูถูกจนกว่าจะวัดจริง")
 ///
 /// ยิงตรงที่ role `dndez_app` ผ่าน raw SQL โดยตั้งใจ (ไม่ผ่าน HTTP) — พิสูจน์ชั้น DB ล้วน ๆ ว่ากันได้เอง
-/// แม้เช็คใน C# หายไป · contract ระดับ endpoint อยู่ใน <c>AdvisorEndpointsTests.cs</c>
+/// แม้เช็คใน C# หายไป · contract ระดับ endpoint อยู่ใน <c>AssistantEndpointsTests.cs</c>
 /// </summary>
 public class ConsultMessageRlsTests : IAsyncLifetime
 {

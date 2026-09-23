@@ -13,13 +13,19 @@ namespace DnDEz.Api.Tests;
 /// <summary>
 /// 2026-09-23 — `messages.dm_private` (migration `AddMessageDmPrivateAndRecapDmWrite`)
 ///
-/// ช่องรั่วที่ปิด: `/consult` (DM ปรึกษา AI ส่วนตัว) กับ `/actions` (เทิร์นผู้เล่น broadcast ทั้งโต๊ะ) เขียน
-/// ลงตารางเดียวกัน แล้ว history ของเทิร์นผู้เล่นดึง log **ทั้งหมด** ให้ Claude — สิ่งที่ DM ปรึกษาลับ ๆ จึง
-/// ไปถึง prompt ของเทิร์นที่ narration ถูก broadcast ได้ · เทสต์ leak ด้านล่างใช้ที่ `FakeAnthropicClient`
-/// เก็บ history ที่ได้รับจริง แล้วตรวจว่า marker ลับไม่อยู่ในนั้น (บนโค้ดก่อนแก้ marker อยู่ใน history)
+/// **2026-09-24 (Phase 4 — ผู้ช่วย DM ช่องเดียว) — เขียนใหม่ทั้งไฟล์** เดิมเทสต์ชุดนี้พิสูจน์ว่า `/consult`
+/// (DM ปรึกษา AI ส่วนตัว) กับ `/actions` (เทิร์นผู้เล่น broadcast) เขียนลง `messages` ตารางเดียวกันแล้วกรอง
+/// ด้วย `dm_private` — ตอนนี้ `/consult` ถูกลบไปแล้ว แทนที่ด้วย `/assistant` (`AssistantRunner`) ซึ่ง**ไม่แตะ
+/// ตาราง `messages` เลย** บทสนทนาของ DM ทั้งหมดอยู่ใน `consult_messages` (ตาราง `dm_only` แยกต่างหาก อยู่แล้ว
+/// ดู `ConsultMessageRlsTests`) ส่วน `messages` ตอนนี้มีแต่แถวที่มาจากเทิร์นผู้เล่น (`/actions`, เสมอ
+/// `DmPrivate = false`) กับ tool ที่ AI แต่งข้อความส่งถึงผู้เล่น (`narrate_to_players`/`npc_say`, เสมอ
+/// `DmPrivate = false` เช่นกัน — ดู `AssistantTableToolsTests`) ช่องรั่วเดิมจึงเป็นไปไม่ได้แล้วโดยโครงสร้าง
+/// ตาราง ไม่ใช่แค่โดย filter ชั้น C# — เทสต์ด้านล่างยืนยันโครงสร้างนั้นตรง ๆ (แทนที่จะพิสูจน์ filter ที่ไม่มี
+/// อยู่แล้ว)
 ///
-/// ชั้น RLS ทดสอบด้วย raw SQL ผ่าน role `dndez_app` แยกจากชั้น endpoint — แบบเดียวกับ
-/// `ConsultMessageRlsTests`
+/// ชั้น RLS ยังทดสอบด้วย raw SQL ผ่าน role `dndez_app` แยกจากชั้น endpoint เหมือนเดิม — คอลัมน์
+/// `dm_private` ยังมีอยู่ในตาราง (defense-in-depth) แม้ path ปกติจะไม่มีทางเขียน `true` ได้อีกแล้วก็ตาม —
+/// แบบเดียวกับ `ConsultMessageRlsTests`
 /// </summary>
 public class MessageDmPrivateTests : IAsyncLifetime
 {
@@ -94,29 +100,25 @@ public class MessageDmPrivateTests : IAsyncLifetime
             "/users/me/api-keys/anthropic", new { ApiKey = DmValidApiKey })).EnsureSuccessStatusCode();
     }
 
-    // ── การรั่วผ่าน history (ตัวที่แก้จริง) ─────────────────────────────────
+    // ── การแยกตารางจริง (ตัวที่แทนที่การกันรั่วผ่าน filter เดิม) ────────────────
 
     [Fact]
     public async Task Player_turn_history_never_contains_what_the_dm_asked_privately()
     {
-        await ConsultAsync($"ช่วยวางแผนเรื่องนี้ {SecretMarker}");
+        await AssistantAsync($"ช่วยวางแผนเรื่องนี้ {SecretMarker}");
 
         var action = await PlayerActionAsync("ฉันเดินเข้าไปในโรงเตี๊ยม");
         Assert.Equal(HttpStatusCode.OK, action.StatusCode);
 
         var history = _fake.LastHistoryReceived;
         Assert.NotNull(history);
-        // ทั้งข้อความ DM และคำตอบ AI ของเทิร์นลับ (fake echo ข้อความกลับ จึงมี marker ทั้งสองฝั่ง)
         Assert.DoesNotContain(history!, h => h.Text.Contains(SecretMarker));
         Assert.Contains(history!, h => h.Text.Contains("ฉันเดินเข้าไปในโรงเตี๊ยม"));
     }
 
-    /// <summary>
-    /// เคสที่ RLS ช่วยไม่ได้: DM เล่นตัวละครของตัวเองผ่าน `/actions` (broadcast) — RLS ปล่อยให้ DM อ่าน
-    /// แถวลับได้เพราะดูจากตัวตน · ตัวกันจริงคือ filter ใน `BuildHistoryAsync` ที่ผูกกับการ broadcast
-    /// · รันจริง 2026-09-23: เปลี่ยน filter เป็น `includeDmPrivate: true` แล้วเทสต์นี้ล้มตัวเดียวในคลาส
-    /// (เทสต์ฝั่งผู้เล่นยังผ่านเพราะ RLS กันให้) — จึงเป็นเทสต์เดียวที่คุม filter ชั้น C#
-    /// </summary>
+    /// <summary>เคสที่ RLS ช่วยไม่ได้: DM เล่นตัวละครของตัวเองผ่าน `/actions` (broadcast) — RLS ปล่อยให้ DM
+    /// อ่านแถวของแคมเปญตัวเองได้ตามปกติ แต่ history ของเทิร์นผู้เล่นมาจาก `messages` เท่านั้น (`BuildHistoryAsync`
+    /// ใน `OrchestratorTurnRunner`) ซึ่งไม่มีทางมีแถวของ `/assistant` ปนอยู่เลยเพราะคนละตาราง</summary>
     [Fact]
     public async Task Dm_playing_own_character_via_actions_also_never_sends_private_history()
     {
@@ -137,7 +139,7 @@ public class MessageDmPrivateTests : IAsyncLifetime
                 ("id", dmCharacterId), ("campaignId", _campaignId), ("owner", _dmUserId));
         }
 
-        await ConsultAsync($"แผนลับ {SecretMarker}");
+        await AssistantAsync($"แผนลับ {SecretMarker}");
 
         var action = await AuthedClient(_dmToken).PostAsJsonAsync(
             $"/campaigns/{_campaignId}/sessions/{_sessionId}/actions",
@@ -148,58 +150,41 @@ public class MessageDmPrivateTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Dm_consult_history_still_sees_both_private_and_public_messages()
+    public async Task Assistant_chat_is_stored_in_consult_messages_never_in_the_messages_table()
     {
-        await PlayerActionAsync("ฉันสำรวจห้องใต้ดิน");
-        await ConsultAsync($"คำถามลับรอบแรก {SecretMarker}");
-        await ConsultAsync("คำถามต่อเนื่อง");
-
-        var history = _fake.LastHistoryReceived;
-        Assert.NotNull(history);
-        Assert.Contains(history!, h => h.Text.Contains("ฉันสำรวจห้องใต้ดิน"));
-        Assert.Contains(history!, h => h.Text.Contains(SecretMarker));
-    }
-
-    [Fact]
-    public async Task Consult_rows_are_written_private_and_action_rows_public()
-    {
-        await ConsultAsync("ข้อความ DM ลับ");
+        await AssistantAsync($"ข้อความ DM ลับ {SecretMarker}");
         await PlayerActionAsync("ข้อความผู้เล่น");
 
         await using var conn = new NpgsqlConnection(OwnerConnectionString);
         await conn.OpenAsync();
-        await using var cmd = new NpgsqlCommand(
-            "SELECT author_type, dm_private FROM messages WHERE session_id = @s ORDER BY created_at", conn);
-        cmd.Parameters.AddWithValue("s", _sessionId);
-        var rows = new List<(string Author, bool Private)>();
-        await using (var reader = await cmd.ExecuteReaderAsync())
+
+        // `messages` ต้องมีแต่แถวของเทิร์นผู้เล่น (public เสมอ) — ไม่มีแถวของ DM เลยแม้แต่แถวเดียว
+        await using (var cmd = new NpgsqlCommand(
+            "SELECT author_type, dm_private FROM messages WHERE session_id = @s ORDER BY created_at", conn))
         {
-            while (await reader.ReadAsync())
+            cmd.Parameters.AddWithValue("s", _sessionId);
+            var rows = new List<(string Author, bool Private)>();
+            await using (var reader = await cmd.ExecuteReaderAsync())
             {
-                rows.Add((reader.GetString(0), reader.GetBoolean(1)));
+                while (await reader.ReadAsync())
+                {
+                    rows.Add((reader.GetString(0), reader.GetBoolean(1)));
+                }
             }
+
+            Assert.Equal([("Player", false), ("Ai", false)], rows);
         }
 
-        Assert.Equal(
-            [("Dm", true), ("Ai", true), ("Player", false), ("Ai", false)],
-            rows);
-    }
-
-    [Fact]
-    public async Task Approved_proposal_reply_keeps_the_privacy_of_the_turn_that_created_it()
-    {
-        // ทั้งสองเทิร์นมีคำว่า roll → Suggest (ค่าเริ่มต้น) สร้าง proposal · ผู้ approve เป็น DM เสมอ
-        // แต่คำตอบ AI ต้องได้ dm_private ตามต้นทาง ไม่ใช่ตามคนกด
-        var fromPlayer = await PlayerActionAsync("I roll to climb the wall");
-        var playerProposalId = await ReadPendingProposalIdAsync(fromPlayer);
-        var fromDm = await ConsultAsync($"roll a secret check {SecretMarker}");
-        var dmProposalId = await ReadPendingProposalIdAsync(fromDm);
-
-        var playerReplyId = await ApproveAsync(playerProposalId);
-        var dmReplyId = await ApproveAsync(dmProposalId);
-
-        Assert.False(await IsPrivateAsync(playerReplyId));
-        Assert.True(await IsPrivateAsync(dmReplyId));
+        // บทสนทนาลับของ DM ต้องไปอยู่ใน `consult_messages` จริง ไม่ใช่หายไปเฉย ๆ
+        await using (var cmd = new NpgsqlCommand(
+            "SELECT content FROM consult_messages WHERE campaign_id = @c AND dm_user_id = @d", conn))
+        {
+            cmd.Parameters.AddWithValue("c", _campaignId);
+            cmd.Parameters.AddWithValue("d", _dmUserId);
+            await using var reader = await cmd.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            Assert.Contains(SecretMarker, reader.GetString(0));
+        }
     }
 
     // ── ชั้น RLS (กันได้เองแม้ filter ใน C# หาย) ──────────────────────────────
@@ -237,39 +222,14 @@ public class MessageDmPrivateTests : IAsyncLifetime
 
     // ── helpers ────────────────────────────────────────────────────────────
 
-    private Task<HttpResponseMessage> ConsultAsync(string content) =>
+    private Task<HttpResponseMessage> AssistantAsync(string content) =>
         AuthedClient(_dmToken).PostAsJsonAsync(
-            $"/campaigns/{_campaignId}/sessions/{_sessionId}/consult", new { Content = content });
+            $"/campaigns/{_campaignId}/assistant", new { Content = content, SessionId = _sessionId });
 
     private Task<HttpResponseMessage> PlayerActionAsync(string content) =>
         AuthedClient(_playerToken).PostAsJsonAsync(
             $"/campaigns/{_campaignId}/sessions/{_sessionId}/actions",
             new { CharacterId = _heroId, Content = content });
-
-    private static async Task<Guid> ReadPendingProposalIdAsync(HttpResponseMessage response)
-    {
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
-        return body.GetProperty("pending").GetProperty("proposalId").GetGuid();
-    }
-
-    private async Task<Guid> ApproveAsync(Guid proposalId)
-    {
-        var response = await AuthedClient(_dmToken).PostAsJsonAsync(
-            $"/campaigns/{_campaignId}/proposals/{proposalId}/resolve", new { Action = "approve" });
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadFromJsonAsync<JsonElement>(JsonOptions);
-        return body.GetProperty("messageId").GetGuid();
-    }
-
-    private static async Task<bool> IsPrivateAsync(Guid messageId)
-    {
-        await using var conn = new NpgsqlConnection(OwnerConnectionString);
-        await conn.OpenAsync();
-        await using var cmd = new NpgsqlCommand("SELECT dm_private FROM messages WHERE id = @id", conn);
-        cmd.Parameters.AddWithValue("id", messageId);
-        return (bool)(await cmd.ExecuteScalarAsync())!;
-    }
 
     private async Task InsertRawMessageAsync(string authorType, bool dmPrivate, string content)
     {

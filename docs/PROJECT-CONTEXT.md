@@ -113,20 +113,38 @@
 - สถานะการแปล ณ 2026-09-22: คาถริป 27/27 + เวทระดับ 1 57/57 แปลเนื้อหาเต็ม · เวทระดับ 2+ (255) และ
   มอนสเตอร์เนื้อหาเต็ม (322 จาก 330) **ยังไม่แปล** (parked)
 
-### DM AI Assistant — ผู้ช่วย DM (ฟีเจอร์หลักของโปรเจกต์ · ล็อก 2026-09-22/23)
+### DM AI Assistant — ผู้ช่วย DM (ฟีเจอร์หลักของโปรเจกต์ · ล็อก 2026-09-22 ถึง 24)
 โครงสร้าง context ของ AI แบ่งเป็น hybrid: สิ่งที่ต้องใช้ทุกเทิร์น (roster/scene/beat) ฝังใน system prompt
-สิ่งที่ใช้นาน ๆ ครั้ง (กฎเฉพาะ/สเตตมอนสเตอร์/บันทึกเก่า) ดึงตามคำขอผ่าน tool (`lookup_rule`/`lookup_monster`/
-`search_campaign_journal`) — ประหยัด token (BYOK, DM จ่ายเอง) โดยไม่เสีย context สำคัญ
-- **สองช่องทางคุยกับ AI แยกกันเด็ดขาด**: `/consult` (ผูก session, ใช้ pipeline เดียวกับ `/actions` ของ
-  ผู้เล่น จึงมีทาง broadcast — **ห้ามใส่ `StoryBeat.DmNotes`/`Secrets`/บทสนทนาลับเข้า prompt ทางนี้เด็ดขาด**)
-  กับ `/advisor` (ผูก campaign ไม่ใช่ session, ใช้ได้ก่อนเปิดเซสชันด้วยซ้ำ, text-only ไม่มี tool,
-  ไม่ broadcast ใด ๆ — ใส่ DmNotes/Secrets ได้เพราะปลอดภัยจริง)
-- **`messages.dm_private`** (2026-09-23) แยกข้อความของ `/consult` (ลับ) จากข้อความเทิร์นผู้เล่น (สาธารณะ)
-  ในตารางเดียวกัน — RLS ซ่อนแถวลับจากผู้เล่น + filter ชั้น C# กันกรณี DM เล่นตัวละครตัวเองผ่าน `/actions`
-  (RLS อย่างเดียวกันไม่ได้เพราะดูจากตัวตนไม่ใช่จากเส้นทาง broadcast) — **นี่คือรูปแบบช่องรั่วที่เจอซ้ำ
-  4 ครั้งในโปรเจกต์นี้แล้ว** (DmNotes/Secrets เข้า prompt, journal tool เสนอผิดเทิร์น, HP มอนสเตอร์ที่ซ่อน,
-  ล่าสุดคือ history ของ `/consult`) — **กฎที่ต้องยึดทุกครั้งที่เพิ่ม context ใหม่ให้ AI: ถามก่อนเสมอว่า
-  "ข้อมูลนี้มีทางไหลไปโผล่ narration ที่ broadcast ได้ไหม" ก่อนอนุญาตให้ prompt ไหนเห็นมัน**
+สิ่งที่ใช้นาน ๆ ครั้ง (กฎเฉพาะ/สเตตมอนสเตอร์/บันทึกเก่า) ดึงตามคำขอผ่าน tool — ประหยัด token (BYOK, DM จ่าย
+เอง) โดยไม่เสีย context สำคัญ
+
+**2026-09-23 — รวมช่องแชทเหลือช่องเดียว** เดิมมีสองช่องแยกกัน (`/consult` ผูก session ใช้ pipeline เดียว
+กับ `/actions` ของผู้เล่นจึง broadcast ได้ vs `/advisor` ผูก campaign, text-only, ไม่ broadcast — เห็น
+`StoryBeat.DmNotes`/`Secrets` ได้เฉพาะช่องหลัง) ผู้ใช้ขอให้รวมเป็นช่องเดียวที่ทั้งถามข้อมูลและสั่งงานได้
+หลายขั้นแบบ Claude Cowork — **ผู้ช่วย DM ช่องเดียว** (`AssistantEndpoints`/`AssistantRunner`, endpoint
+`POST /campaigns/{id}/assistant`) จึงแทนที่ทั้งสองช่องเดิม `/consult`/`/advisor` ถูกลบออกแล้ว
+
+- **กำแพงความปลอดภัยย้ายจาก "แยกช่องแชท" ไปอยู่ที่ระดับ tool** (`ToolGate` ใน `AssistantTools`) แทน:
+  อ่านอย่างเดียว/เขียนข้อมูลส่วนตัวของ DM (บันทึก) ทำทันที · เปลี่ยนสถานะเกมแบบมีโครงสร้าง (spawn มอนสเตอร์,
+  เปิดไฟต์, วาง token ฯลฯ) ตาม autonomy dial ของหมวดนั้น (Manual ไม่เสนอ, Suggest ขึ้นการ์ดอนุมัติ,
+  Autonomous ทำเลย) · **tool ที่ AI แต่งข้อความเองแล้วส่งถึงผู้เล่น (`narrate_to_players`, `npc_say`) ต้อง
+  ให้ DM เห็นข้อความจริงและยืนยัน/แก้ก่อนส่งเสมอ แม้ dial เป็น Autonomous** (`ToolGate.AlwaysConfirmText`)
+  — เป็นทางเดียวที่ความลับซึ่งผู้ช่วยรู้ (system prompt มี DmNotes/Secrets) จะรั่วถึงผู้เล่นได้ ห้าม dial
+  ข้ามกฎนี้เด็ดขาด
+- ผู้ช่วยใช้ได้ทั้งก่อนเปิดเซสชัน (เตรียมเกม) และระหว่างเล่น (เลือกเซสชันไว้แล้วได้ tool ของเซสชันเพิ่ม เช่น
+  ต่อสู้/แผนที่) ทำหลายขั้นต่อคำสั่งเดียวได้ (agent loop, เพดาน 8 รอบเรียก Claude ต่อคำสั่ง)
+- **`messages.dm_private`** แยกข้อความของผู้ช่วย DM (ลับ, เก็บที่ `consult_messages` ไม่ใช่ `messages`)
+  จากข้อความเทิร์นผู้เล่น (สาธารณะ, `messages`) — RLS ซ่อนแถวลับจากผู้เล่น + filter ชั้น C# กันกรณี DM เล่น
+  ตัวละครตัวเองผ่าน `/actions` (RLS อย่างเดียวกันไม่ได้เพราะดูจากตัวตนไม่ใช่จากเส้นทาง broadcast) —
+  **นี่คือรูปแบบช่องรั่วที่เจอซ้ำ 4 ครั้งในโปรเจกต์นี้แล้ว** (DmNotes/Secrets เข้า prompt, journal tool
+  เสนอผิดเทิร์น, HP มอนสเตอร์ที่ซ่อน, history ของ `/consult`) — **กฎที่ต้องยึดทุกครั้งที่เพิ่ม context ใหม่
+  ให้ AI: ถามก่อนเสมอว่า "ข้อมูลนี้มีทางไหลไปโผล่ narration ที่ broadcast ได้ไหม" ก่อนอนุญาตให้ prompt
+  ไหนเห็นมัน**
+- **บันทึกทีละขั้น (checkpoint)** — `RlsRequestTransaction` แทน transaction เดียวคลุมทั้ง request เดิม
+  เพราะผู้ช่วยเรียก Claude หลายรอบในคำสั่งเดียว (หลายวินาทีต่อรอบ) ถ้าคลุมด้วย transaction เดียวจะถือ row
+  lock ข้ามช่วงรอ network และถ้ารอบท้ายพังจะ rollback ของที่ทำไปแล้ว (ซึ่งอาจ broadcast ถึงผู้เล่นแล้ว) ไป
+  ด้วย — `CheckpointAsync()` commit แล้วเปิด transaction ใหม่พร้อมตั้ง RLS context ซ้ำ (ต้องตั้งซ้ำทุกครั้ง
+  เพราะ `set_config` ผูกกับ transaction)
 - **ความจำข้ามเซสชันสองชั้น**: `RecapSnapshot` (บีบอัด, ผูก session, มี `DmVersionText`/`PlayerVersionText`
   สองฉบับเสมอ — ฉบับผู้เล่นสร้างจาก **input ที่ไม่มีความลับตั้งแต่ต้น** ไม่ใช่ตัดความลับออกทีหลัง เพราะ
   "สั่งให้ AI อย่าพูดความลับ" ไม่ใช่ security boundary) กับ `CampaignJournalEntry` (รายละเอียด, ผูก
@@ -136,9 +154,10 @@
   `SpawnedFromMonsterId` ชี้แม่แบบ) แทนสร้างระบบคู่ขนาน — ได้ initiative/attack/HP broadcast/masking
   ของเดิมมาฟรีทั้งหมด · เป็น**ของชั่วคราวผูกกับ encounter**: จบ encounter แล้วลบทั้งแถว character และ
   token บนแผนที่ที่ชี้ไปหามัน พร้อมเขียนสรุปภาพรวม (ไม่ใช่ HP รายเทิร์น) ลงบันทึกแคมเปญ
-- **AI ที่หน้าเตรียมเซสชัน/ที่ปรึกษา ห้ามมี tool เขียน state** — เฉพาะ `/consult`/`/actions` ระหว่างเล่น
-  จริงเท่านั้นที่มี `roll_dice` (ผ่าน approval gate เดิม) ส่วน tool อ่านอย่างเดียว (`lookup_*`,
-  `search_campaign_journal`) ไม่ผ่าน gate เพราะไม่มี state ให้พัง
+- **`/actions` ของผู้เล่น (`OrchestratorTurnRunner`) เขียน state ได้เฉพาะ `roll_dice`** (ผ่าน approval
+  gate เดิม, ตัดออกตอน Manual) ส่วน tool อ่านอย่างเดียว (`lookup_rule`/`lookup_monster`) ไม่ผ่าน gate
+  เพราะไม่มี state ให้พัง — `search_campaign_journal` **ไม่เสนอในเทิร์นผู้เล่นเลย** (มีแต่ในผู้ช่วย DM)
+  เพราะบันทึกแคมเปญมีความลับปนได้เหมือนกัน
 
 ---
 
