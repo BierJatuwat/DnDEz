@@ -499,31 +499,36 @@ export function SceneMap({
 
         {/* เส้นกริด — อยู่เหนือรูปแต่ใต้ทุกอย่างที่เหลือ: มันคือ "กระดาษตาราง" ที่ของอื่นวางทับ ไม่ใช่ของที่ต้องเด่น
             · `vectorEffect="non-scaling-stroke"` ทำให้เส้นบางเท่าเดิมบนจอทุกระดับซูม (ถ้าไม่ใส่ ซูมเข้า 8 เท่า
-            แล้วเส้นจะหนาเป็นแถบทึบจนบังแผนที่) · ไม่รับ pointer event เด็ดขาด ไม่งั้นบังการคลิกวาง token */}
-        {showGrid && (
-          <g stroke="#ffffff" strokeOpacity={0.18} strokeWidth={1} style={{ pointerEvents: "none" }}>
-            {gridLinePositions(view.minX, view.minX + view.width, pps, gridOffsetX).map((x) => (
-              <line
-                key={`gx-${x}`}
-                x1={x}
-                y1={view.minY}
-                x2={x}
-                y2={view.minY + view.height}
-                vectorEffect="non-scaling-stroke"
-              />
-            ))}
-            {gridLinePositions(view.minY, view.minY + view.height, pps, gridOffsetY).map((y) => (
-              <line
-                key={`gy-${y}`}
-                x1={view.minX}
-                y1={y}
-                x2={view.minX + view.width}
-                y2={y}
-                vectorEffect="non-scaling-stroke"
-              />
-            ))}
-          </g>
-        )}
+            แล้วเส้นจะหนาเป็นแถบทึบจนบังแผนที่) · ไม่รับ pointer event เด็ดขาด ไม่งั้นบังการคลิกวาง token
+            · วาดสองรอบ (ขาวจาง ๆ กว้างกว่าเป็นรัศมี แล้วค่อยทับด้วยดำแคบกว่า) แทนสีเดียว — เส้นสีเดียว
+            อ่านไม่ออกบนแผนที่บางแบบเสมอ (ขาวล้วนจมกับกระดาษ/parchment สว่าง, ดำล้วนจมกับแผนที่มืด)
+            คู่ขาว-ดำนี้อ่านออกได้ทั้งสองแบบ */}
+        {showGrid && (() => {
+          const xs = gridLinePositions(view.minX, view.minX + view.width, pps, gridOffsetX);
+          const ys = gridLinePositions(view.minY, view.minY + view.height, pps, gridOffsetY);
+          return (
+            <>
+              {/* ขาวบาง ๆ วางก่อนเป็น "รัศมี" ให้เส้นดำด้านบนอ่านออกแม้แผนที่พื้นเข้ม — สลับกันไม่พอ
+                  เพราะขาวล้วนจางเกินไปบนแผนที่พื้นสว่าง (กระดาษ/parchment) แบบในภาพตัวอย่างจริง */}
+              <g stroke="#ffffff" strokeOpacity={0.5} strokeWidth={2.5} style={{ pointerEvents: "none" }}>
+                {xs.map((x) => (
+                  <line key={`gx-halo-${x}`} x1={x} y1={view.minY} x2={x} y2={view.minY + view.height} vectorEffect="non-scaling-stroke" />
+                ))}
+                {ys.map((y) => (
+                  <line key={`gy-halo-${y}`} x1={view.minX} y1={y} x2={view.minX + view.width} y2={y} vectorEffect="non-scaling-stroke" />
+                ))}
+              </g>
+              <g stroke="#000000" strokeOpacity={0.45} strokeWidth={1} style={{ pointerEvents: "none" }}>
+                {xs.map((x) => (
+                  <line key={`gx-${x}`} x1={x} y1={view.minY} x2={x} y2={view.minY + view.height} vectorEffect="non-scaling-stroke" />
+                ))}
+                {ys.map((y) => (
+                  <line key={`gy-${y}`} x1={view.minX} y1={y} x2={view.minX + view.width} y2={y} vectorEffect="non-scaling-stroke" />
+                ))}
+              </g>
+            </>
+          );
+        })()}
 
         {/* พื้นอยู่ใต้หมอก — ของ DM (หมอกโปร่ง) ที่อยู่ในพื้นที่ปิดจะดูจางลงเหมือน token ในหมอก */}
         {terrain && (
