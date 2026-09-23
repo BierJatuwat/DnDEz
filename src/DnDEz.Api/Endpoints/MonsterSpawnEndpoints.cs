@@ -126,9 +126,16 @@ public static class MonsterSpawnEndpoints
     /// สรุปที่เขียนเป็น **ภาพรวม ไม่ใช่ตัวเลข HP รายเทิร์น** ตามที่ผู้ใช้เลือกไว้ — บอกว่าตัวไหนล้ม
     /// (HP 0) ตัวไหนยังยืนอยู่ตอนจบ เพื่อให้ recap/AI ใช้อ้างอิงต่อได้โดยไม่ต้องเก็บ state เต็มไว้ตลอดกาล
     ///
-    /// คืนจำนวนแถวที่ลบ (ผู้เรียกเอาไปใส่ response ได้) · ผู้เรียกเป็นคน `SaveChangesAsync` เอง
+    /// **ลบ token บนแผนที่ของตัวที่ถูกลบด้วย** (2026-09-23) — DM วางตัวที่ spawn ลงแผนที่เป็น token
+    /// `EntityType = "Character"` ได้ ถ้าลบแถว character ทิ้งแต่ไม่ลบ token จะเหลือ token ผีที่ชี้ไปหา
+    /// character ที่ไม่มีอยู่แล้วค้างบนแผนที่ · ลบจาก `Scene.Tokens` ในธุรกรรมเดียวกันที่นี่ · pending
+    /// position ใน Redis ผู้เรียกล้างเองหลัง save (<see cref="SpawnCleanupResult.RemovedTokens"/>) ตามแบบ
+    /// DELETE token endpoint — flusher อัปเดตเฉพาะ token ที่ยังอยู่ใน `Scene.Tokens` จึงไม่ฟื้น token ที่ลบ
+    /// แล้วคืน แต่ pending ที่ไม่ล้างจะค้างใน Redis โดยไม่มีวันถูกใช้
+    ///
+    /// ผู้เรียกเป็นคน `SaveChangesAsync` เอง
     /// </summary>
-    internal static async Task<int> SummariseAndRemoveSpawnedMonstersAsync(
+    internal static async Task<SpawnCleanupResult> SummariseAndRemoveSpawnedMonstersAsync(
         DnDEzDbContext db, Guid campaignId, Guid encounterId, Guid sessionId)
     {
         var participantCharacterIds = await db.EncounterParticipants.AsNoTracking()
@@ -138,7 +145,7 @@ public static class MonsterSpawnEndpoints
 
         if (participantCharacterIds.Count == 0)
         {
-            return 0;
+            return SpawnCleanupResult.Empty;
         }
 
         var spawnedInstances = await db.Characters
@@ -149,7 +156,7 @@ public static class MonsterSpawnEndpoints
 
         if (spawnedInstances.Count == 0)
         {
-            return 0;
+            return SpawnCleanupResult.Empty;
         }
 
         var downed = spawnedInstances.Where(c => c.CurrentHp <= 0).Select(c => c.Name).ToList();
@@ -179,9 +186,31 @@ public static class MonsterSpawnEndpoints
             CreatedAt = DateTimeOffset.UtcNow,
         });
 
+        var spawnedIds = spawnedInstances.Select(c => c.Id).ToHashSet();
+        var removedTokens = new List<(Guid SceneId, Guid TokenId)>();
+        var scenes = await db.Scenes.Where(s => s.SessionId == sessionId).ToListAsync();
+        foreach (var scene in scenes)
+        {
+            var tokens = SceneTokenSerialization.Parse(scene.Tokens);
+            var doomed = tokens.Where(t => t.EntityType == "Character" && spawnedIds.Contains(t.EntityId)).ToList();
+            if (doomed.Count == 0)
+            {
+                continue;
+            }
+
+            tokens.RemoveAll(t => doomed.Contains(t));
+            scene.Tokens = SceneTokenSerialization.Serialize(tokens);
+            removedTokens.AddRange(doomed.Select(t => (scene.Id, t.Id)));
+        }
+
         db.Characters.RemoveRange(spawnedInstances);
-        return spawnedInstances.Count;
+        return new SpawnCleanupResult(spawnedInstances.Count, removedTokens);
     }
+}
+
+internal record SpawnCleanupResult(int RemovedMonsters, IReadOnlyList<(Guid SceneId, Guid TokenId)> RemovedTokens)
+{
+    internal static readonly SpawnCleanupResult Empty = new(0, []);
 }
 
 internal record SpawnMonsterRequest(int? Count, bool? StatsVisibleToParty);

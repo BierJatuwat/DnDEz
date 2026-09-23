@@ -1212,6 +1212,10 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                         .HasColumnName("created_at")
                         .HasDefaultValueSql("now()");
 
+                    b.Property<bool>("DmPrivate")
+                        .HasColumnType("boolean")
+                        .HasColumnName("dm_private");
+
                     b.Property<Guid>("SessionId")
                         .HasColumnType("uuid")
                         .HasColumnName("session_id");

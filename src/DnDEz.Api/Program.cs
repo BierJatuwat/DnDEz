@@ -556,6 +556,10 @@ app.MapCampaignJournalEndpoints();
 // เข้าวง initiative ได้ (ลบทิ้งพร้อมสรุปผลตอน encounter จบ ดู MonsterSpawnEndpoints) ──
 app.MapMonsterSpawnEndpoints();
 
+// ── สรุปเซสชัน (recap_snapshots) — ฉบับ DM (ความจำของ AI, รวมความลับ) กับฉบับผู้เล่น ("ตอนที่แล้ว…")
+// สร้างจาก input คนละชุด ไม่ใช่ให้ AI แยกเอง ดู doc comment ของ SessionRecapEndpoints ──
+app.MapSessionRecapEndpoints();
+
 // ── Sprint F งานที่ 4: encounter / initiative / turn order ──
 app.MapEncounterEndpoints();
 

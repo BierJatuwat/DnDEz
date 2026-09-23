@@ -183,7 +183,13 @@ internal static class OrchestratorTurnRunner
         }
 
         var systemPrompt = await BuildSystemPromptAsync(db, campaign, sessionId, authorType);
-        var history = await BuildHistoryAsync(db, sessionId);
+
+        // เทิร์นที่ไม่ broadcast (`/consult`) = ช่องส่วนตัวของ DM — ข้อความทั้งสองฝั่งของเทิร์นนี้ลับ และ
+        // เห็น history ลับได้ · เทิร์นที่ broadcast ห้ามเห็น history ลับเด็ดขาด ไม่ว่าคนกดจะเป็นใคร — ผูกกับ
+        // การ broadcast ไม่ใช่ตัวตน เพราะ DM ที่เล่นตัวละครตัวเองผ่าน `/actions` ก็ broadcast และ RLS ปล่อย
+        // ให้ DM อ่านแถวลับได้ filter ตรงนี้จึงเป็นตัวกันจริงของเคสนั้น (ดู `Message.DmPrivate`)
+        var dmPrivate = !broadcastActionMessages;
+        var history = await BuildHistoryAsync(db, sessionId, includeDmPrivate: dmPrivate);
         history.Add(new AnthropicHistoryMessage("user", content));
 
         var incomingMessage = new Message
@@ -196,6 +202,7 @@ internal static class OrchestratorTurnRunner
             Content = content,
             ToolCalls = null,
             Source = source,
+            DmPrivate = dmPrivate,
             CreatedAt = DateTimeOffset.UtcNow,
         };
         db.Messages.Add(incomingMessage);
@@ -212,7 +219,7 @@ internal static class OrchestratorTurnRunner
         if (firstTurn.ToolUse is null)
         {
             // Claude ตอบ narration จบเลย ไม่มี tool ให้ต้องตัดสินใจ auto/gate เลย — เหมือนกันทุก level
-            var narrationMessage = BuildAiMessage(sessionId, firstTurn.Text, toolCallsJson: null);
+            var narrationMessage = BuildAiMessage(sessionId, firstTurn.Text, toolCallsJson: null, dmPrivate);
             db.Messages.Add(narrationMessage);
             await db.SaveChangesAsync();
 
@@ -241,7 +248,7 @@ internal static class OrchestratorTurnRunner
                 new { name = lookupToolCallResponse.Name, input = lookupToolCallResponse.Input, result = lookupToolCallResponse.Result },
             });
 
-            var lookupAiMessage = BuildAiMessage(sessionId, afterLookupTurn.Text, lookupToolCallsJson);
+            var lookupAiMessage = BuildAiMessage(sessionId, afterLookupTurn.Text, lookupToolCallsJson, dmPrivate);
             db.Messages.Add(lookupAiMessage);
             await db.SaveChangesAsync();
 
@@ -266,7 +273,8 @@ internal static class OrchestratorTurnRunner
                     firstTurn.ToolUse.Id,
                     firstTurn.RawAssistantContent,
                     history,
-                    systemPrompt)),
+                    systemPrompt,
+                    dmPrivate)),
                 Reason = string.IsNullOrWhiteSpace(firstTurn.Text) ? null : firstTurn.Text,
                 Status = ProposalStatus.Pending,
                 CreatedAt = DateTimeOffset.UtcNow,
@@ -308,7 +316,7 @@ internal static class OrchestratorTurnRunner
             new { name = toolCallResponse.Name, input = toolCallResponse.Input, result = toolCallResponse.Result },
         });
 
-        var aiMessage = BuildAiMessage(sessionId, secondTurn.Text, toolCallsJson);
+        var aiMessage = BuildAiMessage(sessionId, secondTurn.Text, toolCallsJson, dmPrivate);
         db.Messages.Add(aiMessage);
         await db.SaveChangesAsync();
 
@@ -464,10 +472,11 @@ internal static class OrchestratorTurnRunner
         return sb.ToString();
     }
 
-    private static async Task<List<AnthropicHistoryMessage>> BuildHistoryAsync(DnDEzDbContext db, Guid sessionId)
+    private static async Task<List<AnthropicHistoryMessage>> BuildHistoryAsync(
+        DnDEzDbContext db, Guid sessionId, bool includeDmPrivate)
     {
         var existingMessages = await db.Messages
-            .Where(m => m.SessionId == sessionId)
+            .Where(m => m.SessionId == sessionId && (includeDmPrivate || !m.DmPrivate))
             .OrderBy(m => m.CreatedAt)
             .Select(m => new { m.AuthorType, m.Content })
             .ToListAsync();
@@ -477,7 +486,7 @@ internal static class OrchestratorTurnRunner
             .ToList();
     }
 
-    internal static Message BuildAiMessage(Guid sessionId, string content, string? toolCallsJson) => new()
+    internal static Message BuildAiMessage(Guid sessionId, string content, string? toolCallsJson, bool dmPrivate) => new()
     {
         Id = Guid.NewGuid(),
         SessionId = sessionId,
@@ -487,6 +496,7 @@ internal static class OrchestratorTurnRunner
         Content = content,
         ToolCalls = toolCallsJson,
         Source = ActionSource.Ai,
+        DmPrivate = dmPrivate,
         CreatedAt = DateTimeOffset.UtcNow,
     };
 

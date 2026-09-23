@@ -103,6 +103,43 @@
   ให้ DM เป็นคนพูดแนะนำ (คุมต้นทุน token)
 - **Condition tooltip ดึงจาก RulesCorpus ไม่เรียก AI** (ไม่เปลือง token)
 
+### SRD 5.2.1 ภาษาไทย (ล็อก 2026-09-22)
+- **ชื่อเฉพาะคงอังกฤษเสมอ**: ชื่อมอนสเตอร์/ไอเทม/อาวุธ/เวท/condition/rule title — แปลเฉพาะบริบทรอบข้าง
+  (เหตุผล: กันความสับสนตอนอ้างอิงกฎระหว่างเล่น เช่น DM พิมพ์ "Bless" ต้องหาเจอ ไม่ใช่ต้องเดาว่าแปลว่าอะไร)
+  Action/Area of Effect/Hazard/Attitude (Sphere, Cube, Dash, Friendly…) แปลเป็นไทยได้ปกติเพราะเป็นศัพท์ระบบ
+  ไม่ใช่ proper noun
+- ตารางคำแปลแยกจากต้นฉบับเสมอ (`SrdMonsterTranslation`/`SrdSpellTranslation`/`RulesCorpusTranslation`)
+  ไม่เติมคอลัมน์ `*_th` ในตารางเดิม — แปลไม่ครบได้โดยไม่พัง (แถวที่ยังไม่แปล fallback เป็นอังกฤษที่ endpoint)
+- สถานะการแปล ณ 2026-09-22: คาถริป 27/27 + เวทระดับ 1 57/57 แปลเนื้อหาเต็ม · เวทระดับ 2+ (255) และ
+  มอนสเตอร์เนื้อหาเต็ม (322 จาก 330) **ยังไม่แปล** (parked)
+
+### DM AI Assistant — ผู้ช่วย DM (ฟีเจอร์หลักของโปรเจกต์ · ล็อก 2026-09-22/23)
+โครงสร้าง context ของ AI แบ่งเป็น hybrid: สิ่งที่ต้องใช้ทุกเทิร์น (roster/scene/beat) ฝังใน system prompt
+สิ่งที่ใช้นาน ๆ ครั้ง (กฎเฉพาะ/สเตตมอนสเตอร์/บันทึกเก่า) ดึงตามคำขอผ่าน tool (`lookup_rule`/`lookup_monster`/
+`search_campaign_journal`) — ประหยัด token (BYOK, DM จ่ายเอง) โดยไม่เสีย context สำคัญ
+- **สองช่องทางคุยกับ AI แยกกันเด็ดขาด**: `/consult` (ผูก session, ใช้ pipeline เดียวกับ `/actions` ของ
+  ผู้เล่น จึงมีทาง broadcast — **ห้ามใส่ `StoryBeat.DmNotes`/`Secrets`/บทสนทนาลับเข้า prompt ทางนี้เด็ดขาด**)
+  กับ `/advisor` (ผูก campaign ไม่ใช่ session, ใช้ได้ก่อนเปิดเซสชันด้วยซ้ำ, text-only ไม่มี tool,
+  ไม่ broadcast ใด ๆ — ใส่ DmNotes/Secrets ได้เพราะปลอดภัยจริง)
+- **`messages.dm_private`** (2026-09-23) แยกข้อความของ `/consult` (ลับ) จากข้อความเทิร์นผู้เล่น (สาธารณะ)
+  ในตารางเดียวกัน — RLS ซ่อนแถวลับจากผู้เล่น + filter ชั้น C# กันกรณี DM เล่นตัวละครตัวเองผ่าน `/actions`
+  (RLS อย่างเดียวกันไม่ได้เพราะดูจากตัวตนไม่ใช่จากเส้นทาง broadcast) — **นี่คือรูปแบบช่องรั่วที่เจอซ้ำ
+  4 ครั้งในโปรเจกต์นี้แล้ว** (DmNotes/Secrets เข้า prompt, journal tool เสนอผิดเทิร์น, HP มอนสเตอร์ที่ซ่อน,
+  ล่าสุดคือ history ของ `/consult`) — **กฎที่ต้องยึดทุกครั้งที่เพิ่ม context ใหม่ให้ AI: ถามก่อนเสมอว่า
+  "ข้อมูลนี้มีทางไหลไปโผล่ narration ที่ broadcast ได้ไหม" ก่อนอนุญาตให้ prompt ไหนเห็นมัน**
+- **ความจำข้ามเซสชันสองชั้น**: `RecapSnapshot` (บีบอัด, ผูก session, มี `DmVersionText`/`PlayerVersionText`
+  สองฉบับเสมอ — ฉบับผู้เล่นสร้างจาก **input ที่ไม่มีความลับตั้งแต่ต้น** ไม่ใช่ตัดความลับออกทีหลัง เพราะ
+  "สั่งให้ AI อย่าพูดความลับ" ไม่ใช่ security boundary) กับ `CampaignJournalEntry` (รายละเอียด, ผูก
+  campaign, ค้นได้ผ่าน tool, `AuthoredBy` เป็น Dm/Ai/System — DM พิมพ์เอง, ให้ AI สรุปเซสชันให้, หรือ
+  ระบบเขียนสรุปผลไฟต์อัตโนมัติตอนจบ encounter)
+- **มอนสเตอร์มี HP รายตัวโดย spawn เป็นแถว `Character`** (`ControlledByDm=true`,
+  `SpawnedFromMonsterId` ชี้แม่แบบ) แทนสร้างระบบคู่ขนาน — ได้ initiative/attack/HP broadcast/masking
+  ของเดิมมาฟรีทั้งหมด · เป็น**ของชั่วคราวผูกกับ encounter**: จบ encounter แล้วลบทั้งแถว character และ
+  token บนแผนที่ที่ชี้ไปหามัน พร้อมเขียนสรุปภาพรวม (ไม่ใช่ HP รายเทิร์น) ลงบันทึกแคมเปญ
+- **AI ที่หน้าเตรียมเซสชัน/ที่ปรึกษา ห้ามมี tool เขียน state** — เฉพาะ `/consult`/`/actions` ระหว่างเล่น
+  จริงเท่านั้นที่มี `roll_dice` (ผ่าน approval gate เดิม) ส่วน tool อ่านอย่างเดียว (`lookup_*`,
+  `search_campaign_journal`) ไม่ผ่าน gate เพราะไม่มี state ให้พัง
+
 ---
 
 ## 3. Stack

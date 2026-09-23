@@ -270,6 +270,61 @@ public class MonsterSpawnEndpointsTests : IAsyncLifetime
         Assert.Equal("System", reader.GetString(1)); // ระบบสรุปเอง ไม่ใช่ DM พิมพ์/AI แต่ง
     }
 
+    /// <summary>
+    /// 2026-09-23 — DM วางตัวที่ spawn ลงแผนที่เป็น token `Character` ได้ ถ้าจบ encounter แล้วลบแค่แถว
+    /// character จะเหลือ token ผีชี้ไปหาตัวที่ไม่มีอยู่แล้วค้างบนแผนที่ · ต้องลบเฉพาะ token ของ instance
+    /// ไม่แตะ token ของผู้เล่นหรือ NPC ถาวร
+    /// </summary>
+    [Fact]
+    public async Task Ending_the_encounter_also_removes_spawned_monsters_map_tokens_only()
+    {
+        var client = AuthedClient(_dmToken);
+        var spawn = await client.PostAsJsonAsync(
+            $"/campaigns/{_campaignId}/monsters/{_monsterId}/spawn", new { Count = 1 });
+        var monsterId = (await spawn.Content.ReadFromJsonAsync<List<SpawnedMonsterItem>>(JsonOptions))!.Single().Id;
+
+        var sceneId = Guid.NewGuid();
+        var monsterTokenId = Guid.NewGuid();
+        var heroTokenId = Guid.NewGuid();
+        var npcTokenId = Guid.NewGuid();
+        var tokensJson = JsonSerializer.Serialize(new object[]
+        {
+            new { id = monsterTokenId, entityType = "Character", entityId = monsterId, x = 1.0, y = 1.0 },
+            new { id = heroTokenId, entityType = "Character", entityId = _playerCharacterId, x = 2.0, y = 2.0 },
+            new { id = npcTokenId, entityType = "Character", entityId = _permanentNpcId, x = 3.0, y = 3.0 },
+        });
+        await using (var conn = new NpgsqlConnection(OwnerConnectionString))
+        {
+            await conn.OpenAsync();
+            await ExecAsync(conn,
+                """
+                INSERT INTO scenes (id, session_id, name, grid, tokens, fog_layer, is_active)
+                VALUES (@id, @sessionId, 'Spawn Token Scene', '{}', @tokens::jsonb, '{}', true)
+                """,
+                ("id", sceneId), ("sessionId", _sessionId), ("tokens", tokensJson));
+        }
+
+        var createEncounter = await client.PostAsJsonAsync(
+            $"/campaigns/{_campaignId}/sessions/{_sessionId}/encounters",
+            new { CharacterIds = new[] { _playerCharacterId, _permanentNpcId, monsterId } });
+        Assert.Equal(HttpStatusCode.Created, createEncounter.StatusCode);
+        var encounterId = (await createEncounter.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+
+        var end = await client.PostAsJsonAsync($"/campaigns/{_campaignId}/encounters/{encounterId}/end", new { });
+        Assert.Equal(HttpStatusCode.OK, end.StatusCode);
+
+        await using var verifyConn = new NpgsqlConnection(OwnerConnectionString);
+        await verifyConn.OpenAsync();
+        await using var cmd = new NpgsqlCommand("SELECT tokens::text FROM scenes WHERE id = @id", verifyConn);
+        cmd.Parameters.AddWithValue("id", sceneId);
+        var remaining = JsonSerializer.Deserialize<JsonElement>((string)(await cmd.ExecuteScalarAsync())!)
+            .EnumerateArray().Select(t => t.GetProperty("id").GetGuid()).ToList();
+
+        Assert.DoesNotContain(monsterTokenId, remaining);
+        Assert.Contains(heroTokenId, remaining);
+        Assert.Contains(npcTokenId, remaining);
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────
 
     private static async Task<int> ReadCurrentHpAsync(NpgsqlConnection conn, Guid characterId)

@@ -12,6 +12,7 @@ import { useMovement } from "@/lib/use-movement";
 import type { CampaignMember } from "@/lib/campaign-types";
 import { SceneMap } from "./SceneMap";
 import { RulesReferencePanel } from "./RulesReferencePanel";
+import { PreviouslyOnCard } from "./PreviouslyOnCard";
 import { parseSceneGrid } from "@/lib/scene-grid";
 import { CharacterPresetPicker } from "./CharacterPresetPicker";
 import { AffordancePanel } from "./AffordancePanel";
@@ -140,6 +141,8 @@ export function PlayerView({ campaignId }: { campaignId: string }) {
             selectedSessionId={ws.selectedSessionId}
             onSelect={ws.setSelectedSessionId}
           />
+
+          <PreviouslyOnCard campaignId={campaignId} />
 
           <CharacterRosterPanel
             title="ตัวละครของฉัน"

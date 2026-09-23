@@ -314,6 +314,13 @@ export function useCampaignWorkspace(campaignId: string) {
         void queryClient.invalidateQueries({ queryKey: ["death-saves"] });
         void queryClient.invalidateQueries({ queryKey: ["characters"] });
       }
+      if (name === "EncounterEnded") {
+        // server ลบมอนสเตอร์ที่ spawn มา (แถว character + token บนแผนที่) และเขียนสรุปผลลงบันทึกแคมเปญ
+        // ในธุรกรรมเดียวกับการจบ encounter — ต้องดึงทั้งสามอย่างใหม่ ไม่งั้นจอค้างตัวที่ไม่มีอยู่แล้ว
+        void queryClient.invalidateQueries({ queryKey: ["characters"] });
+        void queryClient.invalidateQueries({ queryKey: ["scene"] });
+        void queryClient.invalidateQueries({ queryKey: ["journal"] });
+      }
     },
     onFogChanged: () => {
       // Sprint G Part 6 — DM เปิด/ปิดพื้นที่ แปลว่า "รายการ token ที่เรามีสิทธิ์เห็นเปลี่ยนไปแล้ว"

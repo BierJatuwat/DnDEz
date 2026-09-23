@@ -46,6 +46,17 @@ public class Message
     /// </summary>
     public ActionSource Source { get; set; } = ActionSource.Player;
 
+    /// <summary>
+    /// true = ข้อความจาก `/consult` ของ DM (ทั้งฝั่ง DM และคำตอบ AI) ซึ่ง**ไม่เคย broadcast** และอาจมี
+    /// สปอยล์/แผนลับของ DM · false = ข้อความของเทิร์นที่ผู้เล่นเริ่ม (`/actions`) ที่ทุกคนในโต๊ะเห็นแล้ว
+    ///
+    /// ก่อนมีคอลัมน์นี้ ทั้งสองแบบปนกันแยกไม่ออก แล้ว `OrchestratorTurnRunner` ส่ง log ทั้ง session เป็น
+    /// history ให้เทิร์นของผู้เล่นด้วย — AI เห็นสิ่งที่ DM ปรึกษาลับ ๆ แล้วเอามาเล่าใน narration ที่
+    /// broadcast ได้ (คลาสเดียวกับ DmNotes/Secrets ใน Part A) · RLS ของ `messages` ซ่อนแถว true จาก
+    /// คนที่ไม่ใช่ DM ด้วย (migration `AddMessageDmPrivate`)
+    /// </summary>
+    public bool DmPrivate { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; }
 }
 

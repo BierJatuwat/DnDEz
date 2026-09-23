@@ -119,6 +119,15 @@ export type CampaignMonster = {
   reviewStatus: string;
 };
 
+/** ตัวที่ spawn จากแม่แบบ — เป็นแถว `characters` (ControlledByDm) มี HP ของตัวเอง ชั่วคราวประจำไฟต์ */
+export type SpawnedMonster = {
+  id: string;
+  name: string;
+  currentHp: number;
+  maxHp: number;
+  armorClass: number;
+};
+
 export type CopySrdMonsterResult = {
   monsterId: string;
   srdKey: string;

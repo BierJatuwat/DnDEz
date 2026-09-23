@@ -239,7 +239,9 @@ public static class ConsultEndpoints
                 new { name = toolCallResponse.Name, input = toolCallResponse.Input, result = toolCallResponse.Result },
             });
 
-            var aiMessage = OrchestratorTurnRunner.BuildAiMessage(proposal.SessionId, secondTurn.Text, toolCallsJson);
+            // proposal ที่เก่ากว่าคอลัมน์ `OriginDmPrivate` (null) ถือว่าลับไว้ก่อน — fail closed
+            var aiMessage = OrchestratorTurnRunner.BuildAiMessage(
+                proposal.SessionId, secondTurn.Text, toolCallsJson, payload.OriginDmPrivate ?? true);
             db.Messages.Add(aiMessage);
             await db.SaveChangesAsync();
 
@@ -314,14 +316,18 @@ internal record ProposalResolutionResponse(
 /// <summary>เก็บใน Proposal.ToolCallJson ระหว่างรอ DM approve — ต้องมีครบทุกอย่างที่ต้องใช้ resume
 /// บทสนทนาต่อได้โดยไม่ต้องพึ่ง state อื่นที่อาจเปลี่ยนไปแล้วระหว่างรอ (เช่น messages ใหม่ที่เพิ่มมาคั่น)
 /// <c>SystemPrompt</c> (2026-09-22) ต้องเป็นค่าเดียวกับตอน `SendTurnAsync` รอบแรกเป๊ะ — ห้ามประกอบใหม่
-/// ตอน resolve เพราะ roster/beat อาจเปลี่ยนไปแล้วระหว่างรอ DM approve (เช่น มีคนตายกลางทาง)</summary>
+/// ตอน resolve เพราะ roster/beat อาจเปลี่ยนไปแล้วระหว่างรอ DM approve (เช่น มีคนตายกลางทาง)
+/// <c>OriginDmPrivate</c> (2026-09-23) — เทิร์นต้นทางเป็นช่องลับของ DM (`/consult`) หรือเทิร์นผู้เล่น
+/// ที่ broadcast · คำตอบ AI หลัง approve ต้องได้ `Message.DmPrivate` ตามต้นทาง ไม่ใช่ตามคนกด approve
+/// (ซึ่งเป็น DM เสมอ)</summary>
 internal record PendingProposalPayload(
     string ToolName,
     JsonElement ToolInput,
     string ToolUseId,
     JsonElement RawAssistantContent,
     List<AnthropicHistoryMessage> History,
-    string? SystemPrompt);
+    string? SystemPrompt,
+    bool? OriginDmPrivate = null);
 
 internal record ProposalCreatedBroadcast(
     Guid ProposalId, Guid SessionId, string Subsystem, string ToolName, JsonElement ToolInput, string? Reason);

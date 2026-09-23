@@ -99,6 +99,11 @@ export function useCombatActions({
       }),
     onSuccess: async () => {
       await invalidateEncounter();
+      // มอนสเตอร์ที่ spawn ถูกลบ (ตัว + token) และมีสรุปผลลงบันทึก — ไม่รอ broadcast `EncounterEnded`
+      // เผื่อ realtime หลุดอยู่ คนกดจบเองต้องเห็นผลทันที
+      await queryClient.invalidateQueries({ queryKey: ["characters"] });
+      await queryClient.invalidateQueries({ queryKey: ["scene"] });
+      await queryClient.invalidateQueries({ queryKey: ["journal"] });
     },
     onError: (err) => {
       if (err instanceof ApiError) appendLog(`จบ encounter ไม่สำเร็จ: HTTP ${err.status}`);

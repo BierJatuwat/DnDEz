@@ -24,6 +24,7 @@ import {
   type StatField,
 } from "@/lib/monster-stats-form";
 import type { MonsterStatChanges } from "@/lib/use-srd";
+import { describeSpawned, MAX_SPAWN_COUNT, parseSpawnCount } from "@/lib/monster-spawn";
 import type { CampaignMonster, SrdMonsterSummary } from "@/lib/srd-types";
 
 const inputClass =
@@ -59,7 +60,7 @@ export function MonsterLibraryPanel({ campaignId }: { campaignId: string }) {
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const { monsters, total, attribution, isLoading, isError } = useSrdMonsters({ query, crMax, page });
-  const { monsters: campaignMonsters, copyFromSrd, updateMonster } = useCampaignMonsters(campaignId);
+  const { monsters: campaignMonsters, copyFromSrd, updateMonster, spawnMonster } = useCampaignMonsters(campaignId);
 
   const ownedKeys = new Set(campaignMonsters.map((m) => m.srdKey).filter((k): k is string => !!k));
   const pageCount = Math.ceil(total / MONSTER_PAGE_SIZE);
@@ -174,7 +175,7 @@ export function MonsterLibraryPanel({ campaignId }: { campaignId: string }) {
       {campaignMonsters.length > 0 && (
         <div className="space-y-1">
           <p className="text-xs uppercase tracking-wider opacity-50">
-            อยู่ในแคมเปญนี้แล้ว ({campaignMonsters.length}) — กดเพื่อปรับค่าพลังก่อนเอาลงแผนที่
+            อยู่ในแคมเปญนี้แล้ว ({campaignMonsters.length}) — กดเพื่อส่งลงสนามหรือปรับค่าพลัง
           </p>
           <ul className="space-y-1">
             {campaignMonsters.map((m) => (
@@ -190,6 +191,9 @@ export function MonsterLibraryPanel({ campaignId }: { campaignId: string }) {
                     AC {m.armorClass} · HP {m.hitPoints} · เดิน {m.speedFeet} · เอื้อม {m.reachFeet}
                   </span>
                 </button>
+                {editingId === m.id && (
+                  <SpawnControls monster={m} spawn={spawnMonster} />
+                )}
                 {editingId === m.id && (
                   <MonsterStatEditor
                     monster={m}
@@ -210,6 +214,69 @@ export function MonsterLibraryPanel({ campaignId }: { campaignId: string }) {
       )}
 
       <SrdAttribution text={attribution} />
+    </div>
+  );
+}
+
+/**
+ * ส่งมอนสเตอร์ลงสนามเป็นตัวที่มี HP ของตัวเอง — ต่างจากการวาง token แม่แบบตรง ๆ (ใช้ค่าชุดเดียวกันทุกตัว)
+ * ตัวที่ spawn เข้าวง initiative ได้และถูกลบพร้อมสรุปผลลงบันทึกแคมเปญตอนจบ encounter
+ */
+function SpawnControls({
+  monster,
+  spawn,
+}: {
+  monster: CampaignMonster;
+  spawn: ReturnType<typeof useCampaignMonsters>["spawnMonster"];
+}) {
+  const [countText, setCountText] = useState("1");
+  const [statsVisible, setStatsVisible] = useState(false);
+  const [lastSpawned, setLastSpawned] = useState<string | null>(null);
+  const count = parseSpawnCount(countText);
+  const isMine = spawn.variables?.monsterId === monster.id;
+
+  return (
+    <div className="space-y-1 border-t border-black/10 dark:border-white/10 px-2 py-2">
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <label className="flex items-center gap-1">
+          จำนวน
+          <input
+            value={countText}
+            onChange={(e) => setCountText(e.target.value)}
+            inputMode="numeric"
+            aria-label={`จำนวน ${monster.name} ที่จะส่งลงสนาม`}
+            aria-invalid={count === null}
+            className={`${inputClass} w-14 tabular-nums`}
+          />
+        </label>
+        <label className="flex items-center gap-1">
+          <input type="checkbox" checked={statsVisible} onChange={(e) => setStatsVisible(e.target.checked)} />
+          ผู้เล่นเห็น HP/AC
+        </label>
+        <button
+          type="button"
+          disabled={count === null || (spawn.isPending && isMine)}
+          onClick={() =>
+            count !== null &&
+            spawn.mutate(
+              { monsterId: monster.id, count, statsVisibleToParty: statsVisible },
+              { onSuccess: (spawned) => setLastSpawned(describeSpawned(spawned.map((s) => s.name))) },
+            )
+          }
+          className="rounded bg-rose-700 px-2 py-1 text-white disabled:opacity-50"
+        >
+          ส่งลงสนาม
+        </button>
+      </div>
+      {count === null && (
+        <p className="text-[11px] text-red-500">ใส่จำนวน 1–{MAX_SPAWN_COUNT}</p>
+      )}
+      {lastSpawned && !(spawn.isError && isMine) && (
+        <p className="text-[11px] opacity-70">
+          ส่ง {lastSpawned} ลงแล้ว — เลือกเข้าวงต่อสู้ได้ที่แผง Encounter · จบ encounter แล้วจะถูกลบพร้อมสรุปผล
+        </p>
+      )}
+      {spawn.isError && isMine && <p className="text-[11px] text-red-500">ส่งลงสนามไม่สำเร็จ ลองใหม่อีกครั้ง</p>}
     </div>
   );
 }

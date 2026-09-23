@@ -7,6 +7,7 @@ import { useSrdLanguageStore } from "./srd-language-store";
 import type {
   CampaignMonster,
   CopySrdMonsterResult,
+  SpawnedMonster,
   SrdCorpusItem,
   SrdListResponse,
   SrdMonsterDetail,
@@ -151,8 +152,8 @@ export function useCampaignMonsters(campaignId: string, enabled = true) {
   /**
    * ปรับค่าพลังของ **แม่แบบ** — ส่งเฉพาะช่องที่แก้ (PATCH ไม่ใช่ PUT)
    *
-   * ⚠️ มีผลกับทุกตัวที่วางจากแม่แบบนี้ เพราะมอนสเตอร์ยังไม่มี HP รายตัว (ดู doc comment ของ
-   * `MonsterEndpoints` ฝั่ง C#) — หน้าจอต้องบอก DM ให้ชัด ไม่ใช่ปล่อยให้เดา
+   * ⚠️ มีผลกับ token มอนสเตอร์ที่วางจากแม่แบบนี้ตรง ๆ ทุกตัว (ใช้ค่าชุดเดียวกัน) · ตัวที่ **spawn** ไปแล้ว
+   * (`spawnMonster` ด้านล่าง) ไม่เปลี่ยนตาม เพราะคัดลอกค่าไว้ตอน spawn — หน้าจอต้องบอก DM ให้ชัด
    */
   const updateMonster = useMutation({
     mutationFn: ({ monsterId, ...changes }: MonsterStatChanges & { monsterId: string }) =>
@@ -170,12 +171,37 @@ export function useCampaignMonsters(campaignId: string, enabled = true) {
     },
   });
 
+  /**
+   * ส่งมอนสเตอร์ลงสนาม — สร้างตัวละคร DM-controlled N ตัวที่มี HP ของตัวเอง เข้าวง initiative ได้
+   * (เลือกได้ในแผง Encounter) และถูกลบพร้อมสรุปผลลงบันทึกแคมเปญตอนจบ encounter
+   */
+  const spawnMonster = useMutation({
+    mutationFn: ({
+      monsterId,
+      count,
+      statsVisibleToParty,
+    }: {
+      monsterId: string;
+      count: number;
+      statsVisibleToParty: boolean;
+    }) =>
+      apiFetch<SpawnedMonster[]>(`/campaigns/${campaignId}/monsters/${monsterId}/spawn`, {
+        method: "POST",
+        token,
+        body: { count, statsVisibleToParty },
+      }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["characters", campaignId] });
+    },
+  });
+
   return {
     monsters: monstersQuery.data ?? [],
     isLoading: monstersQuery.isPending && enabled,
     isError: monstersQuery.isError,
     copyFromSrd,
     updateMonster,
+    spawnMonster,
   };
 }
 

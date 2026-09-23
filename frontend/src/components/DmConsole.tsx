@@ -9,6 +9,8 @@ import { useCombatActions } from "@/lib/use-combat-actions";
 import { useScene } from "@/lib/use-scene";
 import type { ApiKeyInfo, CampaignMember } from "@/lib/campaign-types";
 import { AdvisorPanel } from "./AdvisorPanel";
+import { CampaignJournalPanel } from "./CampaignJournalPanel";
+import { SessionRecapPanel } from "./SessionRecapPanel";
 import { DmMapTools } from "./DmMapTools";
 import { MonsterLibraryPanel } from "./MonsterLibraryPanel";
 import { RulesReferencePanel } from "./RulesReferencePanel";
@@ -598,6 +600,12 @@ export function DmConsole({ campaignId }: { campaignId: string }) {
           {/* ผูกกับแคมเปญ ไม่ใช่ session — จงใจอยู่นอกเงื่อนไข selectedSessionId ด้านล่าง เพราะ
               ที่ปรึกษามีไว้ใช้ตอน "ยังไม่เริ่มเล่น" ด้วย (เตรียมตัว/วางแผนตอนถัดไป) */}
           <AdvisorPanel campaignId={campaignId} />
+
+          {/* ความจำของ AI สองชั้น: บันทึก (รายละเอียด, ค้นได้) ผูกแคมเปญ · สรุปเซสชัน (บีบอัด) ผูกเซสชัน */}
+          <CampaignJournalPanel campaignId={campaignId} selectedSessionId={ws.selectedSessionId} />
+          {ws.selectedSessionId && (
+            <SessionRecapPanel campaignId={campaignId} sessionId={ws.selectedSessionId} />
+          )}
 
           {ws.selectedSessionId && (
             <>
