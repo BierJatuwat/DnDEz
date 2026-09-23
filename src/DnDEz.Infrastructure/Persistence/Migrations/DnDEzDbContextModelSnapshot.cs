@@ -214,6 +214,62 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("DnDEz.Domain.Entities.AssistantRun", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("CampaignId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("campaign_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<Guid>("DmUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("dm_user_id");
+
+                    b.Property<Guid?>("SessionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("session_id");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("state");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("status");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.HasKey("Id")
+                        .HasName("pk_assistant_runs");
+
+                    b.HasIndex("SessionId")
+                        .HasDatabaseName("ix_assistant_runs_session_id");
+
+                    b.HasIndex("CampaignId", "DmUserId", "Status")
+                        .HasDatabaseName("ix_assistant_runs_campaign_id_dm_user_id_status");
+
+                    b.ToTable("assistant_runs", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_status_assistantrun", "status IN ('Running', 'AwaitingApproval', 'Completed', 'Abandoned')");
+                        });
+                });
+
             modelBuilder.Entity("DnDEz.Domain.Entities.AutonomySetting", b =>
                 {
                     b.Property<Guid>("Id")
@@ -776,6 +832,10 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
+                    b.Property<string>("Activity")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("activity");
+
                     b.Property<Guid>("CampaignId")
                         .HasColumnType("uuid")
                         .HasColumnName("campaign_id");
@@ -804,8 +864,15 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                         .HasColumnType("text")
                         .HasColumnName("role");
 
+                    b.Property<Guid?>("SessionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("session_id");
+
                     b.HasKey("Id")
                         .HasName("pk_consult_messages");
+
+                    b.HasIndex("SessionId")
+                        .HasDatabaseName("ix_consult_messages_session_id");
 
                     b.HasIndex("CampaignId", "CreatedAt")
                         .HasDatabaseName("ix_consult_messages_campaign_id_created_at");
@@ -2193,6 +2260,24 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                     b.Navigation("User");
                 });
 
+            modelBuilder.Entity("DnDEz.Domain.Entities.AssistantRun", b =>
+                {
+                    b.HasOne("DnDEz.Domain.Entities.Campaign", "Campaign")
+                        .WithMany()
+                        .HasForeignKey("CampaignId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_assistant_runs_campaigns_campaign_id");
+
+                    b.HasOne("DnDEz.Domain.Entities.GameSession", null)
+                        .WithMany()
+                        .HasForeignKey("SessionId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("fk_assistant_runs_sessions_session_id");
+
+                    b.Navigation("Campaign");
+                });
+
             modelBuilder.Entity("DnDEz.Domain.Entities.AutonomySetting", b =>
                 {
                     b.HasOne("DnDEz.Domain.Entities.Campaign", "Campaign")
@@ -2319,6 +2404,12 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_consult_messages_campaigns_campaign_id");
+
+                    b.HasOne("DnDEz.Domain.Entities.GameSession", null)
+                        .WithMany()
+                        .HasForeignKey("SessionId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("fk_consult_messages_sessions_session_id");
 
                     b.Navigation("Campaign");
                 });

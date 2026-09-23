@@ -8,7 +8,7 @@ import { useCampaignWorkspace } from "@/lib/use-campaign-workspace";
 import { useCombatActions } from "@/lib/use-combat-actions";
 import { useScene } from "@/lib/use-scene";
 import type { ApiKeyInfo, CampaignMember } from "@/lib/campaign-types";
-import { AdvisorPanel } from "./AdvisorPanel";
+import { AssistantPanel } from "./AssistantPanel";
 import { CampaignJournalPanel } from "./CampaignJournalPanel";
 import { SessionRecapPanel } from "./SessionRecapPanel";
 import { DmMapTools } from "./DmMapTools";
@@ -46,8 +46,8 @@ type CampaignDetail = { id: string; name: string; joinCode: string | null };
  * Sprint F งานที่ 6a — หน้าของ DM (`/campaigns/{id}/dm`)
  *
  * ต่างจากหน้าผู้เล่นตรงที่ DM เห็น/ทำได้: ตั้ง join code, ดูรายชื่อสมาชิก, สร้างเซสชัน, ปรับ autonomy
- * dial, ปรึกษา AI, อนุมัติ proposal — ส่วนช่องพิมพ์ action แทนตัวละครไม่มีที่นี่ (DM สั่งผ่าน
- * /consult และจะคุม NPC ผ่าน UI ของงานที่ 6b)
+ * dial, ใช้ผู้ช่วย DM (`AssistantPanel`), อนุมัติคำขอจากเทิร์นผู้เล่น — ส่วนช่องพิมพ์ action แทนตัวละคร
+ * ไม่มีที่นี่ (DM สั่งงานผ่านผู้ช่วย DM และคุม NPC ผ่าน UI ของงานที่ 6b)
  *
  * ⚠️ การซ่อน/แสดงปุ่มที่นี่เป็นเรื่อง UX ล้วน ๆ ไม่ใช่ security — ทุก endpoint เช็คสิทธิ์เองที่ชั้น API
  * (ดู doc comment ของ `useCampaignRole`)
@@ -597,9 +597,13 @@ export function DmConsole({ campaignId }: { campaignId: string }) {
             setLevel={ws.setAutonomyLevel}
           />
 
-          {/* ผูกกับแคมเปญ ไม่ใช่ session — จงใจอยู่นอกเงื่อนไข selectedSessionId ด้านล่าง เพราะ
-              ที่ปรึกษามีไว้ใช้ตอน "ยังไม่เริ่มเล่น" ด้วย (เตรียมตัว/วางแผนตอนถัดไป) */}
-          <AdvisorPanel campaignId={campaignId} />
+          {/* ผู้ช่วย DM ช่องเดียว (แทนที่ปรึกษา + ปรึกษา AI เดิม) — อยู่นอกเงื่อนไข selectedSessionId โดยตั้งใจ:
+              ใช้ตอนเตรียมเกมก่อนเปิดเซสชันได้ด้วย · เลือกเซสชันแล้วผู้ช่วยได้ tool ของเซสชันเพิ่มเอง */}
+          <AssistantPanel
+            campaignId={campaignId}
+            sessionId={ws.selectedSessionId}
+            sessionLabel={ws.selectedSessionId ? ws.selectedSessionId.slice(0, 8) : null}
+          />
 
           {/* ความจำของ AI สองชั้น: บันทึก (รายละเอียด, ค้นได้) ผูกแคมเปญ · สรุปเซสชัน (บีบอัด) ผูกเซสชัน */}
           <CampaignJournalPanel campaignId={campaignId} selectedSessionId={ws.selectedSessionId} />
@@ -610,53 +614,10 @@ export function DmConsole({ campaignId }: { campaignId: string }) {
           {ws.selectedSessionId && (
             <>
               <section className={sectionClass}>
-                <h2 className="font-medium">ปรึกษา AI</h2>
-                <div className="flex gap-2">
-                  <textarea
-                    value={ws.consultInput}
-                    onChange={(e) => ws.setConsultInput(e.target.value)}
-                    placeholder="ถาม/สั่ง DM AI..."
-                    className="flex-1 rounded border border-black/20 dark:border-white/20 bg-transparent px-3 py-1.5"
-                  />
-                  <button
-                    onClick={() => {
-                      const text = ws.consultInput.trim();
-                      if (!text) return;
-                      // แสดงข้อความของ DM ทันที ไม่ต้องรอ response — onSuccess/onError จะเติมฝั่ง AI ตามมา
-                      ws.appendConsultMessage("dm", text);
-                      ws.consult.mutate(text);
-                      ws.setConsultInput("");
-                    }}
-                    disabled={ws.consult.isPending || !ws.consultInput.trim()}
-                    className="rounded bg-indigo-600 px-3 py-1.5 text-white disabled:opacity-50"
-                  >
-                    ส่ง
-                  </button>
-                </div>
-                <ul className="space-y-1 text-sm max-h-64 overflow-y-auto">
-                  {ws.consultMessages.map((m, i) => (
-                    <li
-                      key={i}
-                      className={
-                        m.role === "dm"
-                          ? "opacity-100"
-                          : m.role === "ai"
-                            ? "opacity-90 text-indigo-400"
-                            : "opacity-60 italic"
-                      }
-                    >
-                      <span className="opacity-50">{m.at}</span>{" "}
-                      <span className="font-mono text-xs">[{m.role}]</span> {m.text}
-                    </li>
-                  ))}
-                  {ws.consultMessages.length === 0 && (
-                    <li className="opacity-50 text-sm">ยังไม่มีบทสนทนา</li>
-                  )}
-                </ul>
-              </section>
-
-              <section className={sectionClass}>
-                <h2 className="font-medium">คิว proposal รออนุมัติ</h2>
+                <h2 className="font-medium">คำขอจากเทิร์นผู้เล่นรออนุมัติ</h2>
+                <p className="text-[11px] opacity-60">
+                  AI ขอทอยเต๋าระหว่างเทิร์นของผู้เล่น (ตาม dial) — งานที่สั่งผ่านผู้ช่วย DM อนุมัติในแชทข้างบน
+                </p>
                 {ws.proposalsQuery.isError && (
                   <p className="text-sm text-red-500">โหลดคิว proposal ไม่สำเร็จ</p>
                 )}

@@ -25,6 +25,10 @@ public sealed class AnthropicClient(HttpClient httpClient) : IAnthropicClient
     private const string ApiVersion = "2023-06-01";
     private const string Model = "claude-sonnet-5";
     private const int MaxTokens = 1024;
+
+    /// <summary>ผู้ช่วย DM แบบหลายขั้นตอบยาวกว่าเทิร์นเดียว (สรุปสิ่งที่ทำ + คำอธิบายเป็นไทยซึ่งกิน token มากกว่า
+    /// อังกฤษ) — 1024 เดิมตัดคำตอบกลางประโยคได้ง่าย · ยังจำกัดไว้เพราะ BYOK DM จ่ายเอง</summary>
+    private const int AgentMaxTokens = 2048;
     private const string MessagesPath = "v1/messages";
 
     public async Task<ApiKeyValidationOutcome> ValidateKeyAsync(string apiKey, CancellationToken cancellationToken)
@@ -69,8 +73,61 @@ public sealed class AnthropicClient(HttpClient httpClient) : IAnthropicClient
         var messages = BuildMessagesArray(history);
         var toolsArray = tools.Count == 0 ? null : BuildToolsArray(tools);
 
-        var response = await SendMessagesRequestAsync(apiKey, system, messages, toolsArray, cancellationToken);
+        var response = await SendMessagesRequestAsync(apiKey, system, messages, toolsArray, MaxTokens, cancellationToken);
         return ExtractTurnResult(response);
+    }
+
+    public async Task<AgentTurnResult> SendAgentTurnAsync(
+        string apiKey,
+        string? system,
+        IReadOnlyList<AgentMessage> messages,
+        IReadOnlyList<AnthropicToolDefinition> tools,
+        CancellationToken cancellationToken)
+    {
+        var messagesArray = new JsonArray();
+        foreach (var message in messages)
+        {
+            // string round-trip ด้วยเหตุผลเดียวกับ ContinueWithToolResultAsync — content อาจมาจาก jsonb
+            messagesArray.Add(new JsonObject
+            {
+                ["role"] = message.Role,
+                ["content"] = JsonNode.Parse(message.Content.GetRawText()),
+            });
+        }
+
+        var toolsArray = tools.Count == 0 ? null : BuildToolsArray(tools);
+        var response = await SendMessagesRequestAsync(
+            apiKey, system, messagesArray, toolsArray, AgentMaxTokens, cancellationToken);
+
+        var contentNode = response["content"]
+            ?? throw new AnthropicApiException("Anthropic response ไม่มี content array");
+        var textParts = new List<string>();
+        var toolUses = new List<AnthropicPendingToolUse>();
+        foreach (var blockNode in contentNode.AsArray())
+        {
+            if (blockNode is not JsonObject block)
+            {
+                continue;
+            }
+
+            var type = block["type"]?.GetValue<string>();
+            if (type == "text")
+            {
+                textParts.Add(block["text"]?.GetValue<string>() ?? string.Empty);
+            }
+            else if (type == "tool_use")
+            {
+                toolUses.Add(new AnthropicPendingToolUse(
+                    block["id"]!.GetValue<string>(),
+                    block["name"]!.GetValue<string>(),
+                    JsonSerializer.Deserialize<JsonElement>(block["input"]!.ToJsonString())));
+            }
+        }
+
+        return new AgentTurnResult(
+            string.Join("\n", textParts),
+            toolUses,
+            JsonSerializer.Deserialize<JsonElement>(contentNode.ToJsonString()));
     }
 
     public async Task<AnthropicTurnResult> ContinueWithToolResultAsync(
@@ -102,7 +159,7 @@ public sealed class AnthropicClient(HttpClient httpClient) : IAnthropicClient
         });
 
         var toolsArray = tools.Count == 0 ? null : BuildToolsArray(tools);
-        var response = await SendMessagesRequestAsync(apiKey, system, messages, toolsArray, cancellationToken);
+        var response = await SendMessagesRequestAsync(apiKey, system, messages, toolsArray, MaxTokens, cancellationToken);
         return ExtractTurnResult(response);
     }
 
@@ -134,12 +191,13 @@ public sealed class AnthropicClient(HttpClient httpClient) : IAnthropicClient
     }
 
     private async Task<JsonObject> SendMessagesRequestAsync(
-        string apiKey, string? system, JsonArray messages, JsonArray? tools, CancellationToken cancellationToken)
+        string apiKey, string? system, JsonArray messages, JsonArray? tools, int maxTokens,
+        CancellationToken cancellationToken)
     {
         var body = new JsonObject
         {
             ["model"] = Model,
-            ["max_tokens"] = MaxTokens,
+            ["max_tokens"] = maxTokens,
             ["messages"] = messages,
         };
         if (tools is not null)

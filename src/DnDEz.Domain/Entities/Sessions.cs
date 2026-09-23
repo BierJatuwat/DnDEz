@@ -195,7 +195,42 @@ public class ConsultMessage
     public ConsultRole Role { get; set; }
     public string Content { get; set; } = null!;
     public Guid? LinkedBeatId { get; set; }
+
+    /// <summary>เซสชันที่ DM เลือกไว้ตอนคุย (2026-09-23 ผู้ช่วย DM ช่องเดียว) — null = คุยตอนไม่ได้อยู่ใน
+    /// เซสชันไหน (เตรียมตัว/วางแผน) · `SessionTranscript` ฉบับ DM ดึงแถวที่ผูกเซสชันไปรวมใน recap/journal ·
+    /// ไม่มี navigation property ด้วยเหตุผลเดียวกับ <see cref="CampaignJournalEntry"/></summary>
+    public Guid? SessionId { get; set; }
+
+    /// <summary>jsonb — สิ่งที่ผู้ช่วยทำไปในคำตอบนี้ (tool ไหน, สรุปสั้น, สถานะ) ให้หน้าจอโชว์ใต้ข้อความ
+    /// null = ข้อความธรรมดาไม่มีการกระทำ</summary>
+    public string? Activity { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; }
+}
+
+/// <summary>
+/// งานของผู้ช่วย DM ที่ **หยุดรอ DM อนุมัติ** กลางทาง (2026-09-23) — เก็บบทสนทนาดิบกับ Claude (content blocks
+/// รวม tool_use/tool_result) + system prompt เพื่อทำต่อได้หลัง DM กดอนุมัติ ซึ่งอาจเป็นอีก request หนึ่ง
+///
+/// ⚠️ <see cref="State"/> มี system prompt ที่รวม `StoryBeat.DmNotes`/`Secrets` เสมอ — ตารางนี้จึง
+/// `dm_only` ที่ชั้น RLS (migration `AddAssistantRuns`) และ**ห้ามใช้ `proposals` แทน** เพราะสมาชิกทุกคนอ่าน
+/// `proposals` ได้ที่ชั้น DB และมันบังคับต้องมี session
+/// </summary>
+public class AssistantRun
+{
+    public Guid Id { get; set; }
+    public Guid CampaignId { get; set; }
+    public Campaign Campaign { get; set; } = null!;
+    public Guid? SessionId { get; set; }
+    public Guid DmUserId { get; set; }
+    public AssistantRunStatus Status { get; set; }
+
+    /// <summary>jsonb — `AssistantRunState` ฝั่ง Api · ล้างเป็น `{}` เมื่องานจบ ไม่เก็บบทสนทนาที่มีความลับ
+    /// ค้างไว้โดยไม่จำเป็น</summary>
+    public string State { get; set; } = "{}";
+
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
 }
 
 /// <summary>

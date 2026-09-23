@@ -34,6 +34,7 @@ public class DnDEzDbContext(DbContextOptions<DnDEzDbContext> options) : DbContex
     public DbSet<RecapSnapshot> RecapSnapshots => Set<RecapSnapshot>();
     public DbSet<ConsultMessage> ConsultMessages => Set<ConsultMessage>();
     public DbSet<CampaignJournalEntry> CampaignJournalEntries => Set<CampaignJournalEntry>();
+    public DbSet<AssistantRun> AssistantRuns => Set<AssistantRun>();
     public DbSet<DiceRoll> DiceRolls => Set<DiceRoll>();
     public DbSet<Encounter> Encounters => Set<Encounter>();
     public DbSet<EncounterParticipant> EncounterParticipants => Set<EncounterParticipant>();
@@ -330,9 +331,26 @@ public class DnDEzDbContext(DbContextOptions<DnDEzDbContext> options) : DbContex
         {
             e.HasOne(x => x.Campaign).WithMany()
                 .HasForeignKey(x => x.CampaignId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<GameSession>().WithMany()
+                .HasForeignKey(x => x.SessionId).OnDelete(DeleteBehavior.SetNull);
+            e.Property(x => x.Activity).HasColumnType(Jsonb);
             e.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
             e.HasIndex(x => new { x.CampaignId, x.CreatedAt });
             EnumCheck<ConsultMessage, ConsultRole>(e, x => x.Role, "role");
+        });
+
+        b.Entity<AssistantRun>(e =>
+        {
+            e.ToTable("assistant_runs");
+            e.HasOne(x => x.Campaign).WithMany()
+                .HasForeignKey(x => x.CampaignId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<GameSession>().WithMany()
+                .HasForeignKey(x => x.SessionId).OnDelete(DeleteBehavior.SetNull);
+            e.Property(x => x.State).HasColumnType(Jsonb);
+            e.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+            e.Property(x => x.UpdatedAt).HasDefaultValueSql("now()");
+            e.HasIndex(x => new { x.CampaignId, x.DmUserId, x.Status });
+            EnumCheck<AssistantRun, AssistantRunStatus>(e, x => x.Status, "status");
         });
 
         b.Entity<CampaignJournalEntry>(e =>

@@ -139,6 +139,9 @@ builder.Services.AddSingleton(new MapAssetStorageOptions(minioBucket, RewriteSig
 // ── Sprint D Part 2: Anthropic client (BYOK tool-calling loop) ─────────────
 // IAnthropicClient แยก interface ออกจาก implementation จริงตั้งใจ — ทดสอบด้วย fake ในเทสต์
 // (ไม่มีทางเรียก Anthropic จริงในเทสต์อัตโนมัติได้อยู่แล้ว ไม่มี key จริง/ไม่ deterministic/มีต้นทุนจริง)
+// transaction ต่อ request + RLS context (ใช้โดย middleware ด้านล่าง และ endpoint ที่ต้อง checkpoint)
+builder.Services.AddScoped<RlsRequestTransaction>();
+
 builder.Services.AddHttpClient<IAnthropicClient, AnthropicClient>(client =>
 {
     client.BaseAddress = new Uri("https://api.anthropic.com/");
@@ -321,35 +324,27 @@ app.Use(async (context, next) =>
         return;
     }
 
-    var db = context.RequestServices.GetRequiredService<DnDEzDbContext>();
-    await using var transaction = await db.Database.BeginTransactionAsync(context.RequestAborted);
-
-    // ค่าทั้งสองส่งเป็น parameter เสมอ (ExecuteSqlInterpolated* = parameterized ไม่ใช่ string concat)
-    // ต่อให้เป็น Guid ที่ parse แล้วก็ไม่ต่อสตริงเข้า SQL — กันนิสัยเสียที่จะลามไปที่อื่น
-    var userId = context.User.GetUserId();
-    if (userId is not null)
-    {
-        await db.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.user_id', {userId.Value.ToString()}, true)", context.RequestAborted);
-    }
+    // ตัว transaction + การตั้ง set_config อยู่ใน RlsRequestTransaction (scoped) — endpoint ที่ทำงานหลายขั้น
+    // เรียก CheckpointAsync ได้ (ดู doc comment ของคลาส) ส่วน endpoint อื่นได้พฤติกรรมเดิมทุกประการ
+    var requestTransaction = context.RequestServices.GetRequiredService<RlsRequestTransaction>();
 
     // campaignId มาจาก route ที่ constraint :guid กรองมาแล้ว แต่ยัง TryParse ซ้ำ เพราะ middleware นี้
     // ต้องทนกับ route อื่นในอนาคตที่อาจตั้งชื่อ campaignId โดยไม่ผูก constraint
-    if (context.Request.RouteValues.TryGetValue("campaignId", out var rawCampaignId)
-        && Guid.TryParse(rawCampaignId?.ToString(), out var campaignId))
-    {
-        await db.Database.ExecuteSqlInterpolatedAsync(
-            $"SELECT set_config('app.campaign_id', {campaignId.ToString()}, true)", context.RequestAborted);
-    }
+    Guid? campaignId = context.Request.RouteValues.TryGetValue("campaignId", out var rawCampaignId)
+        && Guid.TryParse(rawCampaignId?.ToString(), out var parsedCampaignId)
+            ? parsedCampaignId
+            : null;
+
+    await requestTransaction.BeginAsync(context.User.GetUserId(), campaignId, context.RequestAborted);
 
     try
     {
         await next(context);
-        await transaction.CommitAsync(CancellationToken.None);
+        await requestTransaction.CommitAsync();
     }
     catch
     {
-        await transaction.RollbackAsync(CancellationToken.None);
+        await requestTransaction.RollbackAsync();
         throw;
     }
 });
@@ -559,6 +554,10 @@ app.MapMonsterSpawnEndpoints();
 // ── สรุปเซสชัน (recap_snapshots) — ฉบับ DM (ความจำของ AI, รวมความลับ) กับฉบับผู้เล่น ("ตอนที่แล้ว…")
 // สร้างจาก input คนละชุด ไม่ใช่ให้ AI แยกเอง ดู doc comment ของ SessionRecapEndpoints ──
 app.MapSessionRecapEndpoints();
+
+// ── ผู้ช่วย DM ช่องเดียว (2026-09-23) — ถามข้อมูล + สั่งงานหลายขั้น, tool ขออนุญาตตาม autonomy dial,
+// ข้อความถึงผู้เล่นต้องให้ DM ยืนยันเสมอ ดู AssistantEndpoints / AssistantTools ──
+app.MapAssistantEndpoints();
 
 // ── Sprint F งานที่ 4: encounter / initiative / turn order ──
 app.MapEncounterEndpoints();

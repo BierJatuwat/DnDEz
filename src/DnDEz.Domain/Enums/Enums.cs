@@ -68,6 +68,11 @@ public enum ConsultRole { Dm, Ai }
 /// แยกออกมาเพราะถ้าติดป้ายผิดเป็น Ai คนอ่านทีหลังจะเข้าใจผิดว่าข้อความนี้อาจถูกแต่งขึ้น</summary>
 public enum JournalAuthor { Dm, Ai, System }
 
+/// <summary>งานของผู้ช่วย DM — Running = กำลังทำอยู่ (รีเควสต์อื่นห้ามแตะ กันกดอนุมัติซ้ำแล้วงานวิ่งสองรอบ) ·
+/// AwaitingApproval = หยุดรอ DM กดอนุมัติ tool · Abandoned = DM พิมพ์คำสั่งใหม่ทั้งที่ยังมีงานค้าง
+/// (งานเดิมถูกทิ้ง ไม่ทำต่อ)</summary>
+public enum AssistantRunStatus { Running, AwaitingApproval, Completed, Abandoned }
+
 /// <summary>คลังกลไก (action catalog) — Sprint G Part 1, design doc §2.4: รวมอาวุธ/เวท/การเคลื่อนที่
 /// เป็นของอย่างเดียวเพราะ engine มองเหมือนกันหมด</summary>
 public enum ActionCatalogKind { Weapon, Spell, Movement }

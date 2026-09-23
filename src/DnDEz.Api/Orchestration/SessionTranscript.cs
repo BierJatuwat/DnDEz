@@ -33,17 +33,36 @@ internal static class SessionTranscript
                 join c in db.Characters.AsNoTracking() on m.CharacterId equals c.Id into characters
                 from c in characters.DefaultIfEmpty()
                 orderby m.CreatedAt descending
-                select new { m.AuthorType, m.Content, m.DmPrivate, CharacterName = c == null ? null : c.Name })
+                select new { m.AuthorType, m.Content, m.DmPrivate, m.CreatedAt, CharacterName = c == null ? null : c.Name })
             .ToListAsync();
+
+        var entries = rows
+            .Select(r => (r.CreatedAt, Speaker: Speaker(r.AuthorType, r.CharacterName, r.DmPrivate), r.Content))
+            .ToList();
+
+        // 2026-09-23 — ผู้ช่วย DM ช่องเดียวเก็บบทสนทนาที่ `consult_messages` (ไม่ใช่ `messages` แบบ `/consult` เดิม)
+        // ฉบับ DM ต้องรวมที่ DM คุยกับผู้ช่วยระหว่างเซสชันนี้ด้วย ไม่งั้น recap/บันทึกของ DM จะขาดแผนที่ปรึกษาไว้ ·
+        // ฉบับผู้เล่นห้ามแตะตารางนี้เด็ดขาด (DM-only ทั้งตาราง)
+        if (includeDmPrivate)
+        {
+            var assistantRows = await db.ConsultMessages.AsNoTracking()
+                .Where(m => m.SessionId == sessionId)
+                .Select(m => new { m.Role, m.Content, m.CreatedAt })
+                .ToListAsync();
+            entries.AddRange(assistantRows.Select(r => (
+                r.CreatedAt,
+                Speaker: r.Role == ConsultRole.Ai ? "DM's assistant (private)" : "DM to assistant (private)",
+                r.Content)));
+        }
 
         var lines = new List<string>();
         var total = 0;
-        foreach (var row in rows)
+        foreach (var row in entries.OrderByDescending(e => e.CreatedAt))
         {
             var content = row.Content.Length > MaxCharsPerMessage
                 ? row.Content[..MaxCharsPerMessage] + "…"
                 : row.Content;
-            var line = $"[{Speaker(row.AuthorType, row.CharacterName, row.DmPrivate)}] {content}";
+            var line = $"[{row.Speaker}] {content}";
             if (total + line.Length > MaxTotalChars)
             {
                 break;

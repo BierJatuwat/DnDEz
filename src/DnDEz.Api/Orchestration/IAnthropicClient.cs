@@ -66,7 +66,28 @@ public interface IAnthropicClient
         string toolUseId,
         string toolResultText,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// หนึ่งรอบของผู้ช่วย DM แบบทำงานหลายขั้น (`AssistantEndpoints`, 2026-09-23) — ต่างจาก
+    /// <see cref="SendTurnAsync"/> สองข้อ: (1) <paramref name="messages"/> เป็น content blocks ดิบ
+    /// (`tool_use`/`tool_result` ฝังอยู่ได้) ผู้เรียกเป็นเจ้าของบทสนทนาทั้งก้อนและต่อท้ายเองทีละรอบ
+    /// (2) คืน tool_use **ทุกตัว** ในคำตอบ ไม่ใช่แค่ตัวแรก — Anthropic ต้องได้ tool_result ครบทุกตัวใน
+    /// ข้อความถัดไป ไม่งั้นปฏิเสธ request
+    /// </summary>
+    Task<AgentTurnResult> SendAgentTurnAsync(
+        string apiKey,
+        string? system,
+        IReadOnlyList<AgentMessage> messages,
+        IReadOnlyList<AnthropicToolDefinition> tools,
+        CancellationToken cancellationToken);
 }
+
+/// <summary>ข้อความหนึ่งรายการของบทสนทนาแบบหลายขั้น — <see cref="Content"/> เป็น string หรือ array ของ
+/// content block ตาม Messages API (เก็บเป็น JsonElement เพื่อ serialize ลง `assistant_runs.state` ตรง ๆ)</summary>
+public sealed record AgentMessage(string Role, JsonElement Content);
+
+public sealed record AgentTurnResult(
+    string Text, IReadOnlyList<AnthropicPendingToolUse> ToolUses, JsonElement RawAssistantContent);
 
 public enum ApiKeyValidationOutcome
 {

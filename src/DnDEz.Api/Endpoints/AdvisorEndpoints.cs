@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using System.Text;
+using DnDEz.Api.Assistant;
 using DnDEz.Api.Auth;
 using DnDEz.Api.Orchestration;
 using DnDEz.Domain.Entities;
@@ -173,85 +174,11 @@ public static class AdvisorEndpoints
             "rules and mechanics accuracy (encounter balance, CR/DC maths, action economy) — when you " +
             "are not certain a rule is exactly right, say so instead of guessing confidently. Respond " +
             "in the same language the DM writes in (this DM mostly writes Thai).");
-        sb.AppendLine($"Campaign name: {campaign.Name}");
-        sb.AppendLine($"Party's starting level: {campaign.StartingLevel}");
 
-        var activeBeat = await db.StoryBeats.AsNoTracking()
-            .Where(b => b.CampaignId == campaign.Id
-                && b.Progress == BeatProgress.Active
-                && b.ReviewStatus == ReviewStatus.Approved)
-            .Select(b => new { b.Id, b.Title, b.Objective, b.Summary, b.EntryTrigger, b.DmNotes, b.Secrets })
-            .SingleOrDefaultAsync();
-
-        if (activeBeat is not null)
-        {
-            sb.AppendLine($"Current story beat: {activeBeat.Title}");
-            AppendIfPresent(sb, "Objective", activeBeat.Objective);
-            AppendIfPresent(sb, "Summary", activeBeat.Summary);
-            AppendIfPresent(sb, "Entry trigger", activeBeat.EntryTrigger);
-            AppendIfPresent(sb, "DM's private notes", activeBeat.DmNotes);
-            // secrets เป็น jsonb `[{text, reveal_condition}]` — ส่งดิบ ๆ ให้ Claude อ่านเอง ไม่ parse
-            // เพราะ schema ของแต่ละรายการอาจต่างกันได้ และ Claude อ่าน JSON ตรง ๆ ได้อยู่แล้ว
-            if (!string.IsNullOrWhiteSpace(activeBeat.Secrets) && activeBeat.Secrets.Trim() != "[]")
-            {
-                sb.AppendLine($"Secrets the players do NOT know yet (JSON): {activeBeat.Secrets}");
-            }
-        }
-
-        var upcomingBeats = await db.StoryBeats.AsNoTracking()
-            .Where(b => b.CampaignId == campaign.Id
-                && b.Progress == BeatProgress.Upcoming
-                && b.ReviewStatus == ReviewStatus.Approved)
-            .OrderBy(b => b.Order)
-            .Select(b => new { b.Title, b.Objective })
-            .ToListAsync();
-        if (upcomingBeats.Count > 0)
-        {
-            sb.AppendLine("Upcoming story beats (not yet played, in order):");
-            foreach (var beat in upcomingBeats)
-            {
-                var objective = string.IsNullOrWhiteSpace(beat.Objective) ? string.Empty : $" — {beat.Objective}";
-                sb.AppendLine($"- {beat.Title}{objective}");
-            }
-        }
-
-        var roster = await db.Characters.AsNoTracking()
-            .Where(c => c.CampaignId == campaign.Id && !c.ControlledByDm)
-            .OrderBy(c => c.Name)
-            .Select(c => new { c.Name, c.Level, c.CurrentHp, c.MaxHp, c.ArmorClass })
-            .ToListAsync();
-        if (roster.Count > 0)
-        {
-            sb.AppendLine("Party roster:");
-            foreach (var character in roster)
-            {
-                sb.AppendLine(
-                    $"- {character.Name} (level {character.Level}): HP {character.CurrentHp}/{character.MaxHp}, AC {character.ArmorClass}");
-            }
-        }
-
-        // recap ของเซสชันล่าสุดที่มี — ใช้ DmVersionText (รวมความลับ) ไม่ใช่ PlayerVersionText
-        // ⚠️ ตอนนี้ยังไม่มี endpoint ไหนเขียน `recap_snapshots` เลย (Part D เป็นคนต่อให้) จึงมักเป็น
-        // null ในทางปฏิบัติ — เขียนรองรับไว้ก่อนเพราะเป็นแหล่งความจำข้ามเซสชันที่ตั้งใจไว้แต่แรก
-        var latestRecap = await db.RecapSnapshots.AsNoTracking()
-            .Where(r => db.Sessions.Any(s => s.Id == r.SessionId && s.CampaignId == campaign.Id))
-            .OrderByDescending(r => r.CreatedAt)
-            .Select(r => r.DmVersionText)
-            .FirstOrDefaultAsync();
-        if (!string.IsNullOrWhiteSpace(latestRecap))
-        {
-            sb.AppendLine($"Recap of the most recent session (DM version, includes secrets): {latestRecap}");
-        }
-
-        return (sb.ToString(), activeBeat?.Id);
-    }
-
-    private static void AppendIfPresent(StringBuilder sb, string label, string? value)
-    {
-        if (!string.IsNullOrWhiteSpace(value))
-        {
-            sb.AppendLine($"{label}: {value}");
-        }
+        // บริบทแคมเปญ (รวมความลับ) ย้ายไปอยู่ที่ AssistantPrompt ตัวเดียว (2026-09-23) — ผู้ช่วยช่องเดียวใช้
+        // ตัวเดียวกัน · endpoint นี้จะถูกลบเมื่อผู้ช่วยช่องเดียวแทนที่ครบ
+        var activeBeatId = await AssistantPrompt.AppendCampaignContextAsync(sb, db, campaign);
+        return (sb.ToString(), activeBeatId);
     }
 
     /// <summary>

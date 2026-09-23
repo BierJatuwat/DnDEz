@@ -555,7 +555,7 @@ internal static class OrchestratorTurnRunner
 
     /// <summary>2026-09-22 (Part B) — จุดเดียวที่ dispatch ไปหา executor ของ tool อ่านอย่างเดียวแต่ละตัว
     /// (มีแค่ 2 ตัวตอนนี้ แยกฟังก์ชันไว้ตั้งแต่ต้นเผื่อเพิ่มตัวที่ 3 ทีหลัง ไม่ต้องแก้จุดเรียก)</summary>
-    private static async Task<string> ExecuteReadOnlyToolAsync(
+    internal static async Task<string> ExecuteReadOnlyToolAsync(
         DnDEzDbContext db, Guid campaignId, string toolName, JsonElement input) => toolName switch
     {
         "lookup_rule" => await ExecuteLookupRule(db, input),

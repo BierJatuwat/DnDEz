@@ -135,6 +135,57 @@ public sealed class FakeAnthropicClient : IAnthropicClient
             emptyContent));
     }
 
+    // ── ผู้ช่วย DM แบบหลายขั้น (2026-09-23) ─────────────────────────────────────
+
+    /// <summary>คำตอบที่จะคืนทีละรอบตามลำดับ — เทสต์ใส่สคริปต์ไว้ก่อนยิง request · หมดคิวแล้วจะตอบเป็น
+    /// ข้อความ "จบงาน" โดยไม่เรียก tool (loop จบเอง) ไม่ใช่ throw — เทสต์ที่อยากเช็คเพดานรอบต้องใส่คิวให้เกินเอง</summary>
+    public Queue<ScriptedAgentTurn> AgentScript { get; } = new();
+
+    /// <summary>ทุก call ที่ได้รับตามลำดับ — ใช้ตรวจว่า tool_result ถูกส่งกลับครบ, system prompt มีอะไร,
+    /// เสนอ tool ตัวไหนบ้าง</summary>
+    public List<AgentCall> AgentCalls { get; } = [];
+
+    public Task<AgentTurnResult> SendAgentTurnAsync(
+        string apiKey,
+        string? system,
+        IReadOnlyList<AgentMessage> messages,
+        IReadOnlyList<AnthropicToolDefinition> tools,
+        CancellationToken cancellationToken)
+    {
+        AgentCalls.Add(new AgentCall(system, messages.ToList(), tools.Select(t => t.Name).ToList()));
+        LastSystemPromptReceived = system;
+        LastToolNamesOffered = tools.Select(t => t.Name).ToList();
+
+        var turn = AgentScript.Count > 0 ? AgentScript.Dequeue() : new ScriptedAgentTurn("เสร็จแล้วครับ");
+        if (ReferenceEquals(turn, ScriptedAgentTurn.Failure))
+        {
+            throw new AnthropicApiException("scripted failure");
+        }
+
+        if (ReferenceEquals(turn, ScriptedAgentTurn.Crash))
+        {
+            throw new InvalidOperationException("scripted crash");
+        }
+
+        var blocks = new List<object>();
+        if (!string.IsNullOrEmpty(turn.Text))
+        {
+            blocks.Add(new { type = "text", text = turn.Text });
+        }
+
+        var toolUses = new List<AnthropicPendingToolUse>();
+        foreach (var (name, input) in turn.Tools)
+        {
+            var id = $"toolu_{Guid.NewGuid():N}";
+            var inputElement = JsonSerializer.SerializeToElement(input);
+            blocks.Add(new { type = "tool_use", id, name, input = inputElement });
+            toolUses.Add(new AnthropicPendingToolUse(id, name, inputElement));
+        }
+
+        return Task.FromResult(new AgentTurnResult(
+            turn.Text, toolUses, JsonSerializer.SerializeToElement(blocks)));
+    }
+
     /// <summary>ดึงค่าที่อยู่หลัง marker (เช่น "lookup-rule:blinded" → "blinded") — ตัดที่ช่องว่าง/
     /// เครื่องหมายวรรคตอนตัวแรกที่เจอ ไม่มี marker เลย = คืน false</summary>
     private static bool TryExtractMarkerValue(string text, string marker, out string value)
@@ -152,3 +203,17 @@ public sealed class FakeAnthropicClient : IAnthropicClient
         return value.Length > 0;
     }
 }
+
+/// <summary>หนึ่งรอบที่ fake จะตอบ — <see cref="Tools"/> ว่าง = ตอบข้อความจบงาน · input เป็น object ธรรมดา
+/// (anonymous type ได้) fake แปลงเป็น JsonElement ให้เอง</summary>
+public sealed record ScriptedAgentTurn(string Text, params (string Name, object Input)[] Tools)
+{
+    /// <summary>ใส่ในคิวเพื่อจำลอง Anthropic ล่มในรอบนั้น (fake โยน <c>AnthropicApiException</c>)</summary>
+    public static readonly ScriptedAgentTurn Failure = new("__failure__");
+
+    /// <summary>จำลองความผิดพลาดที่ runner ไม่ได้จับ (exception ลอยถึง middleware → rollback transaction ปัจจุบัน)
+    /// ใช้พิสูจน์ว่างานที่ checkpoint ไปแล้วไม่ถูก rollback ตาม</summary>
+    public static readonly ScriptedAgentTurn Crash = new("__crash__");
+}
+
+public sealed record AgentCall(string? System, IReadOnlyList<AgentMessage> Messages, IReadOnlyList<string> ToolNames);
