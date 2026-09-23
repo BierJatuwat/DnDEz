@@ -58,6 +58,17 @@ export type SrdMonsterDetail = SrdMonsterSummary & {
     reactions?: SrdMonsterAction[];
     legendaryActions?: SrdMonsterAction[];
   };
+  /**
+   * ปุ่มสลับภาษา (2026-09-22) — มีเฉพาะตอนขอ `?lang=th` เท่านั้น (ไม่ส่งมาตอนขอ `lang=en`/ไม่ส่ง `lang`
+   * เลย เพราะยังไม่มีความหมาย)
+   *
+   * ⚠️ **ชื่อมอนสเตอร์ไม่แปล** — เป็น "ชื่อเฉพาะ" ตามคำขอผู้ใช้ คงเป็นอังกฤษเสมอไม่ว่า `lang` จะเป็นอะไร
+   * `translated` จึงหมายถึงเฉพาะ **ขนาด/ชนิด/แนวคิด** แปลแล้วไหม (330/330 ตัวจริง แต่เขียนเป็น field ไว้
+   * ไม่ผูกกับตัวเลขคงที่) `contentTranslated` = traits/actions แปลเต็มหรือยังเป็นอังกฤษ (fallback) —
+   * ใช้แยกสองเคสนี้ในหน้าจอ เพราะขนาด/ชนิดแปลแล้วไม่ได้แปลว่าเนื้อหาข้างในแปลด้วย
+   */
+  translated?: boolean | null;
+  contentTranslated?: boolean | null;
   attribution: string;
 };
 
@@ -79,12 +90,19 @@ export type SrdCorpusItem = {
     duration?: string;
     tag?: string;
   };
+  /** มีเฉพาะตอน `?lang=th` — เนื้อหา (content) ที่ร้องขอมาแปลแล้วจริงไหม (ดู `SrdMonsterDetail.contentTranslated`) */
+  contentTranslated?: boolean | null;
 };
 
 export type SrdCorpusDetail = SrdCorpusItem & {
   content: string;
   license: string;
   source: string;
+  /**
+   * มีเฉพาะตอน `?lang=th` — ⚠️ **ไม่ครอบคลุมชื่อ/หัวข้อ (title)** ชื่อเวท/condition/rule เป็น "ชื่อเฉพาะ"
+   * ตามคำขอผู้ใช้ (2026-09-22) คงเป็นอังกฤษเสมอ — flag นี้หมายถึง school/classes (เฉพาะเวท) แปลแล้วไหม
+   */
+  translated?: boolean | null;
   attribution: string;
 };
 

@@ -199,6 +199,67 @@ public class SrdMonster
 }
 
 /// <summary>
+/// คำแปลภาษาไทยของ <see cref="SrdMonster"/> หนึ่งตัว — **global อ่านอย่างเดียวเหมือนต้นทาง**
+///
+/// **ทำไมแยกตาราง ไม่เติมคอลัมน์ `NameTh`/`DataTh` ใน SrdMonster เอง**: `srd_monsters` ถูก REVOKE
+/// สิทธิ์เขียนจาก role แอปไว้ตั้งแต่ migration `ImportSrd521` (มีแค่ role เจ้าของที่รันผ่าน migration
+/// เขียนได้) ตารางคำแปลเป็นข้อมูลที่ทีมพัฒนาเป็นคนแปล ไม่ใช่ผู้ใช้พิมพ์เอง จึงเข้าเส้นทางเดียวกับ
+/// ต้นฉบับ (ฝังมากับ migration) ไม่ใช่ endpoint ที่ผู้ใช้เขียนได้ · แยกตารางยังทำให้ **แปลไม่ครบได้โดย
+/// ไม่พัง** — มอนสเตอร์ที่ยังไม่มีแถวในตารางนี้แปลว่ายังไม่แปล (fallback ไปอังกฤษที่ชั้น endpoint)
+/// ต่างจากคอลัมน์ nullable ที่ปนอยู่กับข้อมูลจริงจนแยกยากว่า "ว่างเพราะยังไม่แปล" กับ "ว่างเพราะไม่มีค่า"
+///
+/// <see cref="Name"/>/<see cref="Size"/>/<see cref="Type"/>/<see cref="TypeTag"/>/<see cref="Alignment"/>
+/// แปลครบทุกแถวเสมอ (ศัพท์ปิด 46 คำ ใช้ซ้ำได้กับมอนสเตอร์ทุกตัว) ส่วน <see cref="Data"/> (traits/actions
+/// เต็ม) เป็น null ได้ — ดู `tools/srd-translate/build_th_data.py` สำหรับรายชื่อที่แปลเต็มแล้ว
+/// </summary>
+public class SrdMonsterTranslation
+{
+    public Guid Id { get; set; }
+
+    /// <summary>ชี้ไป <see cref="SrdMonster.Key"/> — ไม่ทำ FK object navigation เพราะฝั่งอ่านทำ join
+    /// เองด้วย LINQ ตรง ๆ (ตารางเล็กทั้งคู่) การมี navigation property จะกวนเฉย ๆ</summary>
+    public string MonsterKey { get; set; } = null!;
+
+    public string Locale { get; set; } = "th";
+
+    public string Name { get; set; } = null!;
+    public string Size { get; set; } = null!;
+    public string Type { get; set; } = null!;
+    public string? TypeTag { get; set; }
+    public string Alignment { get; set; } = null!;
+
+    /// <summary>null = ยังไม่แปลรายละเอียดเต็ม (traits/actions/bonusActions/reactions/legendaryActions) ·
+    /// มีค่า = jsonb รูปทรงเดียวกับ `SrdMonster.Data` ทุกประการแต่แปลแล้ว</summary>
+    public string? Data { get; set; }
+}
+
+/// <summary>
+/// คำแปลภาษาไทยของ <see cref="RulesCorpusEntry"/> หนึ่งแถว (เวท/สถานะ/กฎ) — เหตุผลที่แยกตารางเดียวกับ
+/// <see cref="SrdMonsterTranslation"/> ด้านบนทุกประการ
+///
+/// <see cref="Title"/> แปลครบทุกแถว (669 ชื่อ) ส่วน <see cref="Content"/> (เนื้อหาเต็ม) แปลครบ 100%
+/// เฉพาะ category "condition"/"rule" (41 แถว, มีป้ายกำกับ) เพราะเป็นเนื้อหาสั้นและใช้เป็น tooltip บ่อย ·
+/// เวท (category "spell") มี Content ให้เฉพาะ 4 ตัวที่อยู่ใน action_catalog_entries ส่วนที่เหลือเป็น null
+/// </summary>
+public class RulesCorpusTranslation
+{
+    public Guid Id { get; set; }
+
+    public string Category { get; set; } = null!;
+    public string Key { get; set; } = null!;
+    public string Locale { get; set; } = "th";
+
+    public string Title { get; set; } = null!;
+
+    /// <summary>null = ยังไม่แปลเนื้อหาเต็ม (มีแต่ชื่อ) · มีค่า = ข้อความเต็มแปลแล้ว รูปแบบย่อหน้าเดียวกับต้นฉบับ</summary>
+    public string? Content { get; set; }
+
+    /// <summary>สำนักเวท/คลาสที่แปลแล้ว เก็บเป็น jsonb `{"school":"...","classes":["...",...]}` — null สำหรับ
+    /// category ที่ไม่ใช่ "spell"</summary>
+    public string? Data { get; set; }
+}
+
+/// <summary>
 /// คลัง preset — ระบบหลักของแพลตฟอร์ม ไม่ใช่แค่ของ quick play
 /// Harvested ต้องผ่านกติกา 4 ข้อ: มี consent, เก็บแค่โครง, SrdOnly เท่านั้นถึงเข้าคลังกลางได้,
 /// dedupe ด้วย fingerprint — player-side-design §18, §19

@@ -12,6 +12,8 @@ import {
   sortByDifficulty,
 } from "@/lib/srd-view";
 import { SrdAttribution } from "./SrdAttribution";
+import { SrdLanguageToggle } from "./SrdLanguageToggle";
+import { useSrdLanguageStore } from "@/lib/srd-language-store";
 import {
   STAT_LIMITS,
   draftFromMonster,
@@ -70,11 +72,14 @@ export function MonsterLibraryPanel({ campaignId }: { campaignId: string }) {
 
   return (
     <div className="space-y-3">
-      <div>
-        <h3 className="font-medium">คลังมอนสเตอร์</h3>
-        <p className="text-xs opacity-60">
-          เลือกจากคลัง SRD แล้วกดเพิ่มเข้าแคมเปญ — หลังจากนั้นวางลงแผนที่ได้จากเครื่องมือแผนที่ด้านบน
-        </p>
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <h3 className="font-medium">คลังมอนสเตอร์</h3>
+          <p className="text-xs opacity-60">
+            เลือกจากคลัง SRD แล้วกดเพิ่มเข้าแคมเปญ — หลังจากนั้นวางลงแผนที่ได้จากเครื่องมือแผนที่ด้านบน
+          </p>
+        </div>
+        <SrdLanguageToggle />
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -274,6 +279,8 @@ function MonsterCard({
 /** stat block เต็ม — โหลดเฉพาะตอนกางออก (คลังมี 330 ตัว ดึงทั้งหมดล่วงหน้าไม่มีเหตุผล) */
 function MonsterDetail({ monsterKey }: { monsterKey: string }) {
   const { detail, isLoading, isError } = useSrdMonsterDetail(monsterKey);
+  // ต้องเรียกก่อนทุก early return — hook ห้ามถูกข้ามแบบมีเงื่อนไขระหว่าง render (rules-of-hooks)
+  const lang = useSrdLanguageStore((s) => s.language);
 
   if (isLoading) return <p className="text-xs opacity-50">กำลังโหลด...</p>;
   if (isError) return <p className="text-xs text-red-500">โหลดรายละเอียดไม่สำเร็จ</p>;
@@ -281,6 +288,15 @@ function MonsterDetail({ monsterKey }: { monsterKey: string }) {
 
   return (
     <div className="space-y-2 border-t border-black/10 dark:border-white/10 pt-2">
+      {/* ชื่อมอนสเตอร์เป็น "ชื่อเฉพาะ" ไม่แปล (คงอังกฤษเสมอ) — ขนาด/ชนิด/แนวคิด/ค่าตัวเลขแปลแล้วเสมอ แต่
+          traits/actions เป็น "ชุดที่ใช้จริงก่อน" เท่านั้น — บอกตรง ๆ ว่าเนื้อหาด้านล่างเป็นอังกฤษ ไม่ใช่ปล่อย
+          ให้เห็นภาษาอังกฤษแทรกกลางหน้าไทยแล้วงงว่าทำไม */}
+      {lang === "th" && detail.contentTranslated === false && (
+        <p className="text-[11px] rounded bg-amber-500/10 text-amber-700 dark:text-amber-400 px-2 py-1">
+          ท่า/คุณสมบัติของตัวนี้ยังไม่มีคำแปล — แสดงเป็นภาษาอังกฤษ
+        </p>
+      )}
+
       <div className="grid grid-cols-6 gap-1 text-center text-[11px]">
         {abilityRows(detail).map((row) => (
           <div key={row.label} className="rounded border border-black/10 dark:border-white/10 py-1">

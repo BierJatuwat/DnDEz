@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useSrdCorpus, useSrdCorpusDetail } from "@/lib/use-srd";
 import { corpusCategoryLabel, corpusSubtitle } from "@/lib/srd-view";
 import { SrdAttribution } from "./SrdAttribution";
+import { SrdLanguageToggle } from "./SrdLanguageToggle";
 import type { SrdCorpusItem } from "@/lib/srd-types";
 
 const chipClass = "rounded px-2 py-1 text-xs border transition-colors";
@@ -38,9 +39,12 @@ export function RulesReferencePanel() {
 
   return (
     <div className="space-y-3">
-      <div>
-        <h3 className="font-medium">คู่มือกฎ</h3>
-        <p className="text-xs opacity-60">{activeCategory?.hint}</p>
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <h3 className="font-medium">คู่มือกฎ</h3>
+          <p className="text-xs opacity-60">{activeCategory?.hint}</p>
+        </div>
+        <SrdLanguageToggle />
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -126,6 +130,12 @@ function CorpusRow({
       >
         <span className="text-sm font-medium">{item.title}</span>
         <span className="ml-2 text-xs opacity-50">{corpusSubtitle(item)}</span>
+        {/* เห็นตั้งแต่ยังไม่กางว่ารายการนี้เนื้อหาเต็มเป็นอังกฤษอยู่ — กันเสียเวลากางแล้วผิดหวัง */}
+        {item.contentTranslated === false && (
+          <span className="ml-2 text-[10px] rounded bg-amber-500/10 text-amber-700 dark:text-amber-400 px-1.5 py-0.5">
+            EN
+          </span>
+        )}
       </button>
       {open && <CorpusBody category={item.category} entryKey={item.key} />}
     </li>
@@ -134,13 +144,18 @@ function CorpusRow({
 
 /** เนื้อหาเต็ม — โหลดตอนกางเท่านั้น (เวทมี 339 รายการ ดึงเนื้อหาทุกตัวล่วงหน้าไม่มีเหตุผล) */
 function CorpusBody({ category, entryKey }: { category: string; entryKey: string }) {
-  const { content, isLoading } = useSrdCorpusDetail(category, entryKey);
+  const { content, contentTranslated, isLoading } = useSrdCorpusDetail(category, entryKey);
 
   if (isLoading) return <p className="mt-1 text-xs opacity-50">กำลังโหลด...</p>;
   if (!content) return null;
 
   return (
     <div className="mt-1 space-y-2 text-xs leading-relaxed opacity-80">
+      {contentTranslated === false && (
+        <p className="rounded bg-amber-500/10 text-amber-700 dark:text-amber-400 px-2 py-1 opacity-100">
+          รายการนี้ยังไม่มีคำแปล — แสดงเป็นภาษาอังกฤษ
+        </p>
+      )}
       {/* ต้นฉบับคั่นย่อหน้าด้วยบรรทัดว่าง — แสดงเป็นย่อหน้าจริง ไม่ใช่ก้อนเดียวที่อ่านยาก */}
       {content.split("\n\n").map((paragraph, i) => (
         <p key={i}>{paragraph}</p>

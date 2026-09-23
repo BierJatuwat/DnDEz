@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "./api";
 import { useAuthStore } from "./auth-store";
+import { useSrdLanguageStore } from "./srd-language-store";
 import type {
   CampaignMonster,
   CopySrdMonsterResult,
@@ -17,6 +18,10 @@ import type {
  *
  * **ค่า `attribution` มาจาก server ทุก response** — ห้าม hardcode ข้อความสัญญาอนุญาตไว้ฝั่ง frontend
  * เพราะ CC-BY-4.0 บังคับถ้อยคำที่ต้องแสดง ถ้ามีสองสำเนาแล้ววันหนึ่งไม่ตรงกัน ฝั่งที่ผิดคือฝั่งที่ผู้ใช้เห็น
+ *
+ * **ปุ่มสลับภาษา (2026-09-22)**: ทุก hook ในไฟล์นี้อ่านภาษาปัจจุบันจาก `useSrdLanguageStore` เองแล้วต่อ
+ * `?lang=` ให้อัตโนมัติ — component ที่เรียก hook พวกนี้ไม่ต้องรู้เรื่องภาษาเลย สลับปุ่มที่ไหนก็ได้ผลทันที
+ * เพราะภาษาอยู่ใน query key: TanStack Query แคชสองภาษาแยกกัน สลับไปมาไม่ต้องรอโหลดซ้ำ (แคชแล้วเร็วขึ้นเรื่อย ๆ)
  */
 
 /** จำนวนรายการต่อหน้า — 24 ลงตัวกับกริด 2/3/4 คอลัมน์ทุกขนาดจอที่ใช้จริง */
@@ -24,20 +29,22 @@ export const MONSTER_PAGE_SIZE = 24;
 
 export function useSrdMonsters(filters: { query: string; crMax: string; page: number }) {
   const token = useAuthStore((s) => s.token);
+  const lang = useSrdLanguageStore((s) => s.language);
   const params = new URLSearchParams();
   if (filters.query.trim()) params.set("query", filters.query.trim());
   if (filters.crMax) params.set("crMax", filters.crMax);
+  params.set("lang", lang);
   params.set("limit", String(MONSTER_PAGE_SIZE));
   params.set("offset", String(filters.page * MONSTER_PAGE_SIZE));
 
   const query = useQuery({
-    queryKey: ["srd-monsters", filters.query.trim(), filters.crMax, filters.page],
+    queryKey: ["srd-monsters", filters.query.trim(), filters.crMax, filters.page, lang],
     queryFn: () =>
       apiFetch<SrdListResponse<SrdMonsterSummary>>(`/srd/monsters?${params.toString()}`, { token }),
     enabled: !!token,
     // คลังนี้เป็นข้อมูลนิ่ง (เปลี่ยนเฉพาะตอน migrate) — ไม่ต้องดึงซ้ำระหว่างที่ DM กดดูไปมา
     staleTime: 5 * 60 * 1000,
-    // ระหว่างพิมพ์ค้นหา/เปลี่ยนหน้า ให้คงผลเดิมไว้ก่อน ไม่งั้นลิสต์กะพริบเป็นช่องว่างทุกตัวอักษรที่พิมพ์
+    // ระหว่างพิมพ์ค้นหา/เปลี่ยนหน้า/สลับภาษา ให้คงผลเดิมไว้ก่อน ไม่งั้นลิสต์กะพริบเป็นช่องว่างทุกครั้ง
     placeholderData: (previous) => previous,
   });
 
@@ -52,9 +59,10 @@ export function useSrdMonsters(filters: { query: string; crMax: string; page: nu
 
 export function useSrdMonsterDetail(key: string | null) {
   const token = useAuthStore((s) => s.token);
+  const lang = useSrdLanguageStore((s) => s.language);
   const query = useQuery({
-    queryKey: ["srd-monster", key],
-    queryFn: () => apiFetch<SrdMonsterDetail>(`/srd/monsters/${key}`, { token }),
+    queryKey: ["srd-monster", key, lang],
+    queryFn: () => apiFetch<SrdMonsterDetail>(`/srd/monsters/${key}?lang=${lang}`, { token }),
     enabled: !!token && !!key,
     staleTime: 5 * 60 * 1000,
   });
@@ -64,13 +72,15 @@ export function useSrdMonsterDetail(key: string | null) {
 
 export function useSrdCorpus(filters: { category: string; query: string }) {
   const token = useAuthStore((s) => s.token);
+  const lang = useSrdLanguageStore((s) => s.language);
   const params = new URLSearchParams();
   if (filters.category) params.set("category", filters.category);
   if (filters.query.trim()) params.set("query", filters.query.trim());
+  params.set("lang", lang);
   params.set("limit", "100");
 
   const query = useQuery({
-    queryKey: ["srd-corpus", filters.category, filters.query.trim()],
+    queryKey: ["srd-corpus", filters.category, filters.query.trim(), lang],
     queryFn: () => apiFetch<SrdListResponse<SrdCorpusItem>>(`/srd/corpus?${params.toString()}`, { token }),
     enabled: !!token,
     staleTime: 5 * 60 * 1000,
@@ -89,14 +99,25 @@ export function useSrdCorpus(filters: { category: string; query: string }) {
 /** เนื้อหาเต็มของรายการในคลังกฎ (เวท/สถานะ/กฎ) — ใช้ตอนกางรายการที่เลือก */
 export function useSrdCorpusDetail(category: string | null, key: string | null) {
   const token = useAuthStore((s) => s.token);
+  const lang = useSrdLanguageStore((s) => s.language);
   const query = useQuery({
-    queryKey: ["srd-corpus-entry", category, key],
-    queryFn: () => apiFetch<{ content: string }>(`/srd/corpus/${category}/${key}`, { token }),
+    queryKey: ["srd-corpus-entry", category, key, lang],
+    queryFn: () =>
+      // `contentTranslated` เป็น null จาก server เองเมื่อ lang=en (ดู doc comment ของ endpoint ฝั่ง C#
+      // — ไม่มีแนวคิด "แปลแล้วหรือยัง" ตอนขอภาษาอังกฤษซึ่งเป็นต้นฉบับอยู่แล้ว) ไม่ต้องเติม logic ซ้ำที่นี่
+      apiFetch<{ content: string; contentTranslated?: boolean | null }>(
+        `/srd/corpus/${category}/${key}?lang=${lang}`,
+        { token },
+      ),
     enabled: !!token && !!category && !!key,
     staleTime: 5 * 60 * 1000,
   });
 
-  return { content: query.data?.content ?? null, isLoading: query.isPending && !!key };
+  return {
+    content: query.data?.content ?? null,
+    contentTranslated: query.data?.contentTranslated ?? undefined,
+    isLoading: query.isPending && !!key,
+  };
 }
 
 /**

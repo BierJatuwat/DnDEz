@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Security.Claims;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using DnDEz.Api.Auth;
 using DnDEz.Domain.Entities;
 using DnDEz.Domain.Enums;
@@ -41,7 +42,7 @@ public static class SrdEndpoints
             .AllowAnonymous();
 
         app.MapGet("/srd/monsters", async (
-            string? query, string? type, string? crMax, int? limit, int? offset,
+            string? query, string? type, string? crMax, string? lang, int? limit, int? offset,
             ClaimsPrincipal principal, DnDEzDbContext db) =>
         {
             if (principal.GetUserId() is null)
@@ -54,6 +55,12 @@ public static class SrdEndpoints
                 return Results.BadRequest(new { error = "query_too_long" });
             }
 
+            var language = NormalizeLang(lang);
+            if (language is null)
+            {
+                return Results.BadRequest(new { error = "invalid_lang" });
+            }
+
             decimal? crCap = null;
             if (!string.IsNullOrWhiteSpace(crMax))
             {
@@ -64,26 +71,40 @@ public static class SrdEndpoints
                 }
             }
 
-            var q = db.SrdMonsters.AsNoTracking().AsQueryable();
+            // ตารางมี 330 แถวคงที่ (แก้ทีเดียวตอน migrate ไม่ใช่ทุก request) — ดึงทั้งก้อนมาแล้วกรอง/เรียง/
+            // ผสมคำแปลในหน่วยความจำง่ายกว่าประกอบ query ที่รองรับทั้งสองภาษาที่ชั้น SQL โดยไม่เสียอะไร
+            var rows = await db.SrdMonsters.AsNoTracking()
+                .Select(m => new MonsterSummaryRow(m.Key, m.Name, m.Size, m.Type, m.Alignment, m.ArmorClass,
+                    m.HitPoints, m.SpeedFeet, m.ReachFeet, m.ChallengeRating, m.Xp))
+                .ToListAsync();
+
+            var translations = language == Thai
+                ? await db.SrdMonsterTranslations.AsNoTracking().Where(t => t.Locale == Thai)
+                    .ToDictionaryAsync(t => t.MonsterKey)
+                : new Dictionary<string, SrdMonsterTranslation>();
+
+            var merged = rows.Select(r =>
+            {
+                translations.TryGetValue(r.Key, out var t);
+                return new MonsterSummaryRow(
+                    r.Key, t?.Name ?? r.Name, t?.Size ?? r.Size, t?.Type ?? r.Type, t?.Alignment ?? r.Alignment,
+                    r.ArmorClass, r.HitPoints, r.SpeedFeet, r.ReachFeet, r.ChallengeRating, r.Xp);
+            });
+
             if (!string.IsNullOrWhiteSpace(query))
             {
-                q = q.Where(m => EF.Functions.ILike(m.Name, "%" + EscapeLike(query.Trim()) + "%"));
+                var needle = query.Trim();
+                merged = merged.Where(r => r.Name.Contains(needle, StringComparison.OrdinalIgnoreCase));
             }
 
             if (!string.IsNullOrWhiteSpace(type))
             {
                 // ชนิดตรงตัว (ไม่สนตัวพิมพ์) — "Beast" ไม่ควรไปเจอ "Swarm of Tiny Beasts"
-                var typeLower = type.Trim().ToLowerInvariant();
-                q = q.Where(m => m.Type.ToLower() == typeLower);
+                var typeNeedle = type.Trim();
+                merged = merged.Where(r => string.Equals(r.Type, typeNeedle, StringComparison.OrdinalIgnoreCase));
             }
 
-            // CR เป็นข้อความ ("1/8") จึงกรอง/เรียงในหน่วยความจำ — ตารางมี 330 แถวและ projection ไม่รวม data (เบา)
-            var rows = await q
-                .Select(m => new MonsterSummaryRow(m.Key, m.Name, m.Size, m.Type, m.Alignment, m.ArmorClass,
-                    m.HitPoints, m.SpeedFeet, m.ReachFeet, m.ChallengeRating, m.Xp))
-                .ToListAsync();
-
-            var filtered = rows
+            var filtered = merged
                 .Select(r => (Row: r, Cr: ParseChallengeRating(r.ChallengeRating) ?? 0m))
                 .Where(x => crCap is null || x.Cr <= crCap)
                 .OrderBy(x => x.Cr).ThenBy(x => x.Row.Name, StringComparer.Ordinal)
@@ -100,11 +121,18 @@ public static class SrdEndpoints
             });
         }).RequireAuthorization();
 
-        app.MapGet("/srd/monsters/{key}", async (string key, ClaimsPrincipal principal, DnDEzDbContext db) =>
+        app.MapGet("/srd/monsters/{key}", async (
+            string key, string? lang, ClaimsPrincipal principal, DnDEzDbContext db) =>
         {
             if (principal.GetUserId() is null)
             {
                 return Results.Unauthorized();
+            }
+
+            var language = NormalizeLang(lang);
+            if (language is null)
+            {
+                return Results.BadRequest(new { error = "invalid_lang" });
             }
 
             var m = await db.SrdMonsters.AsNoTracking().SingleOrDefaultAsync(x => x.Key == key);
@@ -113,18 +141,45 @@ public static class SrdEndpoints
                 return Results.NotFound();
             }
 
+            SrdMonsterTranslation? t = language == Thai
+                ? await db.SrdMonsterTranslations.AsNoTracking()
+                    .SingleOrDefaultAsync(x => x.MonsterKey == key && x.Locale == Thai)
+                : null;
+
+            // `data` (traits/actions ฯลฯ) แปลแล้ว = แทนที่ทั้งก้อน (ไม่ผสมรายท่อน) เพราะคำแปลเต็มเก็บเป็น
+            // stat block รูปทรงเดียวกับต้นฉบับทั้งใบ — ยังไม่แปล (t.Data เป็น null) = คืนอังกฤษของเดิม
+            var contentTranslated = t?.Data is not null;
+            var dataJson = contentTranslated ? t!.Data! : m.Data;
+
             return Results.Ok(new
             {
-                m.Key, m.Name, m.Size, m.Type, m.Alignment, m.ArmorClass, m.HitPoints, m.SpeedFeet, m.ReachFeet,
-                m.ChallengeRating, m.Xp, m.SourceVersion,
-                data = JsonDocument.Parse(m.Data).RootElement,
+                m.Key,
+                // Name: ชื่อมอนสเตอร์เป็น "ชื่อเฉพาะ" — ตามคำขอผู้ใช้ (2026-09-22) ไม่แปล `t.Name` เก็บค่า
+                // อังกฤษไว้เหมือนกันทุกตัวอยู่แล้ว (ดู doc comment migration `AddSrdThaiTranslations`) จึง
+                // ไม่ต่างจาก `m.Name` แต่คง `t?.Name ?? m.Name` ไว้เพื่อความสม่ำเสมอของ pattern merge
+                Name = t?.Name ?? m.Name,
+                Size = t?.Size ?? m.Size,
+                Type = t?.Type ?? m.Type,
+                Alignment = t?.Alignment ?? m.Alignment,
+                m.ArmorClass, m.HitPoints, m.SpeedFeet, m.ReachFeet, m.ChallengeRating, m.Xp, m.SourceVersion,
+                data = JsonDocument.Parse(dataJson).RootElement,
+                // null เมื่อ language == "en" — คำถาม "แปลหรือยัง" ไม่มีความหมายตอนขอภาษาอังกฤษเอง (ซึ่งเป็น
+                // ต้นฉบับอยู่แล้ว) ถ้าคืน false ไปตรง ๆ ทุกครั้ง client ที่เชื่อ flag นี้จะเข้าใจผิดว่า "ยังไม่แปล"
+                // แม้ตอนที่ผู้ใช้ตั้งใจดูอังกฤษอยู่แล้ว (พบจริงตอนทดสอบ — ป้าย "ยังไม่แปล" ขึ้นทับแม้กำลังโชว์ EN)
+                // ⚠️ ตั้งแต่ 2026-09-22 flag นี้ไม่ครอบคลุมชื่อ (ชื่อไม่แปลเสมอ) หมายถึงเฉพาะ
+                // ขนาด/ชนิด/แนวคิด แปลแล้วหรือยัง — ปัจจุบันเป็น true เสมอเมื่อ lang=th (330/330 แถว)
+                translated = language == Thai ? t is not null : (bool?)null,
+                contentTranslated = language == Thai ? contentTranslated : (bool?)null,
                 attribution = SrdAttribution.Text,
             });
         }).RequireAuthorization();
 
         // category: spell | condition | rule — ค้นตามชื่อ (ILIKE) · สำหรับเวทกรองระดับ/คลาสเพิ่มได้ (อ่านจาก data)
+        //
+        // ⚠️ `level` เป็นตัวเลข (ไม่ต้องแปล) แต่ `class` เป็นข้อความที่ผู้ใช้พิมพ์ — เมื่อ lang=th ต้องเทียบกับ
+        // ชื่อคลาสภาษาไทยที่ผสมมาแล้ว (frontend ส่ง "จอมเวทย์" ไม่ใช่ "Wizard") ไม่ใช่เทียบกับ data อังกฤษดิบ
         app.MapGet("/srd/corpus", async (
-            string? category, string? query, int? level, string? @class, int? limit, int? offset,
+            string? category, string? query, int? level, string? @class, string? lang, int? limit, int? offset,
             ClaimsPrincipal principal, DnDEzDbContext db) =>
         {
             if (principal.GetUserId() is null)
@@ -142,47 +197,74 @@ public static class SrdEndpoints
                 return Results.BadRequest(new { error = "invalid_category" });
             }
 
+            var language = NormalizeLang(lang);
+            if (language is null)
+            {
+                return Results.BadRequest(new { error = "invalid_lang" });
+            }
+
             var q = db.RulesCorpusEntries.AsNoTracking().AsQueryable();
             if (category is not null)
             {
                 q = q.Where(e => e.Category == category);
             }
 
-            if (!string.IsNullOrWhiteSpace(query))
-            {
-                q = q.Where(e => EF.Functions.ILike(e.Title, "%" + EscapeLike(query.Trim()) + "%"));
-            }
-
-            // level/class อยู่ใน data (jsonb) ของเวท — กรองในหน่วยความจำหลังดึงมาแค่คอลัมน์เบา ๆ (339 แถว)
+            // ตาราง global คงที่ (380 แถวรวมทุก category) — กรอง title/level/class ในหน่วยความจำหลังผสมคำแปล
+            // ด้วยเหตุผลเดียวกับ /srd/monsters ด้านบน (รองรับค้นสองภาษาโดยไม่ต้อง join ที่ชั้น SQL)
             var rows = await q.OrderBy(e => e.Title)
                 .Select(e => new CorpusRow(e.Category, e.Key, e.Title, e.Data)).ToListAsync();
 
-            IEnumerable<CorpusRow> filtered = rows;
-            if (level is not null || !string.IsNullOrWhiteSpace(@class))
+            var translations = language == Thai
+                ? await db.RulesCorpusTranslations.AsNoTracking().Where(t => t.Locale == Thai)
+                    .ToDictionaryAsync(t => (t.Category, t.Key))
+                : new Dictionary<(string, string), RulesCorpusTranslation>();
+
+            var merged = rows.Select(r =>
             {
-                filtered = rows.Where(r => MatchesSpellFilter(r.Data, level, @class));
+                translations.TryGetValue((r.Category, r.Key), out var t);
+                return (Row: r, Translation: t, Data: MergeData(r.Data, t?.Data));
+            });
+
+            if (!string.IsNullOrWhiteSpace(query))
+            {
+                var needle = query.Trim();
+                merged = merged.Where(x =>
+                    (x.Translation?.Title ?? x.Row.Title).Contains(needle, StringComparison.OrdinalIgnoreCase));
             }
 
-            var list = filtered.ToList();
+            if (level is not null || !string.IsNullOrWhiteSpace(@class))
+            {
+                merged = merged.Where(x => MatchesSpellFilter(x.Data, level, @class));
+            }
+
+            var list = merged.ToList();
             var take = Math.Clamp(limit ?? DefaultLimit, 1, MaxLimit);
             var skip = Math.Max(offset ?? 0, 0);
             return Results.Ok(new
             {
                 total = list.Count,
-                items = list.Skip(skip).Take(take).Select(r => new
+                items = list.Skip(skip).Take(take).Select(x => new
                 {
-                    r.Category, r.Key, r.Title, data = JsonDocument.Parse(r.Data).RootElement,
+                    x.Row.Category, x.Row.Key, Title = x.Translation?.Title ?? x.Row.Title, data = x.Data,
+                    // null เมื่อ language == "en" — เหตุผลเดียวกับที่ /srd/monsters/{key} ทำ (ดู comment ที่นั่น)
+                    contentTranslated = language == Thai ? x.Translation?.Content is not null : (bool?)null,
                 }),
                 attribution = SrdAttribution.Text,
             });
         }).RequireAuthorization();
 
         app.MapGet("/srd/corpus/{category}/{key}", async (
-            string category, string key, ClaimsPrincipal principal, DnDEzDbContext db) =>
+            string category, string key, string? lang, ClaimsPrincipal principal, DnDEzDbContext db) =>
         {
             if (principal.GetUserId() is null)
             {
                 return Results.Unauthorized();
+            }
+
+            var language = NormalizeLang(lang);
+            if (language is null)
+            {
+                return Results.BadRequest(new { error = "invalid_lang" });
             }
 
             var e = await db.RulesCorpusEntries.AsNoTracking()
@@ -192,10 +274,28 @@ public static class SrdEndpoints
                 return Results.NotFound();
             }
 
+            RulesCorpusTranslation? t = language == Thai
+                ? await db.RulesCorpusTranslations.AsNoTracking()
+                    .SingleOrDefaultAsync(x => x.Category == category && x.Key == key && x.Locale == Thai)
+                : null;
+
+            var contentTranslated = t?.Content is not null;
+
             return Results.Ok(new
             {
-                e.Category, e.Key, e.Title, e.Content, e.License, e.Source,
-                data = JsonDocument.Parse(e.Data).RootElement,
+                e.Category,
+                e.Key,
+                // Title: ชื่อเวท/condition/rule เป็น "ชื่อเฉพาะ" — ตามคำขอผู้ใช้ (2026-09-22) ไม่แปล
+                // `t.Title` เก็บค่าอังกฤษไว้เหมือนกันทุกแถวอยู่แล้ว จึงไม่ต่างจาก `e.Title`
+                Title = t?.Title ?? e.Title,
+                Content = contentTranslated ? t!.Content! : e.Content,
+                e.License,
+                e.Source,
+                data = MergeData(e.Data, t?.Data),
+                // null เมื่อ language == "en" — เหตุผลเดียวกับที่ /srd/monsters/{key} ทำ (ดู comment ที่นั่น)
+                // ⚠️ ไม่ครอบคลุมชื่อ/หัวข้อ (ไม่แปลเสมอ) — หมายถึง school/classes (เวท) แปลแล้วหรือยัง
+                translated = language == Thai ? t is not null : (bool?)null,
+                contentTranslated = language == Thai ? contentTranslated : (bool?)null,
                 attribution = SrdAttribution.Text,
             });
         }).RequireAuthorization();
@@ -308,16 +408,37 @@ public static class SrdEndpoints
         return decimal.TryParse(s, NumberStyles.None, CultureInfo.InvariantCulture, out var whole) ? whole : null;
     }
 
-    private static string EscapeLike(string s) =>
-        s.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
+    /// <summary>ตัวย่อ locale ภาษาไทยที่ตาราง *_translations ใช้เก็บ — ค่าเดียวที่รองรับตอนนี้นอกจากอังกฤษ</summary>
+    private const string Thai = "th";
 
-    private static bool MatchesSpellFilter(string dataJson, int? level, string? cls)
+    /// <summary>"" / null → "en" (ค่าเริ่มต้นเดิมของ API ก่อนมีคำแปล ห้ามเปลี่ยนเพื่อไม่ให้ผู้เรียกเดิมพัง) ·
+    /// "en"/"th" → ค่านั้นตรง ๆ · อย่างอื่น → null ให้ caller ตอบ 400 (กันพิมพ์ผิดเงียบ ๆ เช่น "TH"/"thai")</summary>
+    private static string? NormalizeLang(string? lang) =>
+        string.IsNullOrEmpty(lang) ? "en" : lang is "en" or Thai ? lang : null;
+
+    /// <summary>ผสม data ภาษาอังกฤษกับคำแปล — คำแปลมีฟิลด์ไหนแทนที่ทั้งฟิลด์นั้น (ไม่ไล่ผสมทีละสมาชิกใน array
+    /// เช่น "actions" ถูกแทนที่ทั้งก้อนด้วยเวอร์ชันแปล ไม่ใช่จับคู่ทีละท่า) ฟิลด์ที่ไม่มีในคำแปล (เช่น "level"
+    /// ของเวทซึ่งเป็นตัวเลข ไม่ต้องแปล) ยังคงเป็นค่าอังกฤษเดิม</summary>
+    private static JsonObject MergeData(string englishJson, string? translationJson)
     {
-        using var doc = JsonDocument.Parse(dataJson);
-        var root = doc.RootElement;
+        var merged = JsonNode.Parse(englishJson)!.AsObject();
+        if (translationJson is not null)
+        {
+            var overlay = JsonNode.Parse(translationJson)!.AsObject();
+            foreach (var (k, v) in overlay)
+            {
+                merged[k] = v?.DeepClone();
+            }
+        }
+
+        return merged;
+    }
+
+    private static bool MatchesSpellFilter(JsonObject data, int? level, string? cls)
+    {
         if (level is not null)
         {
-            if (!root.TryGetProperty("level", out var l) || l.ValueKind != JsonValueKind.Number || l.GetInt32() != level)
+            if (data["level"] is not JsonValue levelValue || !levelValue.TryGetValue<int>(out var l) || l != level)
             {
                 return false;
             }
@@ -325,13 +446,12 @@ public static class SrdEndpoints
 
         if (!string.IsNullOrWhiteSpace(cls))
         {
-            if (!root.TryGetProperty("classes", out var cs) || cs.ValueKind != JsonValueKind.Array)
+            if (data["classes"] is not JsonArray classes)
             {
                 return false;
             }
 
-            return cs.EnumerateArray().Any(c =>
-                string.Equals(c.GetString(), cls.Trim(), StringComparison.OrdinalIgnoreCase));
+            return classes.Any(c => string.Equals(c?.GetValue<string>(), cls.Trim(), StringComparison.OrdinalIgnoreCase));
         }
 
         return true;
