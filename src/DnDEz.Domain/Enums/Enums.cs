@@ -62,6 +62,12 @@ public enum ApiKeyStatus { Active, Invalid, Revoked }
 
 public enum ConsultRole { Dm, Ai }
 
+/// <summary>ที่มาของบันทึกแคมเปญหนึ่งรายการ — DM พิมพ์เอง หรือ AI สรุปให้ (Part D เปิดกว้างทั้งสองทาง
+/// ไม่บังคับเลือกทางใดทางหนึ่งทั้งโปรเจกต์) · <c>System</c> เพิ่มใน Part E: ระบบเป็นคนเขียนเองจาก
+/// ข้อเท็จจริงที่วัดได้ (เช่น สรุปผล encounter ตอนจบไฟต์) **ไม่ใช่ทั้ง DM พิมพ์และไม่ใช่ AI แต่ง** —
+/// แยกออกมาเพราะถ้าติดป้ายผิดเป็น Ai คนอ่านทีหลังจะเข้าใจผิดว่าข้อความนี้อาจถูกแต่งขึ้น</summary>
+public enum JournalAuthor { Dm, Ai, System }
+
 /// <summary>คลังกลไก (action catalog) — Sprint G Part 1, design doc §2.4: รวมอาวุธ/เวท/การเคลื่อนที่
 /// เป็นของอย่างเดียวเพราะ engine มองเหมือนกันหมด</summary>
 public enum ActionCatalogKind { Weapon, Spell, Movement }

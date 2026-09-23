@@ -191,6 +191,57 @@ public class ConsultEndpointsTests : IAsyncLifetime
         await cmd.ExecuteNonQueryAsync();
     }
 
+    // ── helpers เฉพาะเทสต์ system prompt (2026-09-22) — mirror ของ AffordanceEndpointsTests /
+    // StoryBeatEndpointsTests เพราะสองไฟล์นั้นมี insert helper ของ characters/story_beats อยู่แล้ว
+    // ไม่มีในไฟล์นี้มาก่อน (ConsultEndpointsTests เดิมไม่เคยต้อง seed สองตารางนี้เลย) ──
+
+    private static async Task InsertPartyCharacterAsync(
+        NpgsqlConnection conn, Guid id, Guid campaignId, string name, int level, int currentHp, int maxHp, int armorClass)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO characters
+                (id, campaign_id, name, sheet, current_hp, max_hp, current_temp_hp, armor_class,
+                 initiative_modifier, damage_resistances, damage_vulnerabilities, damage_immunities,
+                 level, controlled_by_dm, npc_stats_visible_to_party, harvest_consent, is_orphan, created_at)
+            VALUES
+                (@id, @campaignId, @name, '{}'::jsonb, @currentHp, @maxHp, 0, @armorClass, 0,
+                 ARRAY[]::text[], ARRAY[]::text[], ARRAY[]::text[], @level, false, true, false, false, now())
+            """, conn);
+        cmd.Parameters.AddWithValue("id", id);
+        cmd.Parameters.AddWithValue("campaignId", campaignId);
+        cmd.Parameters.AddWithValue("name", name);
+        cmd.Parameters.AddWithValue("currentHp", currentHp);
+        cmd.Parameters.AddWithValue("maxHp", maxHp);
+        cmd.Parameters.AddWithValue("armorClass", armorClass);
+        cmd.Parameters.AddWithValue("level", level);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    private static async Task InsertStoryBeatAsync(
+        NpgsqlConnection conn, Guid id, Guid campaignId, string title, string progress, string reviewStatus,
+        string? objective = null, string? summary = null, string? dmNotes = null)
+    {
+        await using var cmd = new NpgsqlCommand(
+            """
+            INSERT INTO story_beats
+                (id, campaign_id, "order", title, objective, summary, exit_conditions, monster_refs,
+                 npc_refs, secrets, dm_notes, progress, review_status)
+            VALUES
+                (@id, @campaignId, 0, @title, @objective, @summary, ARRAY[]::text[], ARRAY[]::uuid[],
+                 ARRAY[]::uuid[], '[]', @dmNotes, @progress, @reviewStatus)
+            """, conn);
+        cmd.Parameters.AddWithValue("id", id);
+        cmd.Parameters.AddWithValue("campaignId", campaignId);
+        cmd.Parameters.AddWithValue("title", title);
+        cmd.Parameters.AddWithValue("objective", (object?)objective ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("summary", (object?)summary ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("dmNotes", (object?)dmNotes ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("progress", progress);
+        cmd.Parameters.AddWithValue("reviewStatus", reviewStatus);
+        await cmd.ExecuteNonQueryAsync();
+    }
+
     public async Task DisposeAsync()
     {
         await using var conn = new NpgsqlConnection(OwnerConnectionString);
@@ -367,6 +418,87 @@ public class ConsultEndpointsTests : IAsyncLifetime
         Assert.Contains("Second message", history[2].Text);
     }
 
+    // ── system prompt (2026-09-22) — regression guard ตรงจุดที่ผู้ใช้ถามแล้วเจอว่าพัง: ก่อนหน้านี้
+    // AnthropicClient ไม่มี field `system` เลยสักบรรทัด ไม่ใช่แค่ "ควรตรวจ" แต่เป็นบั๊กจริงที่แก้แล้ว ──
+
+    [Fact]
+    public async Task Consult_system_prompt_includes_campaign_name_active_approved_beat_and_party_roster()
+    {
+        var beatId = Guid.NewGuid();
+        var characterId = Guid.NewGuid();
+
+        await using var conn = new NpgsqlConnection(OwnerConnectionString);
+        await conn.OpenAsync();
+        await InsertStoryBeatAsync(
+            conn, beatId, _campaignId, "The Goblin Ambush", "Active", "Approved",
+            objective: "Escort the caravan safely to Silverpine",
+            summary: "Goblins have been raiding the trade road for weeks");
+        await InsertPartyCharacterAsync(
+            conn, characterId, _campaignId, "Lyra Stormwind", level: 3, currentHp: 18, maxHp: 24, armorClass: 15);
+
+        var response = await AuthedClient(_dmToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignId}/sessions/{_sessionId}/consult",
+            new { Content = "What should happen next?" });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var system = _fakeAnthropicClient.LastSystemPromptReceived;
+        Assert.NotNull(system);
+        Assert.Contains($"Consult Campaign {_suffix}", system);
+        Assert.Contains("The Goblin Ambush", system);
+        Assert.Contains("Escort the caravan safely to Silverpine", system);
+        Assert.Contains("Goblins have been raiding the trade road for weeks", system);
+        Assert.Contains("Lyra Stormwind", system);
+        Assert.Contains("HP 18/24", system);
+        Assert.Contains("AC 15", system);
+    }
+
+    [Fact]
+    public async Task Consult_system_prompt_omits_story_beats_that_are_not_active_or_not_approved()
+    {
+        var upcomingBeatId = Guid.NewGuid();
+        var unapprovedActiveBeatId = Guid.NewGuid();
+
+        await using var conn = new NpgsqlConnection(OwnerConnectionString);
+        await conn.OpenAsync();
+        // Upcoming (ยังไม่ active) แม้จะ approved แล้วก็ไม่ควรถูกดึงเข้า prompt — ไม่ใช่บทที่กำลังเล่นอยู่
+        await InsertStoryBeatAsync(conn, upcomingBeatId, _otherCampaignId, "Upcoming Chapter", "Upcoming", "Approved");
+        // Active แต่ยังไม่ approved — ต้องไม่ส่งเข้า context ตาม PROJECT-CONTEXT §2 แม้จะ "active" แล้ว
+        await InsertStoryBeatAsync(conn, unapprovedActiveBeatId, _otherCampaignId, "Unreviewed Active Chapter", "Active", "Pending");
+
+        var response = await AuthedClient(_dmToken).PostAsJsonAsync(
+            $"/campaigns/{_otherCampaignId}/sessions/{_sessionInOtherCampaignId}/consult",
+            new { Content = "What should happen next?" });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var system = _fakeAnthropicClient.LastSystemPromptReceived;
+        Assert.NotNull(system);
+        Assert.DoesNotContain("Upcoming Chapter", system);
+        Assert.DoesNotContain("Unreviewed Active Chapter", system);
+    }
+
+    [Fact]
+    public async Task Consult_system_prompt_never_includes_dm_notes_or_secrets_even_for_the_active_approved_beat()
+    {
+        // path นี้ใช้ร่วมกับ /actions ของผู้เล่นที่ broadcast จริง (ดู doc comment ของ
+        // OrchestratorTurnRunner) — DmNotes/Secrets รั่วเข้า prompt นี้ = รั่วไปหาผู้เล่นได้ผ่าน AI narration
+        var beatId = Guid.NewGuid();
+        await using var conn = new NpgsqlConnection(OwnerConnectionString);
+        await conn.OpenAsync();
+        await InsertStoryBeatAsync(
+            conn, beatId, _campaignId, "Public Beat Title", "Active", "Approved",
+            dmNotes: "SECRET-DM-NOTE-the-mayor-is-the-villain");
+
+        var response = await AuthedClient(_dmToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignId}/sessions/{_sessionId}/consult",
+            new { Content = "What should happen next?" });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var system = _fakeAnthropicClient.LastSystemPromptReceived;
+        Assert.NotNull(system);
+        Assert.Contains("Public Beat Title", system); // เนื้อหาที่ควรอยู่ยังอยู่ปกติ
+        Assert.DoesNotContain("SECRET-DM-NOTE", system);
+    }
+
     [Fact]
     public async Task Consult_with_malformed_tool_input_returns_200_with_error_in_tool_result_not_500()
     {
@@ -508,6 +640,7 @@ public class ConsultEndpointsTests : IAsyncLifetime
             new { Content = "Approve-test: roll for initiative." });
         var consultBody = await consultResponse.Content.ReadFromJsonAsync<ConsultResponse>(JsonOptions);
         var proposalId = consultBody!.Pending!.ProposalId;
+        var systemPromptFromFirstTurn = _fakeAnthropicClient.LastSystemPromptReceived;
 
         var beforeDiceRolls = await CountDiceRollsAsync(_sessionSuggestId);
         var beforeMessages = await CountMessagesAsync(_sessionSuggestId);
@@ -529,6 +662,11 @@ public class ConsultEndpointsTests : IAsyncLifetime
         Assert.Equal(beforeDiceRolls + 1, await CountDiceRollsAsync(_sessionSuggestId));
         Assert.Equal(beforeMessages + 1, await CountMessagesAsync(_sessionSuggestId));
         Assert.Equal("Approved", await ReadProposalStatusAsync(proposalId));
+
+        // 2026-09-22: resolve ต้อง replay ด้วย system prompt เดียวกับตอน SendTurnAsync รอบแรกเป๊ะ
+        // (เก็บผ่าน Proposal.ToolCallJson) ไม่ใช่ประกอบใหม่ตอน resolve ที่ roster อาจเปลี่ยนไปแล้ว
+        Assert.NotNull(systemPromptFromFirstTurn);
+        Assert.Equal(systemPromptFromFirstTurn, _fakeAnthropicClient.LastSystemPromptReceived);
     }
 
     [Fact]

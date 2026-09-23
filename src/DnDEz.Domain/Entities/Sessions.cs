@@ -188,6 +188,35 @@ public class ConsultMessage
 }
 
 /// <summary>
+/// บันทึกแคมเปญ (campaign journal) — DM พิมพ์เอง หรือ AI สรุปให้จากบทสนทนา (Part D)
+///
+/// ใช้ policy `dm_only FOR ALL` ตัวเดียว ไม่แยก `member_read` + `dm_write` เหมือน `autonomy_settings`
+/// เพราะเส้นทางที่ AI เขียนบันทึกนี้ลงได้คือเส้นทางเดียวกับ `consult_messages` ใน Part C — AI เห็น
+/// `StoryBeat.DmNotes`/`Secrets` ของ DM ตรง ๆ ตอนสรุป เนื้อหาที่ลงในบันทึกจึงอาจมีความลับของแคมเปญ
+/// ปนอยู่ได้เสมอ (ไม่ต่างจากเหตุผลที่ `consult_messages` ต้อง fail closed ใน
+/// `AddConsultMessageDmOnlyRls`) ผู้เล่นจึงอ่านไม่ได้แม้แต่แถวเดียวจนกว่าจะมีคอลัมน์
+/// `visibility` แยกระดับการมองเห็นในอนาคต — ตอนนั้นค่อยแยกเป็น 2 policy แบบ
+/// `AddAutonomySettingDmOnlyRls` ห้ามแค่ผ่อน policy ตัวเดียวนี้เฉย ๆ
+///
+/// ห้ามมี navigation property ไปหา `GameSession` — เลี่ยง shadow FK ซ้อน ผูก FK ที่ชั้น
+/// `DnDEzDbContext.OnModelCreating` แทน (ดู config ของ entity นี้)
+/// </summary>
+public class CampaignJournalEntry
+{
+    public Guid Id { get; set; }
+    public Guid CampaignId { get; set; }
+    public Campaign Campaign { get; set; } = null!;
+
+    /// <summary>nullable — บันทึกอาจไม่ผูกเซสชันไหนเลย เช่น DM จดตอนเตรียมเกม</summary>
+    public Guid? SessionId { get; set; }
+
+    public string Title { get; set; } = null!;
+    public string Content { get; set; } = null!;
+    public JournalAuthor AuthoredBy { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
+/// <summary>
 /// บันทึกการทอยเต๋าทุกครั้ง — RNG อยู่ฝั่ง server + เก็บ seed เพื่อ replay ตรวจย้อนหลังได้
 /// เวลามีข้อพิพาท — PROJECT-CONTEXT §3 (ข้อบังคับสถาปัตยกรรม)
 /// </summary>

@@ -544,6 +544,18 @@ app.MapConsultEndpoints();
 // OrchestratorTurnRunner) แต่ auth เป็น "เจ้าของตัวละคร" ไม่ใช่ DM-only ──────────────────────
 app.MapPlayerActionEndpoints();
 
+// ── DM AI Assistant Part C: แชทที่ปรึกษาส่วนตัวของ DM (ผูกกับแคมเปญ ไม่ใช่ session, text-only,
+// ไม่ broadcast, เก็บที่ consult_messages) — ต่างจาก /consult ทุกข้อ ดู doc comment ของคลาส ──
+app.MapAdvisorEndpoints();
+
+// ── DM AI Assistant Part D: บันทึกแคมเปญ (ชั้นความจำระหว่าง log ดิบกับ recap) — DM-only,
+// AI เข้าถึงผ่าน tool `search_campaign_journal` ไม่ใช่ยัดเข้า system prompt ──
+app.MapCampaignJournalEndpoints();
+
+// ── DM AI Assistant Part E: spawn มอนสเตอร์เป็นตัวละคร DM-controlled เพื่อให้มี HP รายตัวและ
+// เข้าวง initiative ได้ (ลบทิ้งพร้อมสรุปผลตอน encounter จบ ดู MonsterSpawnEndpoints) ──
+app.MapMonsterSpawnEndpoints();
+
 // ── Sprint F งานที่ 4: encounter / initiative / turn order ──
 app.MapEncounterEndpoints();
 

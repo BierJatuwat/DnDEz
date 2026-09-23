@@ -33,6 +33,7 @@ public class DnDEzDbContext(DbContextOptions<DnDEzDbContext> options) : DbContex
     public DbSet<PlayerRestAction> PlayerRestActions => Set<PlayerRestAction>();
     public DbSet<RecapSnapshot> RecapSnapshots => Set<RecapSnapshot>();
     public DbSet<ConsultMessage> ConsultMessages => Set<ConsultMessage>();
+    public DbSet<CampaignJournalEntry> CampaignJournalEntries => Set<CampaignJournalEntry>();
     public DbSet<DiceRoll> DiceRolls => Set<DiceRoll>();
     public DbSet<Encounter> Encounters => Set<Encounter>();
     public DbSet<EncounterParticipant> EncounterParticipants => Set<EncounterParticipant>();
@@ -48,6 +49,8 @@ public class DnDEzDbContext(DbContextOptions<DnDEzDbContext> options) : DbContex
     public DbSet<CharacterPreset> CharacterPresets => Set<CharacterPreset>();
     public DbSet<ActionCatalogEntry> ActionCatalogEntries => Set<ActionCatalogEntry>();
     public DbSet<SrdMonster> SrdMonsters => Set<SrdMonster>();
+    public DbSet<SrdMonsterTranslation> SrdMonsterTranslations => Set<SrdMonsterTranslation>();
+    public DbSet<RulesCorpusTranslation> RulesCorpusTranslations => Set<RulesCorpusTranslation>();
 
     /// <summary>คอลัมน์ที่เก็บ JSON ทั้งก้อน — ใช้ jsonb เสมอ (ไม่ใช่ json/text)</summary>
     private const string Jsonb = "jsonb";
@@ -332,6 +335,19 @@ public class DnDEzDbContext(DbContextOptions<DnDEzDbContext> options) : DbContex
             EnumCheck<ConsultMessage, ConsultRole>(e, x => x.Role, "role");
         });
 
+        b.Entity<CampaignJournalEntry>(e =>
+        {
+            e.ToTable("campaign_journal_entries");
+            e.HasOne(x => x.Campaign).WithMany()
+                .HasForeignKey(x => x.CampaignId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<GameSession>().WithMany()
+                .HasForeignKey(x => x.SessionId).OnDelete(DeleteBehavior.SetNull);
+            e.Property(x => x.Title).HasMaxLength(200);
+            e.Property(x => x.CreatedAt).HasDefaultValueSql("now()");
+            e.HasIndex(x => new { x.CampaignId, x.CreatedAt });
+            EnumCheck<CampaignJournalEntry, JournalAuthor>(e, x => x.AuthoredBy, "authored_by");
+        });
+
         b.Entity<DiceRoll>(e =>
         {
             e.HasOne(x => x.Session).WithMany()
@@ -491,6 +507,31 @@ public class DnDEzDbContext(DbContextOptions<DnDEzDbContext> options) : DbContex
             e.HasIndex(x => x.Key).IsUnique();
             e.ToTable(t => t.HasCheckConstraint("ck_srd_monster_numbers",
                 "armor_class > 0 AND hit_points > 0 AND speed_feet >= 0 AND reach_feet >= 5"));
+        });
+
+        b.Entity<SrdMonsterTranslation>(e =>
+        {
+            e.ToTable("srd_monster_translations");
+            e.Property(x => x.MonsterKey).HasMaxLength(100);
+            e.Property(x => x.Locale).HasMaxLength(8);
+            e.Property(x => x.Name).HasMaxLength(200);
+            e.Property(x => x.Size).HasMaxLength(40);
+            e.Property(x => x.Type).HasMaxLength(60);
+            e.Property(x => x.TypeTag).HasMaxLength(60);
+            e.Property(x => x.Alignment).HasMaxLength(80);
+            e.Property(x => x.Data).HasColumnType(Jsonb);
+            e.HasIndex(x => new { x.MonsterKey, x.Locale }).IsUnique();
+        });
+
+        b.Entity<RulesCorpusTranslation>(e =>
+        {
+            e.ToTable("rules_corpus_translations");
+            e.Property(x => x.Category).HasMaxLength(32);
+            e.Property(x => x.Key).HasMaxLength(100);
+            e.Property(x => x.Locale).HasMaxLength(8);
+            e.Property(x => x.Title).HasMaxLength(200);
+            e.Property(x => x.Data).HasColumnType(Jsonb);
+            e.HasIndex(x => new { x.Category, x.Key, x.Locale }).IsUnique();
         });
 
         b.Entity<ActionCatalogEntry>(e =>

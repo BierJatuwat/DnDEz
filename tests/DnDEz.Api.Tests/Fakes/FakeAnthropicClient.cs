@@ -10,10 +10,12 @@ namespace DnDEz.Api.Tests.Fakes;
 ///
 /// พฤติกรรมกำหนดจากเนื้อหา input เอง ให้เทสต์ควบคุมผลลัพธ์ได้ตรง ๆ โดยไม่ต้อง mock framework ใด ๆ:
 ///  • `ValidateKeyAsync`: key ที่มีคำว่า "invalid" → Invalid, "unknown-outcome" → Unknown, อื่น ๆ → Valid
-///  • `SendTurnAsync`: ข้อความสุดท้ายมีคำว่า "roll" (ไม่สนตัวพิมพ์) **และ** มี tool ให้เสนอ (ไม่ null —
-///    จำลอง Manual level ที่ไม่เสนอ tool เลย) → ตอบเป็น tool_use พร้อม input `{expression:"1d20+5"}`
-///    (หรือ `{}` ถ้ามีคำว่า "malformed-tool-input" ด้วย จำลอง input ผิดรูปแบบ) ไม่งั้นตอบ narration
-///    เฉย ๆ — **ไม่ execute อะไรเองเลย** ตรงตาม contract ใหม่ของ interface
+///  • `SendTurnAsync`: ข้อความสุดท้ายมีคำว่า "roll" (ไม่สนตัวพิมพ์) **และ** มี tool ชื่อ "roll_dice" อยู่ใน
+///    `tools` → ตอบเป็น tool_use `roll_dice` พร้อม input `{expression:"1d20+5"}` (หรือ `{}` ถ้ามีคำว่า
+///    "malformed-tool-input" ด้วย จำลอง input ผิดรูปแบบ) · **2026-09-22 (Part B)** เพิ่ม trigger
+///    `lookup-rule:<key>` / `lookup-monster:<key>` (ต้องมี tool ชื่อนั้นอยู่ใน `tools` ด้วยเช่นกัน) →
+///    ตอบ tool_use พร้อม input `{key:"<key>"}` — ไม่งั้นตอบ narration เฉย ๆ **ไม่ execute อะไรเองเลย**
+///    ตรงตาม contract ของ interface (client ชั้นนี้แค่รายงานว่า Claude "อยาก" เรียก tool ไหน)
 ///  • `ContinueWithToolResultAsync`: ตอบ narration ที่อ้างอิงผล tool_result ที่ส่งมา (พิสูจน์ round-trip
 ///    ทำงานจริง)
 /// </summary>
@@ -21,6 +23,14 @@ public sealed class FakeAnthropicClient : IAnthropicClient
 {
     /// <summary>เทสต์ inspect ได้ว่า history ที่ endpoint ส่งมาจริงมีอะไรบ้าง — เก็บของ call ล่าสุด</summary>
     public IReadOnlyList<AnthropicHistoryMessage>? LastHistoryReceived { get; private set; }
+
+    /// <summary>2026-09-22 — เทสต์ inspect ได้ว่า system prompt ที่ endpoint ประกอบมาจริงมีเนื้อหาอะไร
+    /// (regression guard ตรงจุดที่เคยพัง: ก่อนหน้านี้ไม่มี field นี้เลยสักบรรทัด)</summary>
+    public string? LastSystemPromptReceived { get; private set; }
+
+    /// <summary>2026-09-22 (Part B) — เทสต์ inspect ได้ว่า endpoint เสนอ tool อะไรบ้างในเทิร์นล่าสุด
+    /// (ยืนยันว่า lookup tool ถูกเสนอแม้ตอน autonomy=Manual ต่างจาก roll_dice)</summary>
+    public IReadOnlyList<string>? LastToolNamesOffered { get; private set; }
 
     public Task<ApiKeyValidationOutcome> ValidateKeyAsync(string apiKey, CancellationToken cancellationToken)
     {
@@ -37,55 +47,108 @@ public sealed class FakeAnthropicClient : IAnthropicClient
 
     public Task<AnthropicTurnResult> SendTurnAsync(
         string apiKey,
+        string? system,
         IReadOnlyList<AnthropicHistoryMessage> history,
-        AnthropicToolDefinition? tool,
+        IReadOnlyList<AnthropicToolDefinition> tools,
         CancellationToken cancellationToken)
     {
         LastHistoryReceived = history;
+        LastSystemPromptReceived = system;
+        LastToolNamesOffered = tools.Select(t => t.Name).ToList();
         var lastText = history.Count > 0 ? history[^1].Text : string.Empty;
 
         var emptyContent = JsonSerializer.Deserialize<JsonElement>("[]");
 
-        if (tool is null || !lastText.Contains("roll", StringComparison.OrdinalIgnoreCase))
+        string? toolName = null;
+        JsonElement input = default;
+
+        var rollTool = tools.SingleOrDefault(t => t.Name == "roll_dice");
+        var lookupRuleTool = tools.SingleOrDefault(t => t.Name == "lookup_rule");
+        var lookupMonsterTool = tools.SingleOrDefault(t => t.Name == "lookup_monster");
+        var journalSearchTool = tools.SingleOrDefault(t => t.Name == "search_campaign_journal");
+
+        if (rollTool is not null && lastText.Contains("roll", StringComparison.OrdinalIgnoreCase))
+        {
+            toolName = rollTool.Name;
+            var inputJson = lastText.Contains("malformed-tool-input", StringComparison.OrdinalIgnoreCase)
+                ? JsonSerializer.Serialize(new { })
+                : JsonSerializer.Serialize(new { expression = "1d20+5" });
+            input = JsonSerializer.Deserialize<JsonElement>(inputJson);
+        }
+        else if (lookupRuleTool is not null && TryExtractMarkerValue(lastText, "lookup-rule:", out var ruleKey))
+        {
+            toolName = lookupRuleTool.Name;
+            input = JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(new { key = ruleKey }));
+        }
+        else if (lookupMonsterTool is not null && TryExtractMarkerValue(lastText, "lookup-monster:", out var monsterKey))
+        {
+            toolName = lookupMonsterTool.Name;
+            input = JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(new { key = monsterKey }));
+        }
+        else if (journalSearchTool is not null && TryExtractMarkerValue(lastText, "search-journal:", out var journalQuery))
+        {
+            // 2026-09-22 (Part D) — trigger ของ `search_campaign_journal` · marker ตัดที่ช่องว่าง/
+            // วรรคตอนตัวแรก คำค้นในเทสต์จึงต้องเป็นคำเดียวติดกัน (เช่น "search-journal:เวลรอธ ...")
+            toolName = journalSearchTool.Name;
+            input = JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(new { query = journalQuery }));
+        }
+
+        if (toolName is null)
         {
             return Task.FromResult(new AnthropicTurnResult($"The AI narrates: {lastText}", ToolUse: null, emptyContent));
         }
 
-        var inputJson = lastText.Contains("malformed-tool-input", StringComparison.OrdinalIgnoreCase)
-            ? JsonSerializer.Serialize(new { })
-            : JsonSerializer.Serialize(new { expression = "1d20+5" });
-        var input = JsonSerializer.Deserialize<JsonElement>(inputJson);
         var toolUseId = $"toolu_{Guid.NewGuid():N}";
 
         // จำลอง raw content array ของ Anthropic จริง (text block + tool_use block) — เก็บเป็น
         // JsonElement ตรง ๆ เพื่อให้ ContinueWithToolResultAsync echo กลับได้เหมือนของจริง
         var rawContentJson = JsonSerializer.Serialize(new object[]
         {
-            new { type = "text", text = "Let me roll for that." },
-            new { type = "tool_use", id = toolUseId, name = tool.Name, input },
+            new { type = "text", text = "Let me check that for you." },
+            new { type = "tool_use", id = toolUseId, name = toolName, input },
         });
         var rawContent = JsonSerializer.Deserialize<JsonElement>(rawContentJson);
 
         return Task.FromResult(new AnthropicTurnResult(
-            "Let me roll for that.",
-            new AnthropicPendingToolUse(toolUseId, tool.Name, input),
+            "Let me check that for you.",
+            new AnthropicPendingToolUse(toolUseId, toolName, input),
             rawContent));
     }
 
     public Task<AnthropicTurnResult> ContinueWithToolResultAsync(
         string apiKey,
+        string? system,
         IReadOnlyList<AnthropicHistoryMessage> history,
-        AnthropicToolDefinition tool,
+        IReadOnlyList<AnthropicToolDefinition> tools,
         JsonElement rawAssistantContent,
         string toolUseId,
         string toolResultText,
         CancellationToken cancellationToken)
     {
         LastHistoryReceived = history;
+        LastSystemPromptReceived = system;
+        LastToolNamesOffered = tools.Select(t => t.Name).ToList();
         var emptyContent = JsonSerializer.Deserialize<JsonElement>("[]");
         return Task.FromResult(new AnthropicTurnResult(
-            $"You roll the dice... {toolResultText}. The outcome is decided!",
+            $"Here's what I found: {toolResultText}",
             ToolUse: null,
             emptyContent));
+    }
+
+    /// <summary>ดึงค่าที่อยู่หลัง marker (เช่น "lookup-rule:blinded" → "blinded") — ตัดที่ช่องว่าง/
+    /// เครื่องหมายวรรคตอนตัวแรกที่เจอ ไม่มี marker เลย = คืน false</summary>
+    private static bool TryExtractMarkerValue(string text, string marker, out string value)
+    {
+        var index = text.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (index < 0)
+        {
+            value = string.Empty;
+            return false;
+        }
+
+        var afterMarker = text[(index + marker.Length)..];
+        var endIndex = afterMarker.IndexOfAny([' ', '.', ',', '?', '!']);
+        value = endIndex < 0 ? afterMarker.Trim() : afterMarker[..endIndex].Trim();
+        return value.Length > 0;
     }
 }

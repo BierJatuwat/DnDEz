@@ -307,7 +307,25 @@ public static class EncounterEndpoints
             }
 
             encounter.EndedAt = DateTimeOffset.UtcNow;
+
+            // Part E (2026-09-22) — มอนสเตอร์ที่ spawn ลงไฟต์นี้เป็นของชั่วคราว: สรุปผลภาพรวมลงบันทึก
+            // แคมเปญแล้วลบแถวทิ้งในธุรกรรมเดียวกับการปิด encounter (ถ้าแยกสองรอบแล้วพังกลางทาง จะเหลือ
+            // instance ค้างโดยไม่มี encounter ให้ลบมันอีก) — ไม่แตะตัวละครผู้เล่น/NPC ถาวร ดู doc comment
+            // ของ `MonsterSpawnEndpoints.SummariseAndRemoveSpawnedMonstersAsync`
+            var removedMonsters = await MonsterSpawnEndpoints.SummariseAndRemoveSpawnedMonstersAsync(
+                db, campaignId, encounterId, encounter.SessionId);
+
             await db.SaveChangesAsync();
+
+            // จงใจไม่ใส่จำนวนนี้ลง response/broadcast — `EncounterEnded` ส่งเข้ากลุ่มแคมเปญทั้งวง
+            // การเติม field ใหม่เข้า payload ที่ผู้เล่นเห็นต้องคิดเรื่องการรั่วทุกครั้ง ที่นี่ไม่มีเหตุผล
+            // ต้องบอกผู้เล่น จึง log ไว้ให้ debug ได้อย่างเดียว
+            if (removedMonsters > 0)
+            {
+                logger.LogInformation(
+                    "Encounter {EncounterId} ended — removed {Count} spawned monster instance(s)",
+                    encounterId, removedMonsters);
+            }
 
             await turnStateStore.TryRemoveAsync(encounterId, encounter.TurnNumber);
 

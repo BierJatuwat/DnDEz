@@ -8,6 +8,7 @@ import { useCampaignWorkspace } from "@/lib/use-campaign-workspace";
 import { useCombatActions } from "@/lib/use-combat-actions";
 import { useScene } from "@/lib/use-scene";
 import type { ApiKeyInfo, CampaignMember } from "@/lib/campaign-types";
+import { AdvisorPanel } from "./AdvisorPanel";
 import { DmMapTools } from "./DmMapTools";
 import { MonsterLibraryPanel } from "./MonsterLibraryPanel";
 import { RulesReferencePanel } from "./RulesReferencePanel";
@@ -593,6 +594,10 @@ export function DmConsole({ campaignId }: { campaignId: string }) {
             editable
             setLevel={ws.setAutonomyLevel}
           />
+
+          {/* ผูกกับแคมเปญ ไม่ใช่ session — จงใจอยู่นอกเงื่อนไข selectedSessionId ด้านล่าง เพราะ
+              ที่ปรึกษามีไว้ใช้ตอน "ยังไม่เริ่มเล่น" ด้วย (เตรียมตัว/วางแผนตอนถัดไป) */}
+          <AdvisorPanel campaignId={campaignId} />
 
           {ws.selectedSessionId && (
             <>

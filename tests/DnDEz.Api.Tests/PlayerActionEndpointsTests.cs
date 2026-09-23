@@ -454,4 +454,26 @@ public class PlayerActionEndpointsTests : IAsyncLifetime
         Guid? MessageId, string Content, ConsultToolCallResponse? ToolCall, ConsultPendingResponse? Pending);
 
     private record ConsultErrorResponse(string Error);
+
+    // ── Part D (2026-09-22): บันทึกแคมเปญห้ามรั่วผ่านเทิร์นของผู้เล่น ────────
+
+    [Fact]
+    public async Task Player_turn_is_never_offered_the_campaign_journal_search_tool()
+    {
+        // บันทึกแคมเปญมีความลับของ DM ปนได้ (รายการที่ AI สรุปให้เห็น StoryBeat.DmNotes/Secrets ผ่าน
+        // /advisor) และ narration ของเทิร์นผู้เล่น **broadcast เข้ากลุ่มแคมเปญจริง** — ถ้า Claude เรียก
+        // tool นี้ได้จากเทิร์นผู้เล่น ความลับมีเส้นทางไปโผล่หน้าจอผู้เล่นทันที
+        //
+        // RLS (`dm_only`) กันซ้ำอีกชั้น (เทิร์นผู้เล่นรันด้วย app.user_id ของผู้เล่น → app_is_dm() = false)
+        // แต่เทสต์นี้ล็อก**ชั้นแรก**ไว้ต่างหาก: ต้องไม่เสนอ tool ให้ตั้งแต่ต้น ไม่ใช่พึ่ง RLS ชั้นเดียว
+        var response = await AuthedClient(_playerToken).PostAsJsonAsync(
+            $"/campaigns/{_campaignId}/sessions/{_sessionId}/actions",
+            new { CharacterId = _characterId, Content = "ฉันพยายามนึกถึงเรื่องที่เคยเกิดขึ้น" });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(_fakeAnthropicClient.LastToolNamesOffered);
+        Assert.DoesNotContain("search_campaign_journal", _fakeAnthropicClient.LastToolNamesOffered!);
+        // tool อ่านอย่างเดียวตัวอื่นยังเสนอตามปกติ — ยืนยันว่าไม่ได้ปิดหมดทั้งชุดโดยไม่ตั้งใจ
+        Assert.Contains("lookup_rule", _fakeAnthropicClient.LastToolNamesOffered!);
+    }
 }

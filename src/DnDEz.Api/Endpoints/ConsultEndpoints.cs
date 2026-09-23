@@ -54,8 +54,6 @@ namespace DnDEz.Api.Endpoints;
 /// </summary>
 public static class ConsultEndpoints
 {
-    private const string ProtectorPurpose = "DnDEz.ApiKeys.v1"; // ต้องตรงกับ ApiKeyEndpoints เป๊ะ
-    private const string AnthropicProvider = "anthropic";
     private const int MaxContentLength = 4000;
 
     public static void MapConsultEndpoints(this WebApplication app)
@@ -104,14 +102,11 @@ public static class ConsultEndpoints
                 return Results.NotFound();
             }
 
-            var apiKey = await GetActiveDmApiKeyAsync(db, callerUserId.Value);
-            if (apiKey is null)
+            var rawApiKey = await DmApiKeyResolver.ResolveAsync(db, dataProtectionProvider, callerUserId.Value);
+            if (rawApiKey is null)
             {
                 return Results.BadRequest(new ConsultErrorResponse("dm_api_key_not_set"));
             }
-
-            var protector = dataProtectionProvider.CreateProtector(ProtectorPurpose);
-            var rawApiKey = protector.Unprotect(apiKey.EncryptedKey);
 
             // broadcastActionMessages: false — ดู doc comment ของ OrchestratorTurnRunner ว่าทำไม
             // DM consult ห้าม broadcast เนื้อหาเข้ากลุ่มแคมเปญ (อาจมีคำถาม/สปอยล์ส่วนตัวของ DM ปนอยู่)
@@ -196,8 +191,8 @@ public static class ConsultEndpoints
                     proposal.Id, ProposalStatus.Rejected.ToString(), MessageId: null, Content: null, ToolCall: null));
             }
 
-            var apiKey = await GetActiveDmApiKeyAsync(db, callerUserId.Value);
-            if (apiKey is null)
+            var rawApiKey = await DmApiKeyResolver.ResolveAsync(db, dataProtectionProvider, callerUserId.Value);
+            if (rawApiKey is null)
             {
                 // ยังไม่แตะ Status เลย — คงเป็น Pending ต่อไป ให้ DM ตั้ง key แล้วมา resolve ใหม่ได้
                 return Results.BadRequest(new ConsultErrorResponse("dm_api_key_not_set"));
@@ -217,9 +212,6 @@ public static class ConsultEndpoints
                 return Results.Conflict();
             }
 
-            var protector = dataProtectionProvider.CreateProtector(ProtectorPurpose);
-            var rawApiKey = protector.Unprotect(apiKey.EncryptedKey);
-
             var payload = JsonSerializer.Deserialize<PendingProposalPayload>(proposal.ToolCallJson)
                 ?? throw new InvalidOperationException("Proposal.ToolCallJson parse ไม่ได้ — ข้อมูลเสียหาย");
 
@@ -227,9 +219,19 @@ public static class ConsultEndpoints
             // catch-all ของ RLS middleware ที่ rollback ทั้ง transaction — claim ข้างบนจะถูก undo ไป
             // ด้วยเลย ทำให้ proposal กลับไปเป็น Pending ให้ retry ใหม่ได้จริง ไม่ค้างสถานะครึ่ง ๆ กลาง ๆ
             var toolResult = OrchestratorTurnRunner.ExecuteRollDice(db, proposal.SessionId, payload.ToolInput);
+            // Proposal ถูกสร้างได้เฉพาะตอน Claude เรียก roll_dice เท่านั้น (lookup tool ที่อ่านอย่าง
+            // เดียวไม่ผ่าน gate นี้เลย ดู doc comment ของ OrchestratorTurnRunner ส่วน Part B) แต่ยัง
+            // ต้องส่ง tools ชุดเต็มเดียวกับตอน SendTurnAsync รอบแรก (2026-09-22) ไม่ใช่แค่ roll_dice —
+            // ชุดนี้คงที่ ไม่ได้ขึ้นกับ state ที่เปลี่ยนได้ (ต่างจาก system prompt ที่ต้องเก็บจาก payload
+            // เพราะ roster/beat เปลี่ยนได้) จึงประกอบใหม่ตรงนี้ได้เลยอย่างปลอดภัย
+            var toolsOffered = new List<AnthropicToolDefinition>
+            {
+                OrchestratorTurnRunner.LookupRuleTool, OrchestratorTurnRunner.LookupMonsterTool,
+                OrchestratorTurnRunner.RollDiceTool,
+            };
             var secondTurn = await anthropicClient.ContinueWithToolResultAsync(
-                rawApiKey, payload.History, OrchestratorTurnRunner.RollDiceTool, payload.RawAssistantContent,
-                payload.ToolUseId, toolResult, CancellationToken.None);
+                rawApiKey, payload.SystemPrompt, payload.History, toolsOffered,
+                payload.RawAssistantContent, payload.ToolUseId, toolResult, CancellationToken.None);
 
             var toolCallResponse = new ConsultToolCallResponse(payload.ToolName, payload.ToolInput, toolResult);
             var toolCallsJson = JsonSerializer.Serialize(new[]
@@ -289,12 +291,7 @@ public static class ConsultEndpoints
         }).RequireAuthorization();
     }
 
-    private static async Task<ApiKey?> GetActiveDmApiKeyAsync(DnDEzDbContext db, Guid dmUserId) =>
-        // RLS own_rows_only ยอมให้ query นี้ผ่านได้ก็ต่อเมื่อ caller (app.user_id) == dmUserId เท่านั้น
-        // — caller ที่เรียกมาถึงจุดนี้ต้องเป็น campaign owner ที่ verify แล้วเสมอ (ดู doc comment คลาส)
-        await db.ApiKeys.SingleOrDefaultAsync(
-            k => k.UserId == dmUserId && k.Provider == AnthropicProvider && k.Status == ApiKeyStatus.Active);
-
+    // GetActiveDmApiKeyAsync ย้ายไป `DmApiKeyResolver` (2026-09-22) ตอนมีจุดเรียกที่ 3 คือ `/advisor`
 }
 
 internal record ConsultRequest(string? Content);
@@ -315,13 +312,16 @@ internal record ProposalResolutionResponse(
     Guid ProposalId, string Status, Guid? MessageId, string? Content, ConsultToolCallResponse? ToolCall);
 
 /// <summary>เก็บใน Proposal.ToolCallJson ระหว่างรอ DM approve — ต้องมีครบทุกอย่างที่ต้องใช้ resume
-/// บทสนทนาต่อได้โดยไม่ต้องพึ่ง state อื่นที่อาจเปลี่ยนไปแล้วระหว่างรอ (เช่น messages ใหม่ที่เพิ่มมาคั่น)</summary>
+/// บทสนทนาต่อได้โดยไม่ต้องพึ่ง state อื่นที่อาจเปลี่ยนไปแล้วระหว่างรอ (เช่น messages ใหม่ที่เพิ่มมาคั่น)
+/// <c>SystemPrompt</c> (2026-09-22) ต้องเป็นค่าเดียวกับตอน `SendTurnAsync` รอบแรกเป๊ะ — ห้ามประกอบใหม่
+/// ตอน resolve เพราะ roster/beat อาจเปลี่ยนไปแล้วระหว่างรอ DM approve (เช่น มีคนตายกลางทาง)</summary>
 internal record PendingProposalPayload(
     string ToolName,
     JsonElement ToolInput,
     string ToolUseId,
     JsonElement RawAssistantContent,
-    List<AnthropicHistoryMessage> History);
+    List<AnthropicHistoryMessage> History,
+    string? SystemPrompt);
 
 internal record ProposalCreatedBroadcast(
     Guid ProposalId, Guid SessionId, string Subsystem, string ToolName, JsonElement ToolInput, string? Reason);

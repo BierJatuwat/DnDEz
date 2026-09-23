@@ -144,6 +144,21 @@ public class Character
     /// <summary>DM เข้าควบคุมตัวละครนี้อยู่หรือไม่ (ได้ตลอดเวลา ไม่ใช่แค่ตอนหลุด) — player-side-design §6</summary>
     public bool ControlledByDm { get; set; }
 
+    /// <summary>
+    /// Part E ของแผน "DM AI Assistant" (2026-09-22) — แถวนี้ถูก **spawn มาจากแม่แบบมอนสเตอร์**
+    /// (<see cref="MonsterStatBlock"/>) ตัวไหน · null = ตัวละครผู้เล่นจริง หรือ NPC ที่ DM สร้างเองถาวร
+    ///
+    /// **ทำไมมอนสเตอร์ถึงกลายเป็นแถว `Character` แทนที่จะสร้างตารางใหม่**: `EncounterParticipant`
+    /// รับได้แค่ `CharacterId` (ดู `Encounters.cs`) มอนสเตอร์จึงเข้าวง initiative ไม่ได้เลยก่อนหน้านี้ ·
+    /// การ spawn เป็น `Character` ทำให้ **ใช้กลไกที่มีอยู่แล้วทั้งหมดได้ฟรี**: ลำดับเทิร์น, การ resolve
+    /// การโจมตีใน `CombatEndpoints`, broadcast `HpUpdated`, และการซ่อน HP จากผู้เล่นผ่าน
+    /// `CharacterStatsVisibility` — ไม่ต้องเขียนระบบคู่ขนานที่ต้องคอยซิงก์กัน
+    ///
+    /// คอลัมน์นี้คือตัวแยกว่าแถวไหน "ชั่วคราวของไฟต์นี้" (ลบทิ้งได้ตอน encounter จบ) กับแถวไหนเป็นของ
+    /// ถาวรของแคมเปญ — ตรงตามที่ผู้ใช้สั่งว่า HP รายตัวให้เก็บแบบชั่วคราว จบไฟต์แล้วเหลือแค่สรุปภาพรวม
+    /// </summary>
+    public Guid? SpawnedFromMonsterId { get; set; }
+
     /// <summary>Sprint F งานที่ 7 — เฉพาะตัวละครที่ ControlledByDm=true (NPC/monster) เท่านั้นที่ flag นี้
     /// มีความหมาย: DM toggle ได้ว่าผู้เล่นเห็นค่า AC/HP/resistance ที่แน่นอนของ NPC ตัวนี้ไหม (ตัดสิน
     /// 2026-09-03 — DM ปรับได้เอง ไม่ hardcode ซ่อนเสมอ) ตัวละครผู้เล่น (ControlledByDm=false) ไม่ผ่าน

@@ -21,16 +21,29 @@ public interface IAnthropicClient
     Task<ApiKeyValidationOutcome> ValidateKeyAsync(string apiKey, CancellationToken cancellationToken);
 
     /// <summary>
-    /// ส่ง conversation history + tool definition (ถ้ามี) ไปให้ Claude "หนึ่งเทิร์น" **ไม่ execute
+    /// ส่ง conversation history + tool definitions (ถ้ามี) ไปให้ Claude "หนึ่งเทิร์น" **ไม่ execute
     /// tool ใด ๆ เองเด็ดขาด** แค่รายงานกลับว่า Claude ตอบ narration เฉย ๆ หรืออยากเรียก tool —
     /// การตัดสินใจว่าจะ auto-execute ทันที (Autonomous) หรือรอ approve ก่อน (Suggest) เป็นหน้าที่ของ
-    /// endpoint ไม่ใช่ client ชั้นนี้ · <paramref name="tool"/> เป็น null ได้ (Manual level — ไม่เสนอ
-    /// tool ให้ Claude เลย เพราะ subsystem นั้นตั้งไว้ว่า "DM ตัดสินเอง")
+    /// endpoint ไม่ใช่ client ชั้นนี้ · <paramref name="tools"/> ว่างได้ (Manual level สำหรับ tool ที่
+    /// เขียน state — ดู `OrchestratorTurnRunner` ว่า tool ไหนยังเสนอแม้ Manual)
+    ///
+    /// **2026-09-22 (Part B) — เปลี่ยนจาก tool เดียว (`AnthropicToolDefinition? tool`) เป็นลิสต์**
+    /// เพราะตอนนี้มี tool มากกว่าหนึ่งที่อาจเสนอพร้อมกันได้ (roll_dice ที่เขียน state + lookup_rule/
+    /// lookup_monster ที่อ่านอย่างเดียว) — ยังคงข้อจำกัดเดิม "1 tool call ต่อเทิร์น" (ดู
+    /// `AnthropicClient.ExtractTurnResult`) แค่ให้ Claude เลือกได้จากหลายตัว ไม่ใช่ประกาศ agentic loop
+    /// เต็มรูป
+    ///
+    /// <paramref name="system"/> — system prompt (2026-09-22, แก้บั๊ก "AI ไม่รู้ context ของ session
+    /// เลย" ที่ผู้ใช้ถาม) null/ว่าง = ไม่ส่ง field `system` ไปเลย (ไม่ใช่ส่ง string ว่าง) ผู้เรียกเป็น
+    /// คนตัดสินใจว่าจะใส่อะไร — client ชั้นนี้แค่ส่งต่อ ไม่ประกอบเนื้อหาเอง (ดู
+    /// `OrchestratorTurnRunner.BuildSystemPromptAsync` สำหรับ logic ประกอบจริง และเหตุผลว่าทำไม
+    /// `StoryBeat.DmNotes`/`Secrets` ไม่เคยอยู่ใน prompt ที่ผ่าน method นี้)
     /// </summary>
     Task<AnthropicTurnResult> SendTurnAsync(
         string apiKey,
+        string? system,
         IReadOnlyList<AnthropicHistoryMessage> history,
-        AnthropicToolDefinition? tool,
+        IReadOnlyList<AnthropicToolDefinition> tools,
         CancellationToken cancellationToken);
 
     /// <summary>
@@ -39,11 +52,16 @@ public interface IAnthropicClient
     /// ที่ได้จาก <see cref="SendTurnAsync"/> รอบก่อนหน้าเป๊ะ ๆ (Anthropic ต้องการ echo content array
     /// ของ assistant message รอบแรกกลับไปตรง ๆ ไม่ใช่สร้างใหม่เอง) — เก็บเป็น jsonb ใน `Proposal`
     /// ระหว่างรอ approve ได้เพราะเป็น `JsonElement` ธรรมดา serialize/deserialize ได้ตรงไปตรงมา
+    ///
+    /// <paramref name="system"/> — ต้องส่งค่า**เดียวกับที่ใช้ตอน <see cref="SendTurnAsync"/> รอบแรก**
+    /// (Anthropic ไม่บังคับ แต่ระบบนี้ต้องการให้บทสนทนาทั้งรอบเห็น context เดียวกันตลอด ไม่ใช่สลับ
+    /// system prompt กลางบทสนทนา) · <paramref name="tools"/> ก็เช่นกัน ควรเป็นชุดเดียวกับรอบแรก
     /// </summary>
     Task<AnthropicTurnResult> ContinueWithToolResultAsync(
         string apiKey,
+        string? system,
         IReadOnlyList<AnthropicHistoryMessage> history,
-        AnthropicToolDefinition tool,
+        IReadOnlyList<AnthropicToolDefinition> tools,
         JsonElement rawAssistantContent,
         string toolUseId,
         string toolResultText,

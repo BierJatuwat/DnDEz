@@ -61,21 +61,23 @@ public sealed class AnthropicClient(HttpClient httpClient) : IAnthropicClient
 
     public async Task<AnthropicTurnResult> SendTurnAsync(
         string apiKey,
+        string? system,
         IReadOnlyList<AnthropicHistoryMessage> history,
-        AnthropicToolDefinition? tool,
+        IReadOnlyList<AnthropicToolDefinition> tools,
         CancellationToken cancellationToken)
     {
         var messages = BuildMessagesArray(history);
-        var tools = tool is null ? null : BuildToolsArray(tool);
+        var toolsArray = tools.Count == 0 ? null : BuildToolsArray(tools);
 
-        var response = await SendMessagesRequestAsync(apiKey, messages, tools, cancellationToken);
+        var response = await SendMessagesRequestAsync(apiKey, system, messages, toolsArray, cancellationToken);
         return ExtractTurnResult(response);
     }
 
     public async Task<AnthropicTurnResult> ContinueWithToolResultAsync(
         string apiKey,
+        string? system,
         IReadOnlyList<AnthropicHistoryMessage> history,
-        AnthropicToolDefinition tool,
+        IReadOnlyList<AnthropicToolDefinition> tools,
         JsonElement rawAssistantContent,
         string toolUseId,
         string toolResultText,
@@ -99,8 +101,8 @@ public sealed class AnthropicClient(HttpClient httpClient) : IAnthropicClient
             }),
         });
 
-        var tools = BuildToolsArray(tool);
-        var response = await SendMessagesRequestAsync(apiKey, messages, tools, cancellationToken);
+        var toolsArray = tools.Count == 0 ? null : BuildToolsArray(tools);
+        var response = await SendMessagesRequestAsync(apiKey, system, messages, toolsArray, cancellationToken);
         return ExtractTurnResult(response);
     }
 
@@ -115,15 +117,24 @@ public sealed class AnthropicClient(HttpClient httpClient) : IAnthropicClient
         return messages;
     }
 
-    private static JsonArray BuildToolsArray(AnthropicToolDefinition tool) => new(new JsonObject
+    private static JsonArray BuildToolsArray(IReadOnlyList<AnthropicToolDefinition> tools)
     {
-        ["name"] = tool.Name,
-        ["description"] = tool.Description,
-        ["input_schema"] = JsonSerializer.SerializeToNode(tool.InputSchema),
-    });
+        var array = new JsonArray();
+        foreach (var tool in tools)
+        {
+            array.Add(new JsonObject
+            {
+                ["name"] = tool.Name,
+                ["description"] = tool.Description,
+                ["input_schema"] = JsonSerializer.SerializeToNode(tool.InputSchema),
+            });
+        }
+
+        return array;
+    }
 
     private async Task<JsonObject> SendMessagesRequestAsync(
-        string apiKey, JsonArray messages, JsonArray? tools, CancellationToken cancellationToken)
+        string apiKey, string? system, JsonArray messages, JsonArray? tools, CancellationToken cancellationToken)
     {
         var body = new JsonObject
         {
@@ -134,6 +145,12 @@ public sealed class AnthropicClient(HttpClient httpClient) : IAnthropicClient
         if (tools is not null)
         {
             body["tools"] = tools;
+        }
+        // 2026-09-22: null/ว่าง = ไม่ส่ง field นี้เลย (ไม่ใช่ "" ว่าง) — Anthropic รับ system ที่ไม่มี
+        // field ได้ปกติ แต่ไม่มีเหตุผลจะส่ง "" เปล่า ๆ เปลืองไปเฉย ๆ
+        if (!string.IsNullOrWhiteSpace(system))
+        {
+            body["system"] = system;
         }
 
         using var request = BuildRequest(apiKey, body);

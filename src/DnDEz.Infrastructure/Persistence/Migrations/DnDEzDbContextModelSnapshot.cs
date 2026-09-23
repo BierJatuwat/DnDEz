@@ -349,6 +349,58 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("DnDEz.Domain.Entities.CampaignJournalEntry", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("AuthoredBy")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("authored_by");
+
+                    b.Property<Guid>("CampaignId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("campaign_id");
+
+                    b.Property<string>("Content")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("content");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("now()");
+
+                    b.Property<Guid?>("SessionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("session_id");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("title");
+
+                    b.HasKey("Id")
+                        .HasName("pk_campaign_journal_entries");
+
+                    b.HasIndex("SessionId")
+                        .HasDatabaseName("ix_campaign_journal_entries_session_id");
+
+                    b.HasIndex("CampaignId", "CreatedAt")
+                        .HasDatabaseName("ix_campaign_journal_entries_campaign_id_created_at");
+
+                    b.ToTable("campaign_journal_entries", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_authored_by_campaignjournalentry", "authored_by IN ('Dm', 'Ai', 'System')");
+                        });
+                });
+
             modelBuilder.Entity("DnDEz.Domain.Entities.CampaignMember", b =>
                 {
                     b.Property<Guid>("Id")
@@ -503,6 +555,10 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                         .HasColumnType("jsonb")
                         .HasColumnName("sheet")
                         .HasDefaultValueSql("'{}'::jsonb");
+
+                    b.Property<Guid?>("SpawnedFromMonsterId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("spawned_from_monster_id");
 
                     b.Property<int>("SpeedFeet")
                         .HasColumnType("integer")
@@ -1650,6 +1706,55 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                     b.ToTable("rules_corpus_entries", (string)null);
                 });
 
+            modelBuilder.Entity("DnDEz.Domain.Entities.RulesCorpusTranslation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Category")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("category");
+
+                    b.Property<string>("Content")
+                        .HasColumnType("text")
+                        .HasColumnName("content");
+
+                    b.Property<string>("Data")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("data");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("key");
+
+                    b.Property<string>("Locale")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)")
+                        .HasColumnName("locale");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("title");
+
+                    b.HasKey("Id")
+                        .HasName("pk_rules_corpus_translations");
+
+                    b.HasIndex("Category", "Key", "Locale")
+                        .IsUnique()
+                        .HasDatabaseName("ix_rules_corpus_translations_category_key_locale");
+
+                    b.ToTable("rules_corpus_translations", (string)null);
+                });
+
             modelBuilder.Entity("DnDEz.Domain.Entities.Scene", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1859,6 +1964,68 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("DnDEz.Domain.Entities.SrdMonsterTranslation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Alignment")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)")
+                        .HasColumnName("alignment");
+
+                    b.Property<string>("Data")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("data");
+
+                    b.Property<string>("Locale")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)")
+                        .HasColumnName("locale");
+
+                    b.Property<string>("MonsterKey")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("monster_key");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("name");
+
+                    b.Property<string>("Size")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)")
+                        .HasColumnName("size");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(60)
+                        .HasColumnType("character varying(60)")
+                        .HasColumnName("type");
+
+                    b.Property<string>("TypeTag")
+                        .HasMaxLength(60)
+                        .HasColumnType("character varying(60)")
+                        .HasColumnName("type_tag");
+
+                    b.HasKey("Id")
+                        .HasName("pk_srd_monster_translations");
+
+                    b.HasIndex("MonsterKey", "Locale")
+                        .IsUnique()
+                        .HasDatabaseName("ix_srd_monster_translations_monster_key_locale");
+
+                    b.ToTable("srd_monster_translations", (string)null);
+                });
+
             modelBuilder.Entity("DnDEz.Domain.Entities.StorageQuota", b =>
                 {
                     b.Property<Guid>("UserId")
@@ -2044,6 +2211,24 @@ namespace DnDEz.Infrastructure.Persistence.Migrations
                         .HasConstraintName("fk_campaigns_users_owner_user_id");
 
                     b.Navigation("OwnerUser");
+                });
+
+            modelBuilder.Entity("DnDEz.Domain.Entities.CampaignJournalEntry", b =>
+                {
+                    b.HasOne("DnDEz.Domain.Entities.Campaign", "Campaign")
+                        .WithMany()
+                        .HasForeignKey("CampaignId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_campaign_journal_entries_campaigns_campaign_id");
+
+                    b.HasOne("DnDEz.Domain.Entities.GameSession", null)
+                        .WithMany()
+                        .HasForeignKey("SessionId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("fk_campaign_journal_entries_sessions_session_id");
+
+                    b.Navigation("Campaign");
                 });
 
             modelBuilder.Entity("DnDEz.Domain.Entities.CampaignMember", b =>
