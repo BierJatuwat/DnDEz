@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { normalizeActionMessageCreated, appendActionMessage, type ActionMessage } from "./action-feed";
+import { normalizeActionMessageCreated, appendActionMessage, feedSpeaker, type ActionMessage } from "./action-feed";
 
 describe("normalizeActionMessageCreated", () => {
   it("normalizes a well-formed payload", () => {
@@ -76,5 +76,24 @@ describe("appendActionMessage", () => {
     expect(feed).toHaveLength(50);
     expect(feed[0].id).toBe("m-5");
     expect(feed[49].id).toBe("m-54");
+  });
+});
+
+describe("feedSpeaker", () => {
+  const names: Record<string, string> = { npc: "Innkeeper", hero: "Hero" };
+  const nameOf = (id: string) => names[id];
+
+  it("uses the character's name when the message belongs to one", () => {
+    expect(feedSpeaker({ authorType: "Ai", characterId: "npc" }, nameOf)).toBe("Innkeeper");
+    expect(feedSpeaker({ authorType: "Player", characterId: "hero" }, nameOf)).toBe("Hero");
+  });
+
+  it("labels AI narration without a character as the narrator", () => {
+    expect(feedSpeaker({ authorType: "Ai", characterId: null }, nameOf)).toBe("ผู้บรรยาย");
+  });
+
+  it("falls back to the author role when the character no longer exists", () => {
+    expect(feedSpeaker({ authorType: "Ai", characterId: "deleted" }, nameOf)).toBe("ผู้บรรยาย");
+    expect(feedSpeaker({ authorType: "Other", characterId: null }, nameOf)).toBe("Other");
   });
 });

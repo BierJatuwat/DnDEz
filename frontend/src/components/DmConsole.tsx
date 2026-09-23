@@ -582,7 +582,7 @@ export function DmConsole({ campaignId }: { campaignId: string }) {
 
               <section className={sectionClass}>
                 <h2 className="font-medium">Action feed (สิ่งที่ผู้เล่นทำแบบ realtime)</h2>
-                <ActionFeedList actionFeed={ws.actionFeed} />
+                <ActionFeedList actionFeed={ws.actionFeed} nameOf={nameOf} />
               </section>
             </>
           )}

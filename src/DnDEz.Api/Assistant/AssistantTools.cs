@@ -30,8 +30,9 @@ internal enum ToolGate
     AlwaysConfirmText,
 }
 
+/// <summary><see cref="ApiKey"/> = key BYOK ของ DM สำหรับ tool ที่ต้องเรียก Claude เอง (สร้าง recap) — ห้าม log/ห้ามใส่ผลลัพธ์</summary>
 internal sealed record AssistantToolContext(
-    DnDEzDbContext Db, Campaign Campaign, Guid? SessionId, Guid DmUserId, IServiceProvider Services);
+    DnDEzDbContext Db, Campaign Campaign, Guid? SessionId, Guid DmUserId, IServiceProvider Services, string ApiKey);
 
 /// <summary><see cref="ResultForClaude"/> คือสิ่งที่ส่งกลับเป็น tool_result · <see cref="Summary"/> คือบรรทัด
 /// ภาษาคนที่หน้าจอ DM โชว์ใน "สิ่งที่ทำไปแล้ว"</summary>
@@ -42,7 +43,7 @@ internal sealed record AssistantTool(
     ToolGate Gate,
     AutonomySubsystem? Subsystem,
     bool RequiresSession,
-    Func<JsonElement, string> Describe,
+    Func<AssistantToolContext, JsonElement, Task<string>> Describe,
     Func<AssistantToolContext, JsonElement, Task<ToolOutcome>> Execute,
     string? EditableTextField = null)
 {
@@ -102,23 +103,30 @@ internal static class AssistantTools
         ReadOnly(OrchestratorTurnRunner.SearchCampaignJournalTool, input => $"ค้นบันทึก \"{Str(input, "query")}\""),
 
         new(GetGameStateTool, ToolGate.Immediate, null, RequiresSession: false,
-            _ => "ดูสถานะเกม", ExecuteGetGameStateAsync),
+            Sync(_ => "ดูสถานะเกม"), ExecuteGetGameStateAsync),
 
         new(WriteJournalTool, ToolGate.Immediate, null, RequiresSession: false,
-            input => $"เขียนบันทึก \"{Str(input, "title")}\"", ExecuteWriteJournalAsync),
+            Sync(input => $"เขียนบันทึก \"{Str(input, "title")}\""), ExecuteWriteJournalAsync),
         new(UpdateJournalTool, ToolGate.Immediate, null, RequiresSession: false,
-            input => "แก้บันทึกแคมเปญ", ExecuteUpdateJournalAsync),
+            Sync(_ => "แก้บันทึกแคมเปญ"), ExecuteUpdateJournalAsync),
 
         new(OrchestratorTurnRunner.RollDiceTool, ToolGate.Dial, AutonomySubsystem.RulesCombat, RequiresSession: true,
-            input => $"ทอยเต๋า {Str(input, "expression")}", ExecuteRollDiceAsync),
+            Sync(input => $"ทอยเต๋า {Str(input, "expression")}"), ExecuteRollDiceAsync),
+
+        .. AssistantGameTools.Tools,
+        .. AssistantTableTools.Tools,
     ];
+
+    /// <summary>คำบรรยายที่ไม่ต้องอ่าน DB (ส่วนใหญ่) — tool ที่อยากโชว์ชื่อแทน id บนการ์ดอนุมัติใช้แบบ async เอง</summary>
+    internal static Func<AssistantToolContext, JsonElement, Task<string>> Sync(Func<JsonElement, string> describe) =>
+        (_, input) => Task.FromResult(describe(input));
 
     internal static AssistantTool? Find(string name) => All.FirstOrDefault(t => t.Name == name);
 
     // ── executors ────────────────────────────────────────────────────────
 
     private static AssistantTool ReadOnly(AnthropicToolDefinition definition, Func<JsonElement, string> describe) =>
-        new(definition, ToolGate.Immediate, null, RequiresSession: false, describe, async (ctx, input) =>
+        new(definition, ToolGate.Immediate, null, RequiresSession: false, Sync(describe), async (ctx, input) =>
         {
             var result = await OrchestratorTurnRunner.ExecuteReadOnlyToolAsync(
                 ctx.Db, ctx.Campaign.Id, definition.Name, input);
@@ -187,7 +195,7 @@ internal static class AssistantTools
 
         var scene = await db.Scenes.AsNoTracking()
             .Where(s => s.SessionId == ctx.SessionId && s.IsActive)
-            .Select(s => new { s.Id, s.Name, s.Tokens })
+            .Select(s => new { s.Id, s.Name, s.Tokens, s.FogLayer })
             .SingleOrDefaultAsync();
         if (scene is null)
         {
@@ -207,6 +215,15 @@ internal static class AssistantTools
             {
                 var name = names.GetValueOrDefault(t.EntityId, "unknown");
                 sb.AppendLine($"- token id={t.Id} {name} [{t.EntityType}] at ({t.X}, {t.Y})");
+            }
+
+            var areas = FogLayerSerialization.ParseRevealedAreas(scene.FogLayer);
+            sb.AppendLine(areas.Count == 0
+                ? "Fog: the whole map is hidden from players (no revealed areas)."
+                : "Areas revealed to players (everything else is hidden by fog):");
+            foreach (var a in areas)
+            {
+                sb.AppendLine($"- area id={a.Id} center ({a.X}, {a.Y}) radius {a.Radius}");
             }
         }
 

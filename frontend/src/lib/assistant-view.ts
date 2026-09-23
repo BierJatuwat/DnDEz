@@ -64,11 +64,20 @@ export function queriesToRefresh(activity: AssistantActivity[]): string[] {
       case "lookup_monster":
       case "search_campaign_journal":
       case "get_game_state":
+      case "search_srd_monsters":
       case "roll_dice":
         break;
       case "write_journal_entry":
       case "update_journal_entry":
         keys.add("journal");
+        break;
+      // ข้อความถึงผู้เล่นมาทาง broadcast `ActionMessageCreated` อยู่แล้ว (DM ก็อยู่ในกลุ่มแคมเปญ) ไม่ต้องดึงอะไรใหม่
+      case "narrate_to_players":
+      case "npc_say":
+        break;
+      case "generate_session_recap":
+        keys.add("recap");
+        keys.add("recap-latest");
         break;
       default:
         for (const k of ["characters", "encounter-active", "scene", "journal", "campaign-monsters", "recap"]) {

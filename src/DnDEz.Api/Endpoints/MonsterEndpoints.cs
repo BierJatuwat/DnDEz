@@ -86,57 +86,71 @@ public static class MonsterEndpoints
                 return Results.BadRequest(new MonsterErrorResponse("body_required"));
             }
 
-            var monster = await db.MonsterStatBlocks
-                .SingleOrDefaultAsync(m => m.Id == monsterId && m.CampaignId == campaignId);
-            if (monster is null)
+            var result = await UpdateMonsterAsync(db, campaignId, monsterId, request);
+            return result.Status switch
             {
-                return Results.NotFound();
-            }
-
-            // validate ทุกค่าที่ส่งมา **ก่อนแตะแถวเลย** — ถ้าปล่อยให้ CHECK ของฐานเป็นด่านเดียว ผู้ใช้จะได้ 500
-            // แทน 400 และไม่รู้ว่าค่าไหนผิด · ฟิลด์ที่ไม่ส่งมา = ไม่แก้ (PATCH ไม่ใช่ PUT)
-            if (request.Name is not null)
-            {
-                var trimmed = request.Name.Trim();
-                if (trimmed.Length == 0 || trimmed.Length > MaxNameLength)
-                {
-                    return Results.BadRequest(new MonsterErrorResponse("invalid_name"));
-                }
-            }
-
-            if (request.ArmorClass is <= 0 or > MaxArmorClass)
-            {
-                return Results.BadRequest(new MonsterErrorResponse("invalid_armor_class"));
-            }
-
-            if (request.HitPoints is <= 0 or > MaxHitPoints)
-            {
-                return Results.BadRequest(new MonsterErrorResponse("invalid_hit_points"));
-            }
-
-            // speed 0 ถูกต้องได้ (สิ่งมีชีวิตที่ขยับเองไม่ได้) ต่างจาก reach ที่ต่ำกว่า 5 ไม่มีทางถูกตามกฎ
-            if (request.SpeedFeet is < 0 or > MaxDistanceFeet)
-            {
-                return Results.BadRequest(new MonsterErrorResponse("invalid_speed"));
-            }
-
-            if (request.ReachFeet is < MinReachFeet or > MaxDistanceFeet)
-            {
-                return Results.BadRequest(new MonsterErrorResponse("invalid_reach"));
-            }
-
-            monster.Name = request.Name?.Trim() ?? monster.Name;
-            monster.ArmorClass = request.ArmorClass ?? monster.ArmorClass;
-            monster.HitPoints = request.HitPoints ?? monster.HitPoints;
-            monster.SpeedFeet = request.SpeedFeet ?? monster.SpeedFeet;
-            monster.ReachFeet = request.ReachFeet ?? monster.ReachFeet;
-
-            await db.SaveChangesAsync();
-
-            return Results.Ok(new CampaignMonsterListItem(
-                monster.Id, monster.Name, monster.ArmorClass, monster.HitPoints, monster.SpeedFeet,
-                monster.ReachFeet, monster.SrdKey, monster.ReviewStatus.ToString()));
+                OpStatus.Ok => Results.Ok(result.Value),
+                OpStatus.NotFound => Results.NotFound(),
+                _ => Results.BadRequest(new MonsterErrorResponse(result.Error!)),
+            };
         }).RequireAuthorization();
+    }
+
+    /// <summary>ปรับค่าพลังของแม่แบบ — ใช้ร่วมกันระหว่าง PATCH endpoint กับ tool `update_monster_stats` ของผู้ช่วย DM
+    /// · ผู้เรียกต้องเช็คสิทธิ์ DM มาก่อน · ฟิลด์ที่เป็น null = ไม่แก้</summary>
+    internal static async Task<OpResult<CampaignMonsterListItem>> UpdateMonsterAsync(
+        DnDEzDbContext db, Guid campaignId, Guid monsterId, UpdateMonsterRequest request)
+    {
+        var monster = await db.MonsterStatBlocks
+            .SingleOrDefaultAsync(m => m.Id == monsterId && m.CampaignId == campaignId);
+        if (monster is null)
+        {
+            return OpResult<CampaignMonsterListItem>.NotFound();
+        }
+
+        // validate ทุกค่าที่ส่งมา **ก่อนแตะแถวเลย** — ถ้าปล่อยให้ CHECK ของฐานเป็นด่านเดียว ผู้ใช้จะได้ 500
+        // แทน 400 และไม่รู้ว่าค่าไหนผิด · ฟิลด์ที่ไม่ส่งมา = ไม่แก้ (PATCH ไม่ใช่ PUT)
+        if (request.Name is not null)
+        {
+            var trimmed = request.Name.Trim();
+            if (trimmed.Length == 0 || trimmed.Length > MaxNameLength)
+            {
+                return OpResult<CampaignMonsterListItem>.Bad("invalid_name");
+            }
+        }
+
+        if (request.ArmorClass is <= 0 or > MaxArmorClass)
+        {
+            return OpResult<CampaignMonsterListItem>.Bad("invalid_armor_class");
+        }
+
+        if (request.HitPoints is <= 0 or > MaxHitPoints)
+        {
+            return OpResult<CampaignMonsterListItem>.Bad("invalid_hit_points");
+        }
+
+        // speed 0 ถูกต้องได้ (สิ่งมีชีวิตที่ขยับเองไม่ได้) ต่างจาก reach ที่ต่ำกว่า 5 ไม่มีทางถูกตามกฎ
+        if (request.SpeedFeet is < 0 or > MaxDistanceFeet)
+        {
+            return OpResult<CampaignMonsterListItem>.Bad("invalid_speed");
+        }
+
+        if (request.ReachFeet is < MinReachFeet or > MaxDistanceFeet)
+        {
+            return OpResult<CampaignMonsterListItem>.Bad("invalid_reach");
+        }
+
+        monster.Name = request.Name?.Trim() ?? monster.Name;
+        monster.ArmorClass = request.ArmorClass ?? monster.ArmorClass;
+        monster.HitPoints = request.HitPoints ?? monster.HitPoints;
+        monster.SpeedFeet = request.SpeedFeet ?? monster.SpeedFeet;
+        monster.ReachFeet = request.ReachFeet ?? monster.ReachFeet;
+
+        await db.SaveChangesAsync();
+
+        return OpResult<CampaignMonsterListItem>.Ok(new CampaignMonsterListItem(
+            monster.Id, monster.Name, monster.ArmorClass, monster.HitPoints, monster.SpeedFeet,
+            monster.ReachFeet, monster.SrdKey, monster.ReviewStatus.ToString()));
     }
 
     private const int MaxNameLength = 200;

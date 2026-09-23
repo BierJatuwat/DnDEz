@@ -95,23 +95,8 @@ public static class SceneFogEndpoints
                 return failure;
             }
 
-            var scene = await db.Scenes
-                .Include(s => s.Session)
-                .SingleOrDefaultAsync(s => s.Id == sceneId && s.Session.CampaignId == campaignId);
-            if (scene is null)
-            {
-                return Results.NotFound();
-            }
-
-            var areas = FogLayerSerialization.ParseRevealedAreas(scene.FogLayer);
-            var newArea = new FogRevealedArea(Guid.NewGuid(), request.X, request.Y, request.Radius.Value);
-            areas.Add(newArea);
-            scene.FogLayer = FogLayerSerialization.Serialize(areas);
-            await db.SaveChangesAsync();
-
-            await BroadcastFogChangedAsync(hubContext, campaignId, sceneId, areas, logger);
-
-            return Results.Ok(ToResponse(newArea));
+            var result = await RevealAsync(db, hubContext, logger, campaignId, sceneId, request.X, request.Y, request.Radius.Value);
+            return result.IsOk ? Results.Ok(result.Value) : Results.NotFound();
         }).RequireAuthorization();
 
         app.MapPost("/campaigns/{campaignId:guid}/scenes/{sceneId:guid}/fog/hide", async (
@@ -134,25 +119,64 @@ public static class SceneFogEndpoints
                 return failure;
             }
 
-            var scene = await db.Scenes
-                .Include(s => s.Session)
-                .SingleOrDefaultAsync(s => s.Id == sceneId && s.Session.CampaignId == campaignId);
-            if (scene is null)
-            {
-                return Results.NotFound();
-            }
-
-            var areas = FogLayerSerialization.ParseRevealedAreas(scene.FogLayer);
-            // ไม่มี id ตรง = no-op คืน 200 (ถอนพื้นที่ที่ไม่มีอยู่แล้ว = ผลลัพธ์เดียวกับที่ตั้งใจอยู่แล้ว
-            // ไม่ใช่ error ของ caller)
-            areas.RemoveAll(a => a.Id == request.AreaId);
-            scene.FogLayer = FogLayerSerialization.Serialize(areas);
-            await db.SaveChangesAsync();
-
-            await BroadcastFogChangedAsync(hubContext, campaignId, sceneId, areas, logger);
-
-            return Results.Ok(new FogStateResponse(sceneId, areas.Select(ToResponse).ToList()));
+            var result = await HideAsync(db, hubContext, logger, campaignId, sceneId, request.AreaId);
+            return result.IsOk ? Results.Ok(result.Value) : Results.NotFound();
         }).RequireAuthorization();
+    }
+
+    // ── operations — ใช้ร่วมกันระหว่าง endpoint ด้านบนกับ tool `reveal_fog`/`hide_fog` ของผู้ช่วย DM (2026-09-23)
+    // ผู้เรียกต้องเช็คสิทธิ์ DM มาก่อน · broadcast `FogChanged` ในตัว
+
+    internal static async Task<OpResult<FogAreaResponse>> RevealAsync(
+        DnDEzDbContext db, IHubContext<CampaignHub> hubContext, ILogger logger,
+        Guid campaignId, Guid sceneId, double x, double y, double radius)
+    {
+        if (radius <= 0 || !double.IsFinite(radius) || !double.IsFinite(x) || !double.IsFinite(y))
+        {
+            return OpResult<FogAreaResponse>.Bad();
+        }
+
+        var scene = await db.Scenes
+            .Include(s => s.Session)
+            .SingleOrDefaultAsync(s => s.Id == sceneId && s.Session.CampaignId == campaignId);
+        if (scene is null)
+        {
+            return OpResult<FogAreaResponse>.NotFound();
+        }
+
+        var areas = FogLayerSerialization.ParseRevealedAreas(scene.FogLayer);
+        var newArea = new FogRevealedArea(Guid.NewGuid(), x, y, radius);
+        areas.Add(newArea);
+        scene.FogLayer = FogLayerSerialization.Serialize(areas);
+        await db.SaveChangesAsync();
+
+        await BroadcastFogChangedAsync(hubContext, campaignId, sceneId, areas, logger);
+
+        return OpResult<FogAreaResponse>.Ok(ToResponse(newArea));
+    }
+
+    internal static async Task<OpResult<FogStateResponse>> HideAsync(
+        DnDEzDbContext db, IHubContext<CampaignHub> hubContext, ILogger logger,
+        Guid campaignId, Guid sceneId, Guid areaId)
+    {
+        var scene = await db.Scenes
+            .Include(s => s.Session)
+            .SingleOrDefaultAsync(s => s.Id == sceneId && s.Session.CampaignId == campaignId);
+        if (scene is null)
+        {
+            return OpResult<FogStateResponse>.NotFound();
+        }
+
+        var areas = FogLayerSerialization.ParseRevealedAreas(scene.FogLayer);
+        // ไม่มี id ตรง = no-op คืน 200 (ถอนพื้นที่ที่ไม่มีอยู่แล้ว = ผลลัพธ์เดียวกับที่ตั้งใจอยู่แล้ว
+        // ไม่ใช่ error ของ caller)
+        areas.RemoveAll(a => a.Id == areaId);
+        scene.FogLayer = FogLayerSerialization.Serialize(areas);
+        await db.SaveChangesAsync();
+
+        await BroadcastFogChangedAsync(hubContext, campaignId, sceneId, areas, logger);
+
+        return OpResult<FogStateResponse>.Ok(new FogStateResponse(sceneId, areas.Select(ToResponse).ToList()));
     }
 
     private static async Task BroadcastFogChangedAsync(

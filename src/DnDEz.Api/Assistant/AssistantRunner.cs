@@ -151,7 +151,7 @@ internal sealed class AssistantRunner(
         await db.SaveChangesAsync();
         await requestTransaction.CheckpointAsync();
 
-        var ctx = new AssistantToolContext(db, campaign, run.SessionId, dmUserId, services);
+        var ctx = new AssistantToolContext(db, campaign, run.SessionId, dmUserId, services, apiKey);
         foreach (var approved in state.CurrentSlots.Where(s => s.Status == SlotStatus.Approved))
         {
             var tool = AssistantTools.Find(approved.Tool);
@@ -167,7 +167,7 @@ internal sealed class AssistantRunner(
     private async Task<AssistantTurnResponse> ContinueAsync(
         Guid runId, Campaign campaign, Guid dmUserId, Guid? sessionId, AssistantRunState state, string apiKey)
     {
-        var ctx = new AssistantToolContext(db, campaign, sessionId, dmUserId, services);
+        var ctx = new AssistantToolContext(db, campaign, sessionId, dmUserId, services, apiKey);
 
         while (true)
         {
@@ -232,7 +232,7 @@ internal sealed class AssistantRunner(
                     continue;
                 }
 
-                slot.Description = offer.Tool.Describe(toolUse.Input);
+                slot.Description = await offer.Tool.Describe(ctx, toolUse.Input);
                 slot.EditableField = offer.Tool.EditableTextField;
                 if (offer.NeedsApproval)
                 {

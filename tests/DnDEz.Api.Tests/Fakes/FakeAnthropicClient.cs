@@ -157,6 +157,10 @@ public sealed class FakeAnthropicClient : IAnthropicClient
         LastToolNamesOffered = tools.Select(t => t.Name).ToList();
 
         var turn = AgentScript.Count > 0 ? AgentScript.Dequeue() : new ScriptedAgentTurn("เสร็จแล้วครับ");
+        if (turn.Dynamic is not null)
+        {
+            turn = turn.Dynamic(messages);
+        }
         if (ReferenceEquals(turn, ScriptedAgentTurn.Failure))
         {
             throw new AnthropicApiException("scripted failure");
@@ -208,6 +212,13 @@ public sealed class FakeAnthropicClient : IAnthropicClient
 /// (anonymous type ได้) fake แปลงเป็น JsonElement ให้เอง</summary>
 public sealed record ScriptedAgentTurn(string Text, params (string Name, object Input)[] Tools)
 {
+    /// <summary>ตัดสินคำตอบตอนถูกเรียกจริงจากบทสนทนาที่ได้รับ — ใช้เมื่อ input ต้องพึ่งผลของ tool รอบก่อน
+    /// (เช่น เปิดไฟต์ด้วย id ของมอนสเตอร์ที่เพิ่ง spawn)</summary>
+    public Func<IReadOnlyList<AgentMessage>, ScriptedAgentTurn>? Dynamic { get; init; }
+
+    public static ScriptedAgentTurn From(Func<IReadOnlyList<AgentMessage>, ScriptedAgentTurn> build) =>
+        new(string.Empty) { Dynamic = build };
+
     /// <summary>ใส่ในคิวเพื่อจำลอง Anthropic ล่มในรอบนั้น (fake โยน <c>AnthropicApiException</c>)</summary>
     public static readonly ScriptedAgentTurn Failure = new("__failure__");
 

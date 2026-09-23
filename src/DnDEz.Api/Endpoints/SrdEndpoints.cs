@@ -318,46 +318,60 @@ public static class SrdEndpoints
                 return failure;
             }
 
-            if (string.IsNullOrWhiteSpace(request?.Key) || request.Key.Length > 100)
+            var result = await CopySrdMonsterAsync(db, campaignId, request?.Key);
+            return result.Status switch
             {
-                return Results.BadRequest(new { error = "invalid_key" });
-            }
-
-            var srd = await db.SrdMonsters.AsNoTracking().SingleOrDefaultAsync(m => m.Key == request.Key);
-            if (srd is null)
-            {
-                return Results.NotFound();
-            }
-
-            var existing = await db.MonsterStatBlocks
-                .SingleOrDefaultAsync(m => m.CampaignId == campaignId && m.SrdKey == srd.Key);
-            if (existing is not null)
-            {
-                return Results.Ok(new CopySrdMonsterResponse(existing.Id, srd.Key, existing.Name, Created: false));
-            }
-
-            var block = new MonsterStatBlock
-            {
-                Id = Guid.NewGuid(),
-                CampaignId = campaignId,
-                Name = srd.Name,
-                ArmorClass = srd.ArmorClass,
-                HitPoints = srd.HitPoints,
-                SpeedFeet = srd.SpeedFeet,
-                ReachFeet = srd.ReachFeet,
-                Actions = BuildActionsJson(srd.Data),
-                // เนื้อหา SRD ผ่านการตรวจตอน import แล้ว (ดู migration ImportSrd521) จึงไม่ต้องรอ DM review เหมือน
-                // source import — กฎ "review_status != approved ห้ามเข้า orchestrator" ยังคงบังคับตามเดิม
-                ReviewStatus = ReviewStatus.Approved,
-                SrdKey = srd.Key,
+                OpStatus.Ok when result.Value!.Created => Results.Created(
+                    $"/campaigns/{campaignId}/monsters/{result.Value.MonsterId}", result.Value),
+                OpStatus.Ok => Results.Ok(result.Value),
+                OpStatus.NotFound => Results.NotFound(),
+                _ => Results.BadRequest(new { error = result.Error }),
             };
-            db.MonsterStatBlocks.Add(block);
-            await db.SaveChangesAsync();
-
-            return Results.Created(
-                $"/campaigns/{campaignId}/monsters/{block.Id}",
-                new CopySrdMonsterResponse(block.Id, srd.Key, block.Name, Created: true));
         }).RequireAuthorization();
+    }
+
+    /// <summary>คัดลอกมอนสเตอร์จากคลัง SRD เข้าแคมเปญ (มีอยู่แล้ว = คืนตัวเดิม `Created: false`) — ใช้ร่วมกันระหว่าง
+    /// endpoint กับ tool `add_monster_from_srd` ของผู้ช่วย DM · ผู้เรียกต้องเช็คสิทธิ์ DM มาก่อน</summary>
+    internal static async Task<OpResult<CopySrdMonsterResponse>> CopySrdMonsterAsync(
+        DnDEzDbContext db, Guid campaignId, string? key)
+    {
+        if (string.IsNullOrWhiteSpace(key) || key.Length > 100)
+        {
+            return OpResult<CopySrdMonsterResponse>.Bad("invalid_key");
+        }
+
+        var srd = await db.SrdMonsters.AsNoTracking().SingleOrDefaultAsync(m => m.Key == key);
+        if (srd is null)
+        {
+            return OpResult<CopySrdMonsterResponse>.NotFound();
+        }
+
+        var existing = await db.MonsterStatBlocks
+            .SingleOrDefaultAsync(m => m.CampaignId == campaignId && m.SrdKey == srd.Key);
+        if (existing is not null)
+        {
+            return OpResult<CopySrdMonsterResponse>.Ok(new CopySrdMonsterResponse(existing.Id, srd.Key, existing.Name, Created: false));
+        }
+
+        var block = new MonsterStatBlock
+        {
+            Id = Guid.NewGuid(),
+            CampaignId = campaignId,
+            Name = srd.Name,
+            ArmorClass = srd.ArmorClass,
+            HitPoints = srd.HitPoints,
+            SpeedFeet = srd.SpeedFeet,
+            ReachFeet = srd.ReachFeet,
+            Actions = BuildActionsJson(srd.Data),
+            // เนื้อหา SRD ผ่านการตรวจตอน import แล้ว (ดู migration ImportSrd521) จึงไม่ต้องรอ DM review เหมือน
+            // source import — กฎ "review_status != approved ห้ามเข้า orchestrator" ยังคงบังคับตามเดิม
+            ReviewStatus = ReviewStatus.Approved,
+            SrdKey = srd.Key,
+        };
+        db.MonsterStatBlocks.Add(block);
+        await db.SaveChangesAsync();
+
+        return OpResult<CopySrdMonsterResponse>.Ok(new CopySrdMonsterResponse(block.Id, srd.Key, block.Name, Created: true));
     }
 
     /// <summary>รวม traits/actions/bonusActions/reactions/legendaryActions เป็นรายการเดียวที่มี kind กำกับ</summary>

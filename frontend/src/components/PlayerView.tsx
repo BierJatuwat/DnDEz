@@ -340,7 +340,7 @@ export function PlayerView({ campaignId }: { campaignId: string }) {
                     </div>
                   </>
                 )}
-                <ActionFeedList actionFeed={ws.actionFeed} />
+                <ActionFeedList actionFeed={ws.actionFeed} nameOf={nameOf} />
               </section>
             </>
           )}

@@ -328,7 +328,7 @@ internal static class OrchestratorTurnRunner
         return new ConsultResponse(aiMessage.Id, aiMessage.Content, toolCallResponse, Pending: null);
     }
 
-    private static async Task BroadcastActionMessageAsync(
+    internal static async Task BroadcastActionMessageAsync(
         IHubContext<CampaignHub> hubContext, ILogger logger, Guid campaignId, Message message)
     {
         try

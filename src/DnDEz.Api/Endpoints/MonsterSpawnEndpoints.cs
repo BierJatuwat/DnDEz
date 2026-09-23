@@ -64,57 +64,75 @@ public static class MonsterSpawnEndpoints
                 return failure;
             }
 
-            // ⚠️ IDOR: monsterId มาจาก client — ต้องยืนยันว่าแม่แบบอยู่ในแคมเปญนี้จริง ไม่ใช่ของโต๊ะอื่น
-            var template = await db.MonsterStatBlocks
-                .SingleOrDefaultAsync(m => m.Id == monsterId && m.CampaignId == campaignId);
-            if (template is null)
+            var result = await SpawnAsync(db, campaignId, monsterId, count, request.StatsVisibleToParty ?? false);
+            return result.Status switch
             {
-                return Results.NotFound();
-            }
-
-            // ดีฟอลต์ซ่อน HP/AC จากผู้เล่น — ศัตรูควรเป็นของที่ต้องค้นเอาในเกม ไม่ใช่เปิดตารางให้อ่าน
-            var statsVisible = request.StatsVisibleToParty ?? false;
-
-            // เลขต่อท้ายไล่จากจำนวนตัวที่ spawn จากแม่แบบเดียวกันและยังมีชีวิตอยู่ในแคมเปญ — กันชื่อซ้ำ
-            // ตอน DM ทยอย spawn เพิ่มกลางไฟต์ (เช่นมี #1-#3 อยู่แล้ว spawn เพิ่ม 2 ตัวต้องได้ #4-#5)
-            var existing = await db.Characters
-                .CountAsync(c => c.CampaignId == campaignId && c.SpawnedFromMonsterId == monsterId);
-
-            var spawned = new List<Character>(count);
-            for (var i = 0; i < count; i++)
-            {
-                spawned.Add(new Character
-                {
-                    Id = Guid.NewGuid(),
-                    CampaignId = campaignId,
-                    OwnerUserId = null, // ไม่มีผู้เล่นเป็นเจ้าของ — DM คุมผ่าน ControlledByDm
-                    Name = $"{template.Name} #{existing + i + 1}",
-                    Sheet = "{}",
-                    // HP/AC/speed/reach คัดลอกจากแม่แบบ ณ ตอน spawn (snapshot) — ถ้า DM แก้แม่แบบทีหลัง
-                    // ตัวที่ยืนอยู่ในสนามแล้วต้องไม่เปลี่ยนตามกลางไฟต์ เหตุผลเดียวกับที่
-                    // `EncounterParticipant` snapshot ค่า initiative modifier ไว้
-                    CurrentHp = template.HitPoints,
-                    MaxHp = template.HitPoints,
-                    CurrentTempHp = 0,
-                    ArmorClass = template.ArmorClass,
-                    SpeedFeet = template.SpeedFeet,
-                    Level = 1,
-                    ControlledByDm = true,
-                    NpcStatsVisibleToParty = statsVisible,
-                    SpawnedFromMonsterId = monsterId,
-                    HarvestConsent = false,
-                    IsOrphan = false,
-                    CreatedAt = DateTimeOffset.UtcNow,
-                });
-            }
-
-            db.Characters.AddRange(spawned);
-            await db.SaveChangesAsync();
-
-            return Results.Ok(spawned
-                .Select(c => new SpawnedMonsterItem(c.Id, c.Name, c.CurrentHp, c.MaxHp, c.ArmorClass))
-                .ToList());
+                OpStatus.Ok => Results.Ok(result.Value),
+                OpStatus.NotFound => Results.NotFound(),
+                _ => Results.BadRequest(new SpawnErrorResponse(result.Error!)),
+            };
         }).RequireAuthorization();
+    }
+
+    /// <summary>spawn แม่แบบเป็นตัวละคร DM-controlled N ตัว — ใช้ร่วมกันระหว่าง endpoint กับ tool `spawn_monsters` ของ
+    /// ผู้ช่วย DM · ผู้เรียกต้องเช็คสิทธิ์ DM มาก่อน</summary>
+    internal static async Task<OpResult<List<SpawnedMonsterItem>>> SpawnAsync(
+        DnDEzDbContext db, Guid campaignId, Guid monsterId, int count, bool statsVisible)
+    {
+        if (count < 1 || count > MaxSpawnCount)
+        {
+            return OpResult<List<SpawnedMonsterItem>>.Bad("invalid_count");
+        }
+
+        // ⚠️ IDOR: monsterId มาจาก client — ต้องยืนยันว่าแม่แบบอยู่ในแคมเปญนี้จริง ไม่ใช่ของโต๊ะอื่น
+        var template = await db.MonsterStatBlocks
+            .SingleOrDefaultAsync(m => m.Id == monsterId && m.CampaignId == campaignId);
+        if (template is null)
+        {
+            return OpResult<List<SpawnedMonsterItem>>.NotFound();
+        }
+
+        // ดีฟอลต์ซ่อน HP/AC จากผู้เล่น — ศัตรูควรเป็นของที่ต้องค้นเอาในเกม ไม่ใช่เปิดตารางให้อ่าน
+
+        // เลขต่อท้ายไล่จากจำนวนตัวที่ spawn จากแม่แบบเดียวกันและยังมีชีวิตอยู่ในแคมเปญ — กันชื่อซ้ำ
+        // ตอน DM ทยอย spawn เพิ่มกลางไฟต์ (เช่นมี #1-#3 อยู่แล้ว spawn เพิ่ม 2 ตัวต้องได้ #4-#5)
+        var existing = await db.Characters
+            .CountAsync(c => c.CampaignId == campaignId && c.SpawnedFromMonsterId == monsterId);
+
+        var spawned = new List<Character>(count);
+        for (var i = 0; i < count; i++)
+        {
+            spawned.Add(new Character
+            {
+                Id = Guid.NewGuid(),
+                CampaignId = campaignId,
+                OwnerUserId = null, // ไม่มีผู้เล่นเป็นเจ้าของ — DM คุมผ่าน ControlledByDm
+                Name = $"{template.Name} #{existing + i + 1}",
+                Sheet = "{}",
+                // HP/AC/speed/reach คัดลอกจากแม่แบบ ณ ตอน spawn (snapshot) — ถ้า DM แก้แม่แบบทีหลัง
+                // ตัวที่ยืนอยู่ในสนามแล้วต้องไม่เปลี่ยนตามกลางไฟต์ เหตุผลเดียวกับที่
+                // `EncounterParticipant` snapshot ค่า initiative modifier ไว้
+                CurrentHp = template.HitPoints,
+                MaxHp = template.HitPoints,
+                CurrentTempHp = 0,
+                ArmorClass = template.ArmorClass,
+                SpeedFeet = template.SpeedFeet,
+                Level = 1,
+                ControlledByDm = true,
+                NpcStatsVisibleToParty = statsVisible,
+                SpawnedFromMonsterId = monsterId,
+                HarvestConsent = false,
+                IsOrphan = false,
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+        }
+
+        db.Characters.AddRange(spawned);
+        await db.SaveChangesAsync();
+
+        return OpResult<List<SpawnedMonsterItem>>.Ok(spawned
+            .Select(c => new SpawnedMonsterItem(c.Id, c.Name, c.CurrentHp, c.MaxHp, c.ArmorClass))
+            .ToList());
     }
 
     /// <summary>

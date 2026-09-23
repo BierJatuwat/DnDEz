@@ -7,7 +7,7 @@ import type {
   GameSession,
 } from "@/lib/campaign-types";
 import { AUTONOMY_LEVELS, AUTONOMY_SUBSYSTEMS } from "@/lib/campaign-types";
-import type { ActionMessage } from "@/lib/action-feed";
+import { feedSpeaker, type ActionMessage } from "@/lib/action-feed";
 import type { HubStatus, LogEntry } from "@/lib/console-store";
 
 /**
@@ -289,7 +289,14 @@ export function DicePanel({
   );
 }
 
-export function ActionFeedList({ actionFeed }: { actionFeed: ActionMessage[] }) {
+export function ActionFeedList({
+  actionFeed,
+  nameOf,
+}: {
+  actionFeed: ActionMessage[];
+  /** ชื่อตัวละครจาก id — บทพูด NPC ต้องขึ้นชื่อ NPC ไม่ใช่แค่ "[Ai]" */
+  nameOf: (characterId: string) => string | undefined;
+}) {
   return (
     <ul className="space-y-1 text-sm max-h-64 overflow-y-auto">
       {actionFeed.map((m) => (
@@ -297,7 +304,7 @@ export function ActionFeedList({ actionFeed }: { actionFeed: ActionMessage[] }) 
           key={m.id}
           className={m.authorType === "Player" ? "opacity-100" : "opacity-90 text-indigo-400"}
         >
-          <span className="font-mono text-xs">[{m.authorType}]</span> {m.content}
+          <span className="font-medium text-xs">{feedSpeaker(m, nameOf)}:</span> {m.content}
         </li>
       ))}
       {actionFeed.length === 0 && (

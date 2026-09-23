@@ -75,114 +75,16 @@ public static class EncounterEndpoints
                 return dmFailure;
             }
 
-            var sessionExists = await db.Sessions.AnyAsync(s => s.Id == sessionId && s.CampaignId == campaignId);
-            if (!sessionExists)
+            var result = await StartEncounterAsync(
+                db, turnStateStore, hubContext, logger, campaignId, sessionId, characterIds);
+            return result.Status switch
             {
-                return Results.NotFound();
-            }
-
-            var characters = await db.Characters
-                .Where(c => c.CampaignId == campaignId && characterIds.Contains(c.Id))
-                .ToListAsync();
-            if (characters.Count != characterIds.Count)
-            {
-                return Results.NotFound();
-            }
-
-            var hasActiveEncounter = await db.Encounters
-                .AnyAsync(e => e.SessionId == sessionId && e.EndedAt == null);
-            if (hasActiveEncounter)
-            {
-                return Results.Conflict();
-            }
-
-            var entries = new List<(Character Character, InitiativeEntry Entry)>();
-            foreach (var character in characters)
-            {
-                var roller = SeededDiceRoller.CreateWithSecureRandomSeed();
-                var engine = new DiceEngine();
-                var roll = engine.RollSystem("1d20", roller, roller.Seed, AdvantageMode.None);
-
-                db.DiceRolls.Add(new DiceRoll
-                {
-                    Id = Guid.NewGuid(),
-                    SessionId = sessionId,
-                    CharacterId = character.Id,
-                    Expression = roll.Expression,
-                    Rolls = JsonSerializer.Serialize(roll.Rolls),
-                    Total = roll.Total,
-                    Source = DiceMode.SystemRoll,
-                    Seed = roller.Seed,
-                    EnteredByUserId = null,
-                    CreatedAt = DateTimeOffset.UtcNow,
-                });
-
-                entries.Add((character, new InitiativeEntry(character.Id, roll.Total, character.InitiativeModifier)));
-            }
-
-            var ordered = InitiativeOrder.Resolve(entries.Select(e => e.Entry));
-            var charactersById = characters.ToDictionary(c => c.Id);
-
-            var encounter = new Encounter
-            {
-                Id = Guid.NewGuid(),
-                CampaignId = campaignId,
-                SessionId = sessionId,
-                StartedAt = DateTimeOffset.UtcNow,
-                EndedAt = null,
-                TurnNumber = 0,
+                OpStatus.Ok => Results.Created(
+                    $"/campaigns/{campaignId}/sessions/{sessionId}/encounters/active", result.Value),
+                OpStatus.NotFound => Results.NotFound(),
+                OpStatus.Conflict => Results.Conflict(),
+                _ => Results.BadRequest(),
             };
-            db.Encounters.Add(encounter);
-
-            var participants = new List<EncounterParticipant>();
-            for (var i = 0; i < ordered.Count; i++)
-            {
-                var entry = ordered[i];
-                participants.Add(new EncounterParticipant
-                {
-                    Id = Guid.NewGuid(),
-                    EncounterId = encounter.Id,
-                    CharacterId = entry.CharacterId,
-                    InitiativeRoll = entry.InitiativeRoll,
-                    InitiativeModifier = entry.InitiativeModifier,
-                    InitiativeTotal = entry.InitiativeTotal,
-                    TurnOrder = i,
-                });
-            }
-
-            db.EncounterParticipants.AddRange(participants);
-            await db.SaveChangesAsync();
-
-            // สอง SaveChanges โดยตั้งใจ — FK current_participant_id เป็นวงกลมกับ encounter_id
-            // (participant ต้องมีอยู่ในตารางก่อนถึงจะตั้ง CurrentParticipantId ชี้ไปหามันได้) ยังอยู่
-            // ใน transaction เดียวของ middleware จึง atomic อยู่ดี
-            encounter.CurrentParticipantId = participants[0].Id;
-            await db.SaveChangesAsync();
-
-            // ผู้เข้าร่วมคนแรกในลำดับ initiative คือคนที่ถือเทิร์นแรก — งบเคลื่อนที่ของเทิร์นแรกจึง
-            // ต้องมาจากความเร็วของตัวละครคนนั้นจริง ๆ (Sprint G Part 8) ไม่ใช่ค่าคงที่เดียวกันทุกคน
-            var firstTurnMovementFeet = charactersById[participants[0].CharacterId].SpeedFeet;
-
-            if (!await turnStateStore.TrySetAsync(encounter.Id, 0, ActionEconomyResolver.StartTurn(firstTurnMovementFeet)))
-            {
-                // การอ่านครั้งหน้า fail closed เป็น StartTurn ค่าเดียวกันเป๊ะอยู่แล้ว จึงไม่มีอะไรเสียหาย
-                // — ต่างจาก endpoint spend ที่ต้อง 503 เพราะที่นั่นมี state ที่เขียนไปแล้วก่อนหน้าเสี่ยงหาย
-                logger.LogWarning("เขียน turn state เริ่มต้นของเอนเคาน์เตอร์ {EncounterId} ไม่สำเร็จ", encounter.Id);
-            }
-
-            var response = BuildEncounterResponse(
-                encounter, participants, charactersById, ActionEconomyResolver.StartTurn(firstTurnMovementFeet));
-
-            try
-            {
-                await hubContext.Clients.Group(CampaignHub.GroupName(campaignId)).SendAsync("EncounterStarted", response);
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Failed to broadcast EncounterStarted for encounter {EncounterId}", encounter.Id);
-            }
-
-            return Results.Created($"/campaigns/{campaignId}/sessions/{sessionId}/encounters/active", response);
         }).RequireAuthorization();
 
         app.MapPost("/campaigns/{campaignId:guid}/encounters/{encounterId:guid}/next-turn", async (
@@ -206,71 +108,13 @@ public static class EncounterEndpoints
                 return dmFailure;
             }
 
-            var encounter = await db.Encounters
-                .SingleOrDefaultAsync(e => e.Id == encounterId && e.CampaignId == campaignId);
-            if (encounter is null)
+            var result = await NextTurnAsync(db, turnStateStore, hubContext, tokenFlusher, logger, campaignId, encounterId);
+            return result.Status switch
             {
-                return Results.NotFound();
-            }
-
-            if (encounter.EndedAt is not null)
-            {
-                return Results.Conflict();
-            }
-
-            var participants = await db.EncounterParticipants
-                .Include(p => p.Character)
-                .Where(p => p.EncounterId == encounterId)
-                .OrderBy(p => p.TurnOrder)
-                .ToListAsync();
-            if (participants.Count == 0)
-            {
-                return Results.Conflict();
-            }
-
-            var currentIndex = participants.FindIndex(p => p.Id == encounter.CurrentParticipantId);
-            if (currentIndex < 0)
-            {
-                currentIndex = 0;
-            }
-
-            var nextIndex = (currentIndex + 1) % participants.Count;
-            var nextParticipant = participants[nextIndex];
-            encounter.CurrentParticipantId = nextParticipant.Id;
-            encounter.TurnNumber += 1;
-            await db.SaveChangesAsync();
-
-            // เทิร์นใหม่เป็นของ nextParticipant — งบเคลื่อนที่ต้องอ่านความเร็วสดของตัวละครคนนี้
-            // (Sprint G Part 8) ไม่ใช่ค่าคงที่เดียวกันทุกคน
-            var newState = ActionEconomyResolver.StartTurn(nextParticipant.Character.SpeedFeet);
-            if (!await turnStateStore.TrySetAsync(encounterId, encounter.TurnNumber, newState))
-            {
-                // เขียนล้มตรงนี้ปล่อยผ่านได้อย่างปลอดภัย เพราะ key ของ turn state ผูกกับเลขเทิร์น
-                // (encounterId + TurnNumber) — เทิร์นใหม่จึงอ่าน key ใหม่ที่ยังไม่เคยมีค่าเสมอ แล้ว
-                // fall back เป็น "เทิร์นใหม่เต็มทรัพยากร" (ActionEconomyResolver.StartTurn) ซึ่งตรงกับ
-                // ค่าที่ตั้งใจเขียนอยู่แล้วเป๊ะ ๆ ค่าของเทิร์นก่อนหน้าจึงไม่มีทางรั่วมาให้ผู้เล่นคนใหม่เห็น
-                // — นี่คือผลจากการออกแบบ key ไม่ใช่การยอมรับความเสี่ยง (accept risk)
-                logger.LogWarning("เขียน turn state ของเอนเคาน์เตอร์ {EncounterId} ตอน next-turn ไม่สำเร็จ", encounterId);
-            }
-
-            var response = new NextTurnResponse(
-                encounter.Id, nextParticipant.Id, nextParticipant.CharacterId, nextParticipant.TurnOrder,
-                ToTurnStateResponse(newState));
-
-            try
-            {
-                await hubContext.Clients.Group(CampaignHub.GroupName(campaignId)).SendAsync("TurnChanged", response);
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Failed to broadcast TurnChanged for encounter {EncounterId}", encounterId);
-            }
-
-            // Sprint G Part 5 (design doc §14.3) — เปลี่ยนเทิร์นเป็นจุด persist ตำแหน่ง token ที่
-            // ผู้ใช้รับรู้ว่าเป็นหมุด — best-effort เหมือน broadcast ด้านบน ห้ามทำให้ next-turn ล้มเหลว
-            await FlushSceneTokensForSessionAsync(db, tokenFlusher, encounter.SessionId, logger);
-
-            return Results.Ok(response);
+                OpStatus.Ok => Results.Ok(result.Value),
+                OpStatus.NotFound => Results.NotFound(),
+                _ => Results.Conflict(),
+            };
         }).RequireAuthorization();
 
         app.MapPost("/campaigns/{campaignId:guid}/encounters/{encounterId:guid}/end", async (
@@ -295,61 +139,14 @@ public static class EncounterEndpoints
                 return dmFailure;
             }
 
-            var encounter = await db.Encounters
-                .SingleOrDefaultAsync(e => e.Id == encounterId && e.CampaignId == campaignId);
-            if (encounter is null)
+            var result = await EndEncounterAsync(
+                db, turnStateStore, hubContext, tokenFlusher, tokenStore, logger, campaignId, encounterId);
+            return result.Status switch
             {
-                return Results.NotFound();
-            }
-
-            if (encounter.EndedAt is not null)
-            {
-                return Results.Conflict();
-            }
-
-            encounter.EndedAt = DateTimeOffset.UtcNow;
-
-            // Part E (2026-09-22) — มอนสเตอร์ที่ spawn ลงไฟต์นี้เป็นของชั่วคราว: สรุปผลภาพรวมลงบันทึก
-            // แคมเปญแล้วลบแถวทิ้งในธุรกรรมเดียวกับการปิด encounter (ถ้าแยกสองรอบแล้วพังกลางทาง จะเหลือ
-            // instance ค้างโดยไม่มี encounter ให้ลบมันอีก) — ไม่แตะตัวละครผู้เล่น/NPC ถาวร ดู doc comment
-            // ของ `MonsterSpawnEndpoints.SummariseAndRemoveSpawnedMonstersAsync`
-            var cleanup = await MonsterSpawnEndpoints.SummariseAndRemoveSpawnedMonstersAsync(
-                db, campaignId, encounterId, encounter.SessionId);
-
-            await db.SaveChangesAsync();
-
-            foreach (var (sceneId, tokenId) in cleanup.RemovedTokens)
-            {
-                await tokenStore.ClearTokenAsync(sceneId, tokenId);
-            }
-
-            // จงใจไม่ใส่จำนวนนี้ลง response/broadcast — `EncounterEnded` ส่งเข้ากลุ่มแคมเปญทั้งวง
-            // การเติม field ใหม่เข้า payload ที่ผู้เล่นเห็นต้องคิดเรื่องการรั่วทุกครั้ง ที่นี่ไม่มีเหตุผล
-            // ต้องบอกผู้เล่น จึง log ไว้ให้ debug ได้อย่างเดียว
-            if (cleanup.RemovedMonsters > 0)
-            {
-                logger.LogInformation(
-                    "Encounter {EncounterId} ended — removed {Count} spawned monster instance(s) and {TokenCount} map token(s)",
-                    encounterId, cleanup.RemovedMonsters, cleanup.RemovedTokens.Count);
-            }
-
-            await turnStateStore.TryRemoveAsync(encounterId, encounter.TurnNumber);
-
-            var response = new EndEncounterResponse(encounter.Id, encounter.EndedAt.Value);
-
-            try
-            {
-                await hubContext.Clients.Group(CampaignHub.GroupName(campaignId)).SendAsync("EncounterEnded", response);
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Failed to broadcast EncounterEnded for encounter {EncounterId}", encounterId);
-            }
-
-            // Sprint G Part 5 (design doc §14.3) — จบ encounter เป็นอีกจุด persist ตำแหน่ง token
-            await FlushSceneTokensForSessionAsync(db, tokenFlusher, encounter.SessionId, logger);
-
-            return Results.Ok(response);
+                OpStatus.Ok => Results.Ok(result.Value),
+                OpStatus.NotFound => Results.NotFound(),
+                _ => Results.Conflict(),
+            };
         }).RequireAuthorization();
 
         app.MapPost("/campaigns/{campaignId:guid}/encounters/{encounterId:guid}/turn-actions/spend", async (
@@ -609,6 +406,267 @@ public static class EncounterEndpoints
         state.ReactionAvailable,
         state.MovementRemainingFeet,
         state.MaxMovementFeet);
+
+    /// <summary>เปิด encounter + ทอย initiative — ใช้ร่วมกันระหว่าง endpoint กับ tool `start_encounter` ของผู้ช่วย DM
+    /// · ผู้เรียกต้องเช็คสิทธิ์ DM มาก่อน · broadcast `EncounterStarted` ในตัว</summary>
+    internal static async Task<OpResult<EncounterResponse>> StartEncounterAsync(
+        DnDEzDbContext db, IEncounterTurnStateStore turnStateStore, IHubContext<CampaignHub> hubContext, ILogger logger,
+        Guid campaignId, Guid sessionId, List<Guid>? characterIds)
+    {
+        if (characterIds is null
+            || characterIds.Count == 0
+            || characterIds.Count > MaxParticipants
+            || characterIds.Any(id => id == Guid.Empty)
+            || characterIds.Distinct().Count() != characterIds.Count)
+        {
+            return OpResult<EncounterResponse>.Bad();
+        }
+
+        var sessionExists = await db.Sessions.AnyAsync(s => s.Id == sessionId && s.CampaignId == campaignId);
+        if (!sessionExists)
+        {
+            return OpResult<EncounterResponse>.NotFound();
+        }
+
+        var characters = await db.Characters
+            .Where(c => c.CampaignId == campaignId && characterIds.Contains(c.Id))
+            .ToListAsync();
+        if (characters.Count != characterIds.Count)
+        {
+            return OpResult<EncounterResponse>.NotFound();
+        }
+
+        var hasActiveEncounter = await db.Encounters
+            .AnyAsync(e => e.SessionId == sessionId && e.EndedAt == null);
+        if (hasActiveEncounter)
+        {
+            return OpResult<EncounterResponse>.Conflict();
+        }
+
+        var entries = new List<(Character Character, InitiativeEntry Entry)>();
+        foreach (var character in characters)
+        {
+            var roller = SeededDiceRoller.CreateWithSecureRandomSeed();
+            var engine = new DiceEngine();
+            var roll = engine.RollSystem("1d20", roller, roller.Seed, AdvantageMode.None);
+
+            db.DiceRolls.Add(new DiceRoll
+            {
+                Id = Guid.NewGuid(),
+                SessionId = sessionId,
+                CharacterId = character.Id,
+                Expression = roll.Expression,
+                Rolls = JsonSerializer.Serialize(roll.Rolls),
+                Total = roll.Total,
+                Source = DiceMode.SystemRoll,
+                Seed = roller.Seed,
+                EnteredByUserId = null,
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+
+            entries.Add((character, new InitiativeEntry(character.Id, roll.Total, character.InitiativeModifier)));
+        }
+
+        var ordered = InitiativeOrder.Resolve(entries.Select(e => e.Entry));
+        var charactersById = characters.ToDictionary(c => c.Id);
+
+        var encounter = new Encounter
+        {
+            Id = Guid.NewGuid(),
+            CampaignId = campaignId,
+            SessionId = sessionId,
+            StartedAt = DateTimeOffset.UtcNow,
+            EndedAt = null,
+            TurnNumber = 0,
+        };
+        db.Encounters.Add(encounter);
+
+        var participants = new List<EncounterParticipant>();
+        for (var i = 0; i < ordered.Count; i++)
+        {
+            var entry = ordered[i];
+            participants.Add(new EncounterParticipant
+            {
+                Id = Guid.NewGuid(),
+                EncounterId = encounter.Id,
+                CharacterId = entry.CharacterId,
+                InitiativeRoll = entry.InitiativeRoll,
+                InitiativeModifier = entry.InitiativeModifier,
+                InitiativeTotal = entry.InitiativeTotal,
+                TurnOrder = i,
+            });
+        }
+
+        db.EncounterParticipants.AddRange(participants);
+        await db.SaveChangesAsync();
+
+        // สอง SaveChanges โดยตั้งใจ — FK current_participant_id เป็นวงกลมกับ encounter_id
+        // (participant ต้องมีอยู่ในตารางก่อนถึงจะตั้ง CurrentParticipantId ชี้ไปหามันได้) ยังอยู่
+        // ใน transaction เดียวของ middleware จึง atomic อยู่ดี
+        encounter.CurrentParticipantId = participants[0].Id;
+        await db.SaveChangesAsync();
+
+        // ผู้เข้าร่วมคนแรกในลำดับ initiative คือคนที่ถือเทิร์นแรก — งบเคลื่อนที่ของเทิร์นแรกจึง
+        // ต้องมาจากความเร็วของตัวละครคนนั้นจริง ๆ (Sprint G Part 8) ไม่ใช่ค่าคงที่เดียวกันทุกคน
+        var firstTurnMovementFeet = charactersById[participants[0].CharacterId].SpeedFeet;
+
+        if (!await turnStateStore.TrySetAsync(encounter.Id, 0, ActionEconomyResolver.StartTurn(firstTurnMovementFeet)))
+        {
+            // การอ่านครั้งหน้า fail closed เป็น StartTurn ค่าเดียวกันเป๊ะอยู่แล้ว จึงไม่มีอะไรเสียหาย
+            // — ต่างจาก endpoint spend ที่ต้อง 503 เพราะที่นั่นมี state ที่เขียนไปแล้วก่อนหน้าเสี่ยงหาย
+            logger.LogWarning("เขียน turn state เริ่มต้นของเอนเคาน์เตอร์ {EncounterId} ไม่สำเร็จ", encounter.Id);
+        }
+
+        var response = BuildEncounterResponse(
+            encounter, participants, charactersById, ActionEconomyResolver.StartTurn(firstTurnMovementFeet));
+
+        try
+        {
+            await hubContext.Clients.Group(CampaignHub.GroupName(campaignId)).SendAsync("EncounterStarted", response);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to broadcast EncounterStarted for encounter {EncounterId}", encounter.Id);
+        }
+
+        return OpResult<EncounterResponse>.Ok(response);
+    }
+
+    /// <summary>เลื่อนไปเทิร์นถัดไป — ใช้ร่วมกันระหว่าง endpoint กับ tool `next_turn` ของผู้ช่วย DM · ผู้เรียกต้องเช็คสิทธิ์
+    /// DM มาก่อน · broadcast `TurnChanged` ในตัว</summary>
+    internal static async Task<OpResult<NextTurnResponse>> NextTurnAsync(
+        DnDEzDbContext db, IEncounterTurnStateStore turnStateStore, IHubContext<CampaignHub> hubContext,
+        SceneTokenFlusher tokenFlusher, ILogger logger, Guid campaignId, Guid encounterId)
+    {
+        var encounter = await db.Encounters
+            .SingleOrDefaultAsync(e => e.Id == encounterId && e.CampaignId == campaignId);
+        if (encounter is null)
+        {
+            return OpResult<NextTurnResponse>.NotFound();
+        }
+
+        if (encounter.EndedAt is not null)
+        {
+            return OpResult<NextTurnResponse>.Conflict();
+        }
+
+        var participants = await db.EncounterParticipants
+            .Include(p => p.Character)
+            .Where(p => p.EncounterId == encounterId)
+            .OrderBy(p => p.TurnOrder)
+            .ToListAsync();
+        if (participants.Count == 0)
+        {
+            return OpResult<NextTurnResponse>.Conflict();
+        }
+
+        var currentIndex = participants.FindIndex(p => p.Id == encounter.CurrentParticipantId);
+        if (currentIndex < 0)
+        {
+            currentIndex = 0;
+        }
+
+        var nextIndex = (currentIndex + 1) % participants.Count;
+        var nextParticipant = participants[nextIndex];
+        encounter.CurrentParticipantId = nextParticipant.Id;
+        encounter.TurnNumber += 1;
+        await db.SaveChangesAsync();
+
+        // เทิร์นใหม่เป็นของ nextParticipant — งบเคลื่อนที่ต้องอ่านความเร็วสดของตัวละครคนนี้
+        // (Sprint G Part 8) ไม่ใช่ค่าคงที่เดียวกันทุกคน
+        var newState = ActionEconomyResolver.StartTurn(nextParticipant.Character.SpeedFeet);
+        if (!await turnStateStore.TrySetAsync(encounterId, encounter.TurnNumber, newState))
+        {
+            // เขียนล้มตรงนี้ปล่อยผ่านได้อย่างปลอดภัย เพราะ key ของ turn state ผูกกับเลขเทิร์น
+            // (encounterId + TurnNumber) — เทิร์นใหม่จึงอ่าน key ใหม่ที่ยังไม่เคยมีค่าเสมอ แล้ว
+            // fall back เป็น "เทิร์นใหม่เต็มทรัพยากร" (ActionEconomyResolver.StartTurn) ซึ่งตรงกับ
+            // ค่าที่ตั้งใจเขียนอยู่แล้วเป๊ะ ๆ ค่าของเทิร์นก่อนหน้าจึงไม่มีทางรั่วมาให้ผู้เล่นคนใหม่เห็น
+            // — นี่คือผลจากการออกแบบ key ไม่ใช่การยอมรับความเสี่ยง (accept risk)
+            logger.LogWarning("เขียน turn state ของเอนเคาน์เตอร์ {EncounterId} ตอน next-turn ไม่สำเร็จ", encounterId);
+        }
+
+        var response = new NextTurnResponse(
+            encounter.Id, nextParticipant.Id, nextParticipant.CharacterId, nextParticipant.TurnOrder,
+            ToTurnStateResponse(newState));
+
+        try
+        {
+            await hubContext.Clients.Group(CampaignHub.GroupName(campaignId)).SendAsync("TurnChanged", response);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to broadcast TurnChanged for encounter {EncounterId}", encounterId);
+        }
+
+        // Sprint G Part 5 (design doc §14.3) — เปลี่ยนเทิร์นเป็นจุด persist ตำแหน่ง token ที่
+        // ผู้ใช้รับรู้ว่าเป็นหมุด — best-effort เหมือน broadcast ด้านบน ห้ามทำให้ next-turn ล้มเหลว
+        await FlushSceneTokensForSessionAsync(db, tokenFlusher, encounter.SessionId, logger);
+
+        return OpResult<NextTurnResponse>.Ok(response);
+    }
+
+    /// <summary>จบ encounter (สรุปผล + ลบมอนสเตอร์ที่ spawn และ token ของมัน) — ใช้ร่วมกันระหว่าง endpoint กับ tool
+    /// `end_encounter` ของผู้ช่วย DM · ผู้เรียกต้องเช็คสิทธิ์ DM มาก่อน · broadcast `EncounterEnded` ในตัว</summary>
+    internal static async Task<OpResult<EndEncounterResponse>> EndEncounterAsync(
+        DnDEzDbContext db, IEncounterTurnStateStore turnStateStore, IHubContext<CampaignHub> hubContext,
+        SceneTokenFlusher tokenFlusher, ISceneTokenStore tokenStore, ILogger logger, Guid campaignId, Guid encounterId)
+    {
+        var encounter = await db.Encounters
+            .SingleOrDefaultAsync(e => e.Id == encounterId && e.CampaignId == campaignId);
+        if (encounter is null)
+        {
+            return OpResult<EndEncounterResponse>.NotFound();
+        }
+
+        if (encounter.EndedAt is not null)
+        {
+            return OpResult<EndEncounterResponse>.Conflict();
+        }
+
+        encounter.EndedAt = DateTimeOffset.UtcNow;
+
+        // Part E (2026-09-22) — มอนสเตอร์ที่ spawn ลงไฟต์นี้เป็นของชั่วคราว: สรุปผลภาพรวมลงบันทึก
+        // แคมเปญแล้วลบแถวทิ้งในธุรกรรมเดียวกับการปิด encounter (ถ้าแยกสองรอบแล้วพังกลางทาง จะเหลือ
+        // instance ค้างโดยไม่มี encounter ให้ลบมันอีก) — ไม่แตะตัวละครผู้เล่น/NPC ถาวร ดู doc comment
+        // ของ `MonsterSpawnEndpoints.SummariseAndRemoveSpawnedMonstersAsync`
+        var cleanup = await MonsterSpawnEndpoints.SummariseAndRemoveSpawnedMonstersAsync(
+            db, campaignId, encounterId, encounter.SessionId);
+
+        await db.SaveChangesAsync();
+
+        foreach (var (sceneId, tokenId) in cleanup.RemovedTokens)
+        {
+            await tokenStore.ClearTokenAsync(sceneId, tokenId);
+        }
+
+        // จงใจไม่ใส่จำนวนนี้ลง response/broadcast — `EncounterEnded` ส่งเข้ากลุ่มแคมเปญทั้งวง
+        // การเติม field ใหม่เข้า payload ที่ผู้เล่นเห็นต้องคิดเรื่องการรั่วทุกครั้ง ที่นี่ไม่มีเหตุผล
+        // ต้องบอกผู้เล่น จึง log ไว้ให้ debug ได้อย่างเดียว
+        if (cleanup.RemovedMonsters > 0)
+        {
+            logger.LogInformation(
+                "Encounter {EncounterId} ended — removed {Count} spawned monster instance(s) and {TokenCount} map token(s)",
+                encounterId, cleanup.RemovedMonsters, cleanup.RemovedTokens.Count);
+        }
+
+        await turnStateStore.TryRemoveAsync(encounterId, encounter.TurnNumber);
+
+        var response = new EndEncounterResponse(encounter.Id, encounter.EndedAt.Value);
+
+        try
+        {
+            await hubContext.Clients.Group(CampaignHub.GroupName(campaignId)).SendAsync("EncounterEnded", response);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to broadcast EncounterEnded for encounter {EncounterId}", encounterId);
+        }
+
+        // Sprint G Part 5 (design doc §14.3) — จบ encounter เป็นอีกจุด persist ตำแหน่ง token
+        await FlushSceneTokensForSessionAsync(db, tokenFlusher, encounter.SessionId, logger);
+
+        return OpResult<EndEncounterResponse>.Ok(response);
+    }
 
     /// <summary>
     /// Sprint G Part 5 — flush ตำแหน่ง token ที่ยัง pending ของ scene ที่ active ของ session นี้

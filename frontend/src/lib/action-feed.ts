@@ -52,3 +52,22 @@ export function appendActionMessage(
 
   return [...existing, incoming].slice(-MAX_FEED_LENGTH);
 }
+
+const AUTHOR_LABEL: Record<string, string> = {
+  Ai: "ผู้บรรยาย",
+  Dm: "DM",
+  Player: "ผู้เล่น",
+  System: "ระบบ",
+};
+
+/**
+ * ชื่อที่โชว์หน้าข้อความในฟีด — มีตัวละครผูกอยู่ (ผู้เล่นสั่ง action หรือบทพูด NPC ที่ DM อนุมัติจากผู้ช่วย) = ชื่อตัวละคร
+ * · ไม่มี = บทบาทของผู้เขียน (narration ของ AI = "ผู้บรรยาย") · หาชื่อไม่เจอ (ตัวละครถูกลบไปแล้ว) ถอยไปใช้บทบาท
+ */
+export function feedSpeaker(
+  message: Pick<ActionMessage, "authorType" | "characterId">,
+  nameOf: (characterId: string) => string | undefined,
+): string {
+  const name = message.characterId ? nameOf(message.characterId) : undefined;
+  return name ?? AUTHOR_LABEL[message.authorType] ?? message.authorType;
+}

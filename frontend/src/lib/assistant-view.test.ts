@@ -22,7 +22,7 @@ describe("activityStatus", () => {
 
 describe("queriesToRefresh", () => {
   it("refreshes nothing for read-only tools", () => {
-    expect(queriesToRefresh([act("lookup_rule"), act("get_game_state")])).toEqual([]);
+    expect(queriesToRefresh([act("lookup_rule"), act("get_game_state"), act("search_srd_monsters")])).toEqual([]);
   });
 
   it("refreshes only what a known tool changed", () => {
@@ -31,6 +31,11 @@ describe("queriesToRefresh", () => {
 
   it("ignores tools that did not actually run", () => {
     expect(queriesToRefresh([act("write_journal_entry", "rejected"), act("roll_dice", "error")])).toEqual([]);
+  });
+
+  it("refreshes recap queries after a recap is generated and nothing after table talk", () => {
+    expect(queriesToRefresh([act("generate_session_recap")])).toEqual(["recap", "recap-latest"]);
+    expect(queriesToRefresh([act("narrate_to_players"), act("npc_say")])).toEqual([]);
   });
 
   it("refreshes a broad set for tools it does not know yet", () => {

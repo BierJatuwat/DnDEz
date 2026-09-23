@@ -79,62 +79,10 @@ public static class SessionRecapEndpoints
                 return Results.BadRequest(new RecapErrorResponse("dm_api_key_not_set"));
             }
 
-            var fullTranscript = await SessionTranscript.BuildAsync(db, sessionId, includeDmPrivate: true);
-            if (string.IsNullOrWhiteSpace(fullTranscript))
-            {
-                return Results.BadRequest(new RecapErrorResponse("session_has_no_messages"));
-            }
-
-            var dmInput = new StringBuilder();
-            dmInput.AppendLine("Session log (oldest first):");
-            dmInput.AppendLine(fullTranscript);
-            var journal = await db.CampaignJournalEntries.AsNoTracking()
-                .Where(e => e.CampaignId == campaignId && e.SessionId == sessionId)
-                .OrderBy(e => e.CreatedAt)
-                .Select(e => new { e.Title, e.Content })
-                .ToListAsync();
-            if (journal.Count > 0)
-            {
-                dmInput.AppendLine("Campaign journal entries attached to this session:");
-                foreach (var entry in journal)
-                {
-                    dmInput.AppendLine($"- {entry.Title}: {entry.Content}");
-                }
-            }
-
-            var dmTurn = await anthropicClient.SendTurnAsync(
-                rawApiKey, DmRecapInstruction,
-                [new AnthropicHistoryMessage("user", dmInput.ToString())], [], CancellationToken.None);
-
-            // ฉบับผู้เล่นสร้างจาก transcript ที่ไม่มีแถวลับเลยตั้งแต่ต้น — ไม่ใช่ตัดออกจากฉบับ DM
-            // (ดู doc comment ของคลาส) · ถ้าเซสชันนี้มีแต่การปรึกษาลับ ไม่มีอะไรที่ผู้เล่นเห็นเลย ก็ไม่มี
-            // อะไรให้สรุป ปล่อยว่างไว้ให้ DM เขียนเองได้ ดีกว่าให้ AI แต่งจากความว่างเปล่า
-            var publicTranscript = await SessionTranscript.BuildAsync(db, sessionId, includeDmPrivate: false);
-            var playerText = string.Empty;
-            if (!string.IsNullOrWhiteSpace(publicTranscript))
-            {
-                var playerTurn = await anthropicClient.SendTurnAsync(
-                    rawApiKey, PlayerRecapInstruction,
-                    [new AnthropicHistoryMessage("user", "Session log (oldest first):\n" + publicTranscript)],
-                    [], CancellationToken.None);
-                playerText = playerTurn.Text;
-            }
-
-            var existing = await db.RecapSnapshots.Where(r => r.SessionId == sessionId).ToListAsync();
-            db.RecapSnapshots.RemoveRange(existing);
-
-            var recap = new RecapSnapshot
-            {
-                Id = Guid.NewGuid(),
-                SessionId = sessionId,
-                DmVersionText = Truncate(dmTurn.Text),
-                PlayerVersionText = Truncate(playerText),
-                CreatedAt = DateTimeOffset.UtcNow,
-            };
-            db.RecapSnapshots.Add(recap);
-            await db.SaveChangesAsync();
-
-            return Results.Ok(Project(recap, isDm: true));
+            var result = await GenerateAsync(db, anthropicClient, rawApiKey, campaignId, sessionId);
+            return result.IsOk
+                ? Results.Ok(Project(result.Value!, isDm: true))
+                : Results.BadRequest(new RecapErrorResponse(result.Error!));
         }).RequireAuthorization();
 
         // DM เขียน/แก้เองได้ทั้งสองฉบับ — AI สรุปผิดต้องแก้ได้ และ DM ที่ไม่ได้ตั้ง API key ก็ต้องมี recap ได้
@@ -255,6 +203,74 @@ public static class SessionRecapEndpoints
 
             return recap is null ? Results.NoContent() : Results.Ok(Project(recap, isDm));
         }).RequireAuthorization();
+    }
+
+    /// <summary>
+    /// สร้าง recap สองฉบับด้วย AI (แทนที่ของเดิมของเซสชันนั้น) — ใช้ร่วมกันระหว่างปุ่มบนหน้าจอกับ tool
+    /// `generate_session_recap` ของผู้ช่วย DM · ผู้เรียกต้องเช็คสิทธิ์ DM + ว่าเซสชันอยู่ในแคมเปญนี้มาก่อน
+    ///
+    /// ⚠️ ฉบับผู้เล่นมาจาก call แยกที่ได้ input ไม่มีความลับตั้งแต่ต้น (ดู doc comment ของคลาส) — ผู้ช่วย DM
+    /// ที่รู้ความลับจึงเรียกตัวนี้ได้โดยไม่รั่ว เพราะผู้ช่วยไม่ได้เป็นคนเขียนฉบับผู้เล่นเอง
+    /// </summary>
+    internal static async Task<OpResult<RecapSnapshot>> GenerateAsync(
+        DnDEzDbContext db, IAnthropicClient anthropicClient, string rawApiKey, Guid campaignId, Guid sessionId)
+    {
+        var fullTranscript = await SessionTranscript.BuildAsync(db, sessionId, includeDmPrivate: true);
+        if (string.IsNullOrWhiteSpace(fullTranscript))
+        {
+            return OpResult<RecapSnapshot>.Bad("session_has_no_messages");
+        }
+
+        var dmInput = new StringBuilder();
+        dmInput.AppendLine("Session log (oldest first):");
+        dmInput.AppendLine(fullTranscript);
+        var journal = await db.CampaignJournalEntries.AsNoTracking()
+            .Where(e => e.CampaignId == campaignId && e.SessionId == sessionId)
+            .OrderBy(e => e.CreatedAt)
+            .Select(e => new { e.Title, e.Content })
+            .ToListAsync();
+        if (journal.Count > 0)
+        {
+            dmInput.AppendLine("Campaign journal entries attached to this session:");
+            foreach (var entry in journal)
+            {
+                dmInput.AppendLine($"- {entry.Title}: {entry.Content}");
+            }
+        }
+
+        var dmTurn = await anthropicClient.SendTurnAsync(
+            rawApiKey, DmRecapInstruction,
+            [new AnthropicHistoryMessage("user", dmInput.ToString())], [], CancellationToken.None);
+
+        // ฉบับผู้เล่นสร้างจาก transcript ที่ไม่มีแถวลับเลยตั้งแต่ต้น — ไม่ใช่ตัดออกจากฉบับ DM
+        // (ดู doc comment ของคลาส) · ถ้าเซสชันนี้มีแต่การปรึกษาลับ ไม่มีอะไรที่ผู้เล่นเห็นเลย ก็ไม่มี
+        // อะไรให้สรุป ปล่อยว่างไว้ให้ DM เขียนเองได้ ดีกว่าให้ AI แต่งจากความว่างเปล่า
+        var publicTranscript = await SessionTranscript.BuildAsync(db, sessionId, includeDmPrivate: false);
+        var playerText = string.Empty;
+        if (!string.IsNullOrWhiteSpace(publicTranscript))
+        {
+            var playerTurn = await anthropicClient.SendTurnAsync(
+                rawApiKey, PlayerRecapInstruction,
+                [new AnthropicHistoryMessage("user", "Session log (oldest first):\n" + publicTranscript)],
+                [], CancellationToken.None);
+            playerText = playerTurn.Text;
+        }
+
+        var existing = await db.RecapSnapshots.Where(r => r.SessionId == sessionId).ToListAsync();
+        db.RecapSnapshots.RemoveRange(existing);
+
+        var recap = new RecapSnapshot
+        {
+            Id = Guid.NewGuid(),
+            SessionId = sessionId,
+            DmVersionText = Truncate(dmTurn.Text),
+            PlayerVersionText = Truncate(playerText),
+            CreatedAt = DateTimeOffset.UtcNow,
+        };
+        db.RecapSnapshots.Add(recap);
+        await db.SaveChangesAsync();
+
+        return OpResult<RecapSnapshot>.Ok(recap);
     }
 
     /// <summary>จุดเดียวที่ตัดสินว่าผู้เรียกเห็น `DmVersionText` ไหม — RLS กันระดับคอลัมน์ไม่ได้</summary>
