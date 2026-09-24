@@ -1,7 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { useCampaignMonsters, useSrdMonsterDetail, useSrdMonsters, MONSTER_PAGE_SIZE } from "@/lib/use-srd";
+import {
+  DEFAULT_MONSTER_PAGE_SIZE,
+  MONSTER_PAGE_SIZE_OPTIONS,
+  useCampaignMonsters,
+  useSrdMonsterDetail,
+  useSrdMonsters,
+} from "@/lib/use-srd";
 import {
   CR_FILTERS,
   abilityRows,
@@ -56,14 +62,15 @@ export function MonsterLibraryPanel({ campaignId }: { campaignId: string }) {
   const [query, setQuery] = useState("");
   const [crMax, setCrMax] = useState("1");
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState<number>(DEFAULT_MONSTER_PAGE_SIZE);
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
 
-  const { monsters, total, attribution, isLoading, isError } = useSrdMonsters({ query, crMax, page });
+  const { monsters, total, attribution, isLoading, isError } = useSrdMonsters({ query, crMax, page, pageSize });
   const { monsters: campaignMonsters, copyFromSrd, updateMonster, spawnMonster } = useCampaignMonsters(campaignId);
 
   const ownedKeys = new Set(campaignMonsters.map((m) => m.srdKey).filter((k): k is string => !!k));
-  const pageCount = Math.ceil(total / MONSTER_PAGE_SIZE);
+  const pageCount = Math.ceil(total / pageSize);
 
   const changeFilter = (next: () => void) => {
     next();
@@ -119,9 +126,25 @@ export function MonsterLibraryPanel({ campaignId }: { campaignId: string }) {
 
       {monsters.length > 0 && (
         <>
-          <p className="text-xs opacity-50">
-            พบ {total} ตัว · แสดง {page * MONSTER_PAGE_SIZE + 1}–{page * MONSTER_PAGE_SIZE + monsters.length}
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs opacity-50">
+              พบ {total} ตัว · แสดง {page * pageSize + 1}–{page * pageSize + monsters.length}
+            </p>
+            <label className="flex items-center gap-1 text-xs opacity-70">
+              แสดงทีละ
+              <select
+                value={pageSize}
+                onChange={(e) => changeFilter(() => setPageSize(Number(e.target.value)))}
+                className={`${inputClass} py-0.5`}
+              >
+                {MONSTER_PAGE_SIZE_OPTIONS.map((size) => (
+                  <option key={size} value={size}>
+                    {size} ตัว
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
             {sortByDifficulty(monsters).map((monster) => (

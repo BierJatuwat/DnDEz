@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Text.Json;
 using DnDEz.Api.Auth;
 using DnDEz.Api.Realtime;
 using DnDEz.Domain.Entities;
@@ -15,6 +16,12 @@ namespace DnDEz.Api.Endpoints;
 ///
 /// ทุก endpoint เป็น **DM เท่านั้น** (ไม่ใช่แค่สมาชิก) เพราะ `story_beats` มี `Secrets`/`DmNotes`
 /// ที่ผู้เล่นไม่ควรเห็น — มุมมองที่กรองแล้วสำหรับผู้เล่น (ถ้าต้องการ) เป็นงานของ Part ถัดไป ไม่ใช่ Part นี้
+///
+/// **ReviewStatus (2026-09-24)**: beat ที่ DM พิมพ์เองผ่าน POST เป็น `Approved` ทันที (DM เป็นคนเขียนเอง ไม่มีอะไร
+/// ให้ "ตรวจว่าอ่านถูกไหม" — แบบเดียวกับแผนที่ที่อัปโหลดเองใน `SceneEndpoints`) · ก่อนหน้านี้ได้ค่าเริ่มต้น
+/// `Pending` ซึ่งทำให้ AI มองไม่เห็น beat ที่ DM พิมพ์เองเลยตลอดไป (prompt อ่านแต่ `Approved`) และไม่มี endpoint
+/// ให้ approve · ส่วน beat ที่ AI แยกจากเอกสาร (`StoryImportEndpoints`) ยังเป็น `Pending` จนกว่า DM จะกด
+/// `POST .../beats/{id}/approve`
 /// </summary>
 public static class StoryBeatEndpoints
 {
@@ -68,6 +75,11 @@ public static class StoryBeatEndpoints
                 return Results.BadRequest();
             }
 
+            if (request.Secrets is not null && !IsValidSecretsJson(request.Secrets))
+            {
+                return Results.BadRequest(new BeatErrorResponse("invalid_secrets"));
+            }
+
             var (_, failure) = await CampaignAuthorization.RequireCampaignDmAsync(db, campaignId, callerUserId.Value);
             if (failure is not null)
             {
@@ -92,6 +104,7 @@ public static class StoryBeatEndpoints
                 DmNotes = request.DmNotes,
                 Secrets = request.Secrets ?? "[]",
                 Progress = BeatProgress.Upcoming,
+                ReviewStatus = ReviewStatus.Approved,
             };
 
             db.StoryBeats.Add(beat);
@@ -118,6 +131,11 @@ public static class StoryBeatEndpoints
                 return Results.BadRequest();
             }
 
+            if (request.Secrets is not null && !IsValidSecretsJson(request.Secrets))
+            {
+                return Results.BadRequest(new BeatErrorResponse("invalid_secrets"));
+            }
+
             var (_, failure) = await CampaignAuthorization.RequireCampaignDmAsync(db, campaignId, callerUserId.Value);
             if (failure is not null)
             {
@@ -139,6 +157,36 @@ public static class StoryBeatEndpoints
             if (request.DmNotes is not null) beat.DmNotes = request.DmNotes;
             if (request.Secrets is not null) beat.Secrets = request.Secrets;
 
+            await db.SaveChangesAsync();
+
+            return Results.Ok(ToResponse(beat));
+        }).RequireAuthorization();
+
+        app.MapPost("/campaigns/{campaignId:guid}/beats/{beatId:guid}/approve", async (
+            Guid campaignId,
+            Guid beatId,
+            ClaimsPrincipal principal,
+            DnDEzDbContext db) =>
+        {
+            var callerUserId = principal.GetUserId();
+            if (callerUserId is null)
+            {
+                return Results.Unauthorized();
+            }
+
+            var (_, failure) = await CampaignAuthorization.RequireCampaignDmAsync(db, campaignId, callerUserId.Value);
+            if (failure is not null)
+            {
+                return failure;
+            }
+
+            var beat = await db.StoryBeats.SingleOrDefaultAsync(b => b.Id == beatId && b.CampaignId == campaignId);
+            if (beat is null)
+            {
+                return Results.NotFound();
+            }
+
+            beat.ReviewStatus = ReviewStatus.Approved;
             await db.SaveChangesAsync();
 
             return Results.Ok(ToResponse(beat));
@@ -294,7 +342,40 @@ public static class StoryBeatEndpoints
         }).RequireAuthorization();
     }
 
-    private static BeatResponse ToResponse(StoryBeat beat) => new(
+    /// <summary>
+    /// `secrets` เป็น jsonb `[{ "text": "...", "reveal_condition": "..." }]` ที่ถูกส่งเข้า prompt ของผู้ช่วย DM ตรง ๆ —
+    /// ต้องเป็น array ของ object ที่มี `text` เป็นข้อความไม่ว่าง (JSON เสียจะชน jsonb แล้วกลายเป็น 500)
+    /// </summary>
+    internal static bool IsValidSecretsJson(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                return false;
+            }
+
+            foreach (var item in doc.RootElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object
+                    || !item.TryGetProperty("text", out var text)
+                    || text.ValueKind != JsonValueKind.String
+                    || string.IsNullOrWhiteSpace(text.GetString()))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    internal static BeatResponse ToResponse(StoryBeat beat) => new(
         beat.Id, beat.Order, beat.Title, beat.Summary, beat.Objective, beat.EntryTrigger,
         beat.ExitConditions, beat.DmNotes, beat.Secrets, beat.Progress.ToString(), beat.ReviewStatus.ToString());
 }
@@ -314,5 +395,7 @@ internal record SetActiveBeatRequest(Guid BeatId);
 internal record BeatResponse(
     Guid Id, int Order, string Title, string? Summary, string? Objective, string? EntryTrigger,
     string[] ExitConditions, string? DmNotes, string Secrets, string Progress, string ReviewStatus);
+
+internal record BeatErrorResponse(string Error);
 
 internal record ActiveBeatResponse(Guid SessionId, Guid CampaignId, Guid ActiveBeatId, Guid? PreviousActiveBeatId);

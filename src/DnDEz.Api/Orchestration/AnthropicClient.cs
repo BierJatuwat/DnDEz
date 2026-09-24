@@ -29,6 +29,18 @@ public sealed class AnthropicClient(HttpClient httpClient) : IAnthropicClient
     /// <summary>ผู้ช่วย DM แบบหลายขั้นตอบยาวกว่าเทิร์นเดียว (สรุปสิ่งที่ทำ + คำอธิบายเป็นไทยซึ่งกิน token มากกว่า
     /// อังกฤษ) — 1024 เดิมตัดคำตอบกลางประโยคได้ง่าย · ยังจำกัดไว้เพราะ BYOK DM จ่ายเอง</summary>
     private const int AgentMaxTokens = 2048;
+
+    /// <summary>แปลงเอกสารทั้งบท/ทั้งเล่มเป็น beat หลายสิบอันกิน output เยอะ — ต่ำกว่านี้ตัดกลาง JSON บ่อย</summary>
+    private const int ExtractionMaxTokens = 16000;
+
+    /// <summary>
+    /// timeout ต่อคำขอ แยกตามงาน (เดิมใช้ `HttpClient.Timeout` 30 วินาทีตัวเดียวทั้งคลาส) — การอ่านเอกสารยาวแล้วตอบ
+    /// 16k token ใช้หลายนาทีจริง ส่วนบทสนทนาปกติยังต้องตัดที่ 30 วินาทีเหมือนเดิม · หมดเวลาแล้วโยน
+    /// `TaskCanceledException` ชนิดเดียวกับที่ `HttpClient.Timeout` เคยโยน ผู้เรียกเดิมที่ catch ไว้จึงไม่ต้องแก้
+    /// </summary>
+    private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
+    internal static readonly TimeSpan ExtractionTimeout = TimeSpan.FromMinutes(5);
+
     private const string MessagesPath = "v1/messages";
 
     public async Task<ApiKeyValidationOutcome> ValidateKeyAsync(string apiKey, CancellationToken cancellationToken)
@@ -43,10 +55,12 @@ public sealed class AnthropicClient(HttpClient httpClient) : IAnthropicClient
         };
 
         using var request = BuildRequest(apiKey, body);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(DefaultTimeout);
 
         try
         {
-            using var response = await httpClient.SendAsync(request, cancellationToken);
+            using var response = await httpClient.SendAsync(request, timeout.Token);
 
             if (response.IsSuccessStatusCode)
             {
@@ -163,6 +177,55 @@ public sealed class AnthropicClient(HttpClient httpClient) : IAnthropicClient
         return ExtractTurnResult(response);
     }
 
+    public async Task<JsonElement> ExtractWithToolAsync(
+        string apiKey,
+        string system,
+        IReadOnlyList<DocumentInput> documents,
+        string instruction,
+        AnthropicToolDefinition tool,
+        CancellationToken cancellationToken)
+    {
+        var content = new JsonArray();
+        foreach (var document in documents)
+        {
+            var source = new JsonObject
+            {
+                ["type"] = "base64",
+                ["media_type"] = document.MediaType,
+                ["data"] = Convert.ToBase64String(document.Data),
+            };
+            content.Add(new JsonObject
+            {
+                ["type"] = document.MediaType == "application/pdf" ? "document" : "image",
+                ["source"] = source,
+            });
+        }
+
+        content.Add(new JsonObject { ["type"] = "text", ["text"] = instruction });
+        var messages = new JsonArray(new JsonObject { ["role"] = "user", ["content"] = content });
+
+        var response = await SendMessagesRequestAsync(
+            apiKey, system, messages, BuildToolsArray([tool]), ExtractionMaxTokens, cancellationToken,
+            ExtractionTimeout, new JsonObject { ["type"] = "tool", ["name"] = tool.Name });
+
+        if (response["stop_reason"]?.GetValue<string>() == "max_tokens")
+        {
+            throw new AnthropicApiException("คำตอบถูกตัดเพราะยาวเกิน max_tokens");
+        }
+
+        foreach (var blockNode in response["content"]?.AsArray() ?? [])
+        {
+            if (blockNode is JsonObject block
+                && block["type"]?.GetValue<string>() == "tool_use"
+                && block["name"]?.GetValue<string>() == tool.Name)
+            {
+                return JsonSerializer.Deserialize<JsonElement>(block["input"]!.ToJsonString());
+            }
+        }
+
+        throw new AnthropicApiException("Anthropic response ไม่มี tool_use ที่บังคับไว้");
+    }
+
     private static JsonArray BuildMessagesArray(IReadOnlyList<AnthropicHistoryMessage> history)
     {
         var messages = new JsonArray();
@@ -192,7 +255,7 @@ public sealed class AnthropicClient(HttpClient httpClient) : IAnthropicClient
 
     private async Task<JsonObject> SendMessagesRequestAsync(
         string apiKey, string? system, JsonArray messages, JsonArray? tools, int maxTokens,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, TimeSpan? timeout = null, JsonObject? toolChoice = null)
     {
         var body = new JsonObject
         {
@@ -204,6 +267,10 @@ public sealed class AnthropicClient(HttpClient httpClient) : IAnthropicClient
         {
             body["tools"] = tools;
         }
+        if (toolChoice is not null)
+        {
+            body["tool_choice"] = toolChoice;
+        }
         // 2026-09-22: null/ว่าง = ไม่ส่ง field นี้เลย (ไม่ใช่ "" ว่าง) — Anthropic รับ system ที่ไม่มี
         // field ได้ปกติ แต่ไม่มีเหตุผลจะส่ง "" เปล่า ๆ เปลืองไปเฉย ๆ
         if (!string.IsNullOrWhiteSpace(system))
@@ -212,7 +279,9 @@ public sealed class AnthropicClient(HttpClient httpClient) : IAnthropicClient
         }
 
         using var request = BuildRequest(apiKey, body);
-        using var response = await httpClient.SendAsync(request, cancellationToken);
+        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutSource.CancelAfter(timeout ?? DefaultTimeout);
+        using var response = await httpClient.SendAsync(request, timeoutSource.Token);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -221,7 +290,7 @@ public sealed class AnthropicClient(HttpClient httpClient) : IAnthropicClient
                 $"Anthropic API คืนสถานะ {(int)response.StatusCode} ({response.StatusCode})");
         }
 
-        var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+        var responseBody = await response.Content.ReadAsStringAsync(timeoutSource.Token);
         return JsonNode.Parse(responseBody)?.AsObject()
             ?? throw new AnthropicApiException("Anthropic API คืน response ที่ parse เป็น JSON object ไม่ได้");
     }

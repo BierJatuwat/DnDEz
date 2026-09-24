@@ -509,8 +509,9 @@ export function SceneMap({
           return (
             <>
               {/* ขาวบาง ๆ วางก่อนเป็น "รัศมี" ให้เส้นดำด้านบนอ่านออกแม้แผนที่พื้นเข้ม — สลับกันไม่พอ
-                  เพราะขาวล้วนจางเกินไปบนแผนที่พื้นสว่าง (กระดาษ/parchment) แบบในภาพตัวอย่างจริง */}
-              <g stroke="#ffffff" strokeOpacity={0.5} strokeWidth={2.5} style={{ pointerEvents: "none" }}>
+                  เพราะขาวล้วนจางเกินไปบนแผนที่พื้นสว่าง (กระดาษ/parchment) แบบในภาพตัวอย่างจริง
+                  · ความทึบเดิม (ขาว .5 / ดำ .45) ยังจางบนพื้นหินสีเทากลาง — เทียบภาพจริงบน 4 พื้นแล้วค่านี้อ่านออกทุกแบบ */}
+              <g stroke="#ffffff" strokeOpacity={0.65} strokeWidth={3} style={{ pointerEvents: "none" }}>
                 {xs.map((x) => (
                   <line key={`gx-halo-${x}`} x1={x} y1={view.minY} x2={x} y2={view.minY + view.height} vectorEffect="non-scaling-stroke" />
                 ))}
@@ -518,7 +519,7 @@ export function SceneMap({
                   <line key={`gy-halo-${y}`} x1={view.minX} y1={y} x2={view.minX + view.width} y2={y} vectorEffect="non-scaling-stroke" />
                 ))}
               </g>
-              <g stroke="#000000" strokeOpacity={0.45} strokeWidth={1} style={{ pointerEvents: "none" }}>
+              <g stroke="#000000" strokeOpacity={0.7} strokeWidth={1.25} style={{ pointerEvents: "none" }}>
                 {xs.map((x) => (
                   <line key={`gx-${x}`} x1={x} y1={view.minY} x2={x} y2={view.minY + view.height} vectorEffect="non-scaling-stroke" />
                 ))}

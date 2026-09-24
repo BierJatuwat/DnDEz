@@ -31,7 +31,7 @@ public static class SceneEndpoints
     /// <summary>quota เริ่มต้นสำหรับผู้ใช้ที่ยังไม่มีแถว storage_quotas เลย (lazy-provision ตอน
     /// อัปโหลดครั้งแรก — ไม่มี pipeline ไหนสร้างแถวนี้ล่วงหน้าให้ ตรวจแล้วทั้ง repo) เป็นค่าดีฟอลต์
     /// ชั่วคราว ไม่ใช่ระบบ tier/billing จริง (ยังไม่มีในโปรเจกต์นี้)</summary>
-    private const long DefaultQuotaLimitBytes = 200 * 1024 * 1024;
+    internal const long DefaultQuotaLimitBytes = 200 * 1024 * 1024;
 
     /// <summary>อายุของ signed URL ที่ปล่อยให้ client ใช้โหลดรูป — สั้นพอที่แม้หลุดออกไปก็ใช้ต่อไม่ได้นาน
     /// ยาวพอที่ session หนึ่งจะโหลดรูปซ้ำได้ไม่ถี่เกินไป (client ควร re-fetch scene ใหม่ถ้าหมดอายุ)</summary>

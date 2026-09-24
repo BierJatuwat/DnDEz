@@ -15,6 +15,7 @@ import { DmMapTools } from "./DmMapTools";
 import { MonsterLibraryPanel } from "./MonsterLibraryPanel";
 import { RulesReferencePanel } from "./RulesReferencePanel";
 import { SceneSetupPanel } from "./SceneSetupPanel";
+import { StoryBeatPanel } from "./StoryBeatPanel";
 import { parseSceneGrid } from "@/lib/scene-grid";
 import { ReactionPrompt } from "./ReactionPrompt";
 import {
@@ -361,6 +362,8 @@ export function DmConsole({ campaignId }: { campaignId: string }) {
             onCreate={() => ws.createSession.mutate()}
             creating={ws.createSession.isPending}
           />
+
+          <StoryBeatPanel campaignId={campaignId} selectedSessionId={ws.selectedSessionId} />
 
           <CharacterRosterPanel
             title="ตัวละครในโต๊ะ"

@@ -145,7 +145,8 @@ builder.Services.AddScoped<RlsRequestTransaction>();
 builder.Services.AddHttpClient<IAnthropicClient, AnthropicClient>(client =>
 {
     client.BaseAddress = new Uri("https://api.anthropic.com/");
-    client.Timeout = TimeSpan.FromSeconds(30);
+    // เพดานนอกสุดเท่านั้น — timeout จริงต่อคำขอตั้งใน AnthropicClient (30 วินาทีปกติ / 5 นาทีตอนอ่านเอกสาร)
+    client.Timeout = AnthropicClient.ExtractionTimeout + TimeSpan.FromSeconds(30);
 });
 
 // ── Rate limiting ────────────────────────────────────────────────────────
@@ -564,6 +565,7 @@ app.MapDeathSaveEndpoints();
 
 // ── Sprint G Part 2: story_beats CRUD + active-beat (design doc §11.1, §12) — DM-only ──
 app.MapStoryBeatEndpoints();
+app.MapStoryImportEndpoints();
 
 // ── Sprint G Part 3: scene-prep — monster/npc ของ beat ที่ระบุ (design doc §13.2) — DM-only ──
 app.MapScenePrepEndpoints();

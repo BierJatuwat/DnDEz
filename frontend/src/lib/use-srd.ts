@@ -25,21 +25,22 @@ import type {
  * เพราะภาษาอยู่ใน query key: TanStack Query แคชสองภาษาแยกกัน สลับไปมาไม่ต้องรอโหลดซ้ำ (แคชแล้วเร็วขึ้นเรื่อย ๆ)
  */
 
-/** จำนวนรายการต่อหน้า — 24 ลงตัวกับกริด 2/3/4 คอลัมน์ทุกขนาดจอที่ใช้จริง */
-export const MONSTER_PAGE_SIZE = 24;
+/** จำนวนต่อหน้าที่ DM เลือกได้ — backend clamp ไว้ที่ 1–100 (`SrdEndpoints.MaxLimit`) ตัวเลือกห้ามเกินนั้น */
+export const MONSTER_PAGE_SIZE_OPTIONS = [10, 25, 50] as const;
+export const DEFAULT_MONSTER_PAGE_SIZE = 10;
 
-export function useSrdMonsters(filters: { query: string; crMax: string; page: number }) {
+export function useSrdMonsters(filters: { query: string; crMax: string; page: number; pageSize: number }) {
   const token = useAuthStore((s) => s.token);
   const lang = useSrdLanguageStore((s) => s.language);
   const params = new URLSearchParams();
   if (filters.query.trim()) params.set("query", filters.query.trim());
   if (filters.crMax) params.set("crMax", filters.crMax);
   params.set("lang", lang);
-  params.set("limit", String(MONSTER_PAGE_SIZE));
-  params.set("offset", String(filters.page * MONSTER_PAGE_SIZE));
+  params.set("limit", String(filters.pageSize));
+  params.set("offset", String(filters.page * filters.pageSize));
 
   const query = useQuery({
-    queryKey: ["srd-monsters", filters.query.trim(), filters.crMax, filters.page, lang],
+    queryKey: ["srd-monsters", filters.query.trim(), filters.crMax, filters.page, filters.pageSize, lang],
     queryFn: () =>
       apiFetch<SrdListResponse<SrdMonsterSummary>>(`/srd/monsters?${params.toString()}`, { token }),
     enabled: !!token,

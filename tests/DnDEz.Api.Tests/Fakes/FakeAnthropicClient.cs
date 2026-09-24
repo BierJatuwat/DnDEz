@@ -190,6 +190,41 @@ public sealed class FakeAnthropicClient : IAnthropicClient
             turn.Text, toolUses, JsonSerializer.SerializeToElement(blocks)));
     }
 
+    // ── อ่านเอกสาร (story import, 2026-09-24) ─────────────────────────────────────
+
+    /// <summary>ผลที่ <see cref="ExtractWithToolAsync"/> จะคืนทีละครั้ง (เป็น tool input ดิบ) · หมดคิว = คืน
+    /// <c>{"beats":[]}</c> · ใส่ <see cref="ExtractFailure"/> ลงคิวเพื่อจำลอง Anthropic ล่ม</summary>
+    public Queue<object> ExtractScript { get; } = new();
+
+    public static readonly object ExtractFailure = new();
+
+    /// <summary>ทุก call ที่ได้รับ — ใช้ตรวจว่า server ส่ง media type ที่ตรวจเองจริง ไม่ใช่ที่ client ประกาศ</summary>
+    public List<ExtractCall> ExtractCalls { get; } = [];
+
+    public Task<JsonElement> ExtractWithToolAsync(
+        string apiKey,
+        string system,
+        IReadOnlyList<DocumentInput> documents,
+        string instruction,
+        AnthropicToolDefinition tool,
+        CancellationToken cancellationToken)
+    {
+        ExtractCalls.Add(new ExtractCall(system, documents.ToList(), instruction, tool.Name));
+        var next = ExtractScript.Count > 0 ? ExtractScript.Dequeue() : new { beats = Array.Empty<object>() };
+        // Func = ทำอะไรบางอย่าง "ระหว่างที่ Claude กำลังอ่าน" (เช่น จำลองอัปโหลดอีกคำขอ commit แทรก) แล้วคืนผล
+        if (next is Func<object> during)
+        {
+            next = during();
+        }
+
+        if (ReferenceEquals(next, ExtractFailure))
+        {
+            throw new AnthropicApiException("scripted extraction failure");
+        }
+
+        return Task.FromResult(JsonSerializer.SerializeToElement(next));
+    }
+
     /// <summary>ดึงค่าที่อยู่หลัง marker (เช่น "lookup-rule:blinded" → "blinded") — ตัดที่ช่องว่าง/
     /// เครื่องหมายวรรคตอนตัวแรกที่เจอ ไม่มี marker เลย = คืน false</summary>
     private static bool TryExtractMarkerValue(string text, string marker, out string value)
@@ -228,3 +263,5 @@ public sealed record ScriptedAgentTurn(string Text, params (string Name, object 
 }
 
 public sealed record AgentCall(string? System, IReadOnlyList<AgentMessage> Messages, IReadOnlyList<string> ToolNames);
+
+public sealed record ExtractCall(string System, List<DocumentInput> Documents, string Instruction, string ToolName);

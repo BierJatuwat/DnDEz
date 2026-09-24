@@ -86,6 +86,17 @@
 - Private ต่อ campaign เสมอ, vector index แยก namespace, ปิดได้ด้วย feature flag `ENABLE_SOURCE_IMPORT`
 - **ห้ามเนื้อหาจาก source import หลุดออกนอกแคมเปญผ่านทางอ้อม** — ตัวละครที่ใช้ไอเทม/feat จาก
   `SourceDocument` แม้ชิ้นเดียว harvest เข้าคลัง preset กลางไม่ได้ (ไปได้แค่คลังส่วนตัวของ DM คนนั้น)
+- **ลงโค้ดแล้วเฉพาะ "เนื้อเรื่อง → story beat" (2026-09-24)** — `POST /campaigns/{id}/story-imports`
+  (`StoryImportEndpoints`): PDF 1 ไฟล์ ≤15MB หรือภาพ ≤10 ภาพ (≤3.75MB/ภาพ ตามเพดาน 5MB-หลัง-base64 ของ
+  Anthropic) → Claude อ่านด้วย key ของ DM ผ่าน `tool_choice` บังคับ (tool เดียว ไม่มี tool ที่แตะ state) →
+  beat ทุกตัวเป็น `Pending` จนกว่า DM จะกด `POST .../beats/{id}/approve` · ไฟล์ดิบเก็บ MinIO +
+  `source_documents` · **ยังไม่ทำ** `raw_chunks`/embedding (รอเลือก provider), monster/NPC/แผนที่จากเอกสาร
+  · ทำพร้อมกัน: beat ที่ DM พิมพ์เองเป็น `Approved` ทันที (เดิมได้ `Pending` จน AI มองไม่เห็นตลอดไป) ·
+  timeout ของ Anthropic ย้ายจาก `HttpClient.Timeout` 30 วิทั้งคลาสมาเป็นต่อคำขอ (30 วิปกติ / 5 นาทีตอนอ่านเอกสาร)
+- ⚠️ **`story_beats` RLS เป็น `app_is_member()` ไม่ใช่ `dm_only`** — ผู้เล่นอ่านแถว (รวม `secrets`/`dm_notes`/
+  beat ที่ยังไม่ผ่านตรวจ) ได้ที่ชั้น DB · ตอนนี้ไม่รั่วเพราะ API ของ beat เป็น DM-only และเทิร์นผู้เล่นเลือกอ่านแค่
+  title/objective/summary · แต่แก้เป็น `dm_only` ตรง ๆ ไม่ได้ เพราะเทิร์นผู้เล่นต้องอ่าน beat ที่ active อยู่ในนาม
+  ผู้เล่นจริง — ถ้าจะปิดชั้น DB ต้องแยกคอลัมน์ลับออกเป็นตาราง/view ต่างหาก (ยังไม่ได้ตัดสินใจ)
 
 ### ฝั่งผู้เล่น (ล็อก 2026-08-21 — รายละเอียดเต็มใน `player-side-design.md`)
 - Player client ใช้ **game state เดียวกับ DM console** ต่างแค่มุมมอง/สิทธิ์ —

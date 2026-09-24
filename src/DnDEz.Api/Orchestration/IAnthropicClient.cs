@@ -80,7 +80,26 @@ public interface IAnthropicClient
         IReadOnlyList<AgentMessage> messages,
         IReadOnlyList<AnthropicToolDefinition> tools,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// ส่งเอกสาร (PDF/ภาพ) ให้ Claude อ่านแล้ว**บังคับ**ให้ตอบผ่าน <paramref name="tool"/> ตัวเดียว (`tool_choice`)
+    /// — คืน input ของ tool นั้นดิบ ๆ ให้ผู้เรียก validate เอง · ใช้กับงานแปลงเอกสารเป็นข้อมูลเชิงโครงสร้าง
+    /// (`StoryImportEndpoints`) ไม่ใช่บทสนทนา · timeout ยาวกว่าเมธอดอื่นเพราะอ่านเอกสารหลายหน้า + ตอบยาว
+    /// · โยน <see cref="AnthropicApiException"/> ถ้าไม่มี tool_use หรือคำตอบถูกตัดเพราะชน max_tokens
+    /// (input ที่ถูกตัดกลางทางเป็น JSON ไม่ครบ ห้ามส่งต่อ)
+    /// </summary>
+    Task<JsonElement> ExtractWithToolAsync(
+        string apiKey,
+        string system,
+        IReadOnlyList<DocumentInput> documents,
+        string instruction,
+        AnthropicToolDefinition tool,
+        CancellationToken cancellationToken);
 }
+
+/// <summary>ไฟล์หนึ่งไฟล์ที่ส่งให้ Claude อ่าน — <see cref="MediaType"/> ต้องมาจากการตรวจ magic bytes
+/// ฝั่ง server เท่านั้น ไม่ใช่ Content-Type ที่ client ประกาศ</summary>
+public sealed record DocumentInput(string MediaType, byte[] Data);
 
 /// <summary>ข้อความหนึ่งรายการของบทสนทนาแบบหลายขั้น — <see cref="Content"/> เป็น string หรือ array ของ
 /// content block ตาม Messages API (เก็บเป็น JsonElement เพื่อ serialize ลง `assistant_runs.state` ตรง ๆ)</summary>
