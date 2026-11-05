@@ -7,84 +7,100 @@
 
 | ไฟล์ | ใช้เมื่อไหร่ |
 |---|---|
-| [`docs/PROJECT-CONTEXT.md`](./docs/PROJECT-CONTEXT.md) | **เริ่มที่นี่** — primer สำหรับเปิดแชทใหม่ / เริ่มงานใหม่ สรุปสิ่งที่ล็อกแล้วและสิ่งที่ค้าง |
-| [`docs/dm-side-design.md`](./docs/dm-side-design.md) | รายละเอียดเต็มฝั่ง DM — data model, DM console, source import, BYOK |
-| [`docs/player-side-design.md`](./docs/player-side-design.md) | รายละเอียดเต็มฝั่งผู้เล่น — action input, fog of war, turn UI, คลัง preset, join flow |
-| [`docs/db-schema.md`](./docs/db-schema.md) | โครงสร้าง DB — ตาราง, constraint ที่บังคับกฎ, RLS และวิธีต่อ DB |
+| [`docs/PROJECT-CONTEXT.md`](./docs/PROJECT-CONTEXT.md) | **เริ่มที่นี่** — การตัดสินใจที่ล็อกแล้ว (§2), stack (§3), ประวัติ sprint และบทเรียน |
+| [`docs/BACKLOG.md`](./docs/BACKLOG.md) | **งานค้าง** — สิ่งที่ยังไม่ได้ทำ/รอตัดสินใจ/ยังไม่เคยทดสอบกับของจริง |
+| [`docs/dm-side-design.md`](./docs/dm-side-design.md) | ออกแบบฝั่ง DM — data model, DM console, source import, BYOK |
+| [`docs/player-side-design.md`](./docs/player-side-design.md) | ออกแบบฝั่งผู้เล่น — action input, fog of war, turn UI, คลัง preset, join flow |
+| [`docs/spatial-play-design.md`](./docs/spatial-play-design.md) | แผนที่/การต่อสู้/การสร้างตัวละคร — **แก้/ขยายสองเล่มบนหลายจุด** อ่านด้วยถ้าแตะส่วนนี้ |
+| [`docs/db-schema.md`](./docs/db-schema.md) | โครงสร้าง DB — ตาราง, constraint ที่บังคับกฎ, RLS |
 
-## สถานะ
+## สถานะ (2026-11-05)
 
-- ✅ ฝั่ง DM — ออกแบบเสร็จ
-- ✅ ฝั่ง Player — ออกแบบรอบแรกเสร็จ
-- 🚧 โค้ด — DB schema + RLS เสร็จแล้ว (30 ตาราง) · rules engine ครบ 3 phase เสร็จแล้ว ·
-  **Sprint A-D ครบทั้งหมดแล้ว** (API foundation, rules engine ต่อ API, realtime SignalR,
-  BYOK+AI orchestrator) · **Sprint E ครบทั้ง 3 part แล้ว** (Next.js scaffold + PWA + auth/SignalR
-  proof · character panel + consult AI + proposal queue · player action input hybrid + HP realtime)
-  — ดูรายละเอียดเต็มใน [`docs/PROJECT-CONTEXT.md`](./docs/PROJECT-CONTEXT.md) §4 "Sprint E"
+ใช้งานได้จริงแล้ว: บัญชี/แคมเปญ/เข้าร่วมโต๊ะ · rules engine (ทอยเต๋า, โจมตี, ดาเมจ, death save, action economy) ·
+realtime (SignalR) · แผนที่ + กริด + token + หมอก + พื้นเดินยาก · encounter/initiative · คลัง SRD 5.2.1 (อังกฤษ/ไทย) ·
+**ผู้ช่วย DM ช่องเดียว** (ถามข้อมูล + สั่งงานหลายขั้น ผ่าน autonomy dial) · เนื้อเรื่อง (story beat) + นำเข้าจาก PDF/ภาพ
+
+ทำครบถึง Sprint H Part 7 — รายละเอียดแต่ละ sprint ใน `PROJECT-CONTEXT.md` §4 · งานที่เหลือดู [`docs/BACKLOG.md`](./docs/BACKLOG.md)
 
 ## เริ่มต้นใช้งาน (local dev)
 
+**ต้องมี**: Docker Desktop · .NET SDK 8 ขึ้นไป **และ** .NET 8 runtime (โปรเจกต์ target `net8.0`) ·
+Node.js 20.9 ขึ้นไป · `dotnet-ef` 8.x (`dotnet tool install --global dotnet-ef --version 8.0.10`)
+
 ```bash
+# 1. ฐานข้อมูล / cache / ที่เก็บไฟล์
 docker compose up -d postgres redis minio
-export DOTNET_ROOT="$HOME/.dotnet"                 # macOS: SDK 8 อยู่ที่ ~/.dotnet
+
+# 2. สร้างตาราง (ไม่รันอัตโนมัติตอนเปิด API — ต้องรันเองทุกครั้งที่มี migration ใหม่)
 dotnet ef database update --project src/DnDEz.Infrastructure
 
-# API (ต้อง Development environment ถึงจะมี dev fallback JWT signing key)
+# 3. API — ต้องเป็น Development ถึงจะมี JWT signing key สำรองสำหรับ dev
+#    (bash/zsh)        ASPNETCORE_ENVIRONMENT=Development dotnet run --project src/DnDEz.Api --urls http://localhost:5080
+#    (PowerShell)      $env:ASPNETCORE_ENVIRONMENT="Development"; dotnet run --project src/DnDEz.Api --urls http://localhost:5080
 ASPNETCORE_ENVIRONMENT=Development dotnet run --project src/DnDEz.Api --urls http://localhost:5080
 
-# Frontend (terminal แยก) — ต้องมี API รันอยู่ที่ :5080 ก่อน (ดู frontend/.env.example)
-cd frontend && npm install && npm run dev   # http://localhost:3001
+# 4. Frontend (terminal แยก)
+cd frontend && cp .env.example .env.local && npm install && npm run dev   # http://localhost:3001
 ```
 
-**หมายเหตุพอร์ต**: frontend dev server ตั้งไว้ที่ `3001` (ไม่ใช่ `3000` default) เพราะ backend
-เปิด CORS เฉพาะ origin ที่ตั้งไว้ (`DNDEZ_FRONTEND_ORIGIN`, default `http://localhost:3001`) —
-ถ้าเปลี่ยนพอร์ต frontend ต้องตั้ง env var นี้ให้ตรงกันทั้งสองฝั่งด้วย
+- bucket ใน MinIO และ role `dndez_app` ของฐานข้อมูลถูกสร้างให้อัตโนมัติ (ตอนเปิด API / ใน migration)
+- **พอร์ต frontend เป็น `3001`** ไม่ใช่ 3000 — backend เปิด CORS เฉพาะ origin ใน `DNDEZ_FRONTEND_ORIGIN`
+  (ค่าเริ่มต้น `http://localhost:3001`) ถ้าเปลี่ยนพอร์ตต้องตั้ง env var นี้ให้ตรง
+- **ฟีเจอร์ AI ใช้ Anthropic API key ของแต่ละคนเอง (BYOK)** — สมัครบัญชี DM แล้วใส่ key ในหน้า DM console
+  ไม่มี key กลางของโปรเจกต์ และไม่ต้องใส่ key ในไฟล์ใด ๆ
+- ใช้ psql ผ่าน container: `docker compose exec postgres psql -U dndez -d dndez`
+- macOS ที่มี .NET หลายชุด: ถ้า `dotnet-ef` ฟ้อง *"You must install or update .NET"* ให้ตั้ง `DOTNET_ROOT` ชี้ SDK 8
 
-### หมายเหตุสภาพแวดล้อม (macOS เครื่องนี้)
+## รันเทสต์
 
-- **ต้องตั้ง `DOTNET_ROOT="$HOME/.dotnet"` เสมอ** ไม่งั้น `dotnet-ef` จะไปเจอ dotnet ของระบบที่
-  `/usr/local/share/dotnet` ซึ่งมีแค่ runtime 6/7 แล้วฟ้อง *"You must install or update .NET"*
-- `dotnet-ef` 8.0.10 ติดตั้งเป็น global tool แล้ว (`~/.dotnet/tools`)
-- **ไม่มี `psql` ในเครื่อง** — ใช้ผ่าน container แทน:
-  `docker compose exec postgres psql -U dndez -d dndez`
-- ทดสอบ RLS ต้องต่อด้วย role `dndez_app` ผ่าน TCP (ไม่ใช่ unix socket):
-  `docker compose exec -e PGPASSWORD=dndez_app postgres psql -U dndez_app -d dndez -h 127.0.0.1`
-- Docker Desktop ต้องเปิดอยู่ก่อน (`open -a Docker`)
+```bash
+# rules engine — ไม่ต้องมี Docker
+dotnet test tests/DnDEz.Rules.Tests
 
-โครงสร้างโค้ด:
+# API — integration test ต่อ Postgres/Redis/MinIO จริง (ไม่ mock) ต้อง docker compose up + migrate ก่อน
+dotnet test tests/DnDEz.Api.Tests
+
+# frontend
+cd frontend && npx vitest run && npx tsc --noEmit && npm run lint
+```
+
+เทสต์ทุกตัวใช้ `FakeAnthropicClient` แทน Claude จริง (ไม่มีค่าใช้จ่าย ไม่ต้องมี key) · ยังไม่มี CI —
+**รันเทสต์ให้ผ่านก่อน push ทุกครั้ง**
+
+ถ้ารัน API ค้างไว้ระหว่างรันเทสต์บน Windows อาจเจอ `file is locked by DnDEz.Api` — ปิด API ก่อน หรือรันเทสต์ด้วย `-c Release`
+
+## โครงสร้างโค้ด
 
 | โฟลเดอร์ | เนื้อหา |
 |---|---|
 | `src/DnDEz.Domain` | entity + enum (ไม่มี dependency กับ EF/infra) |
-| `src/DnDEz.Infrastructure` | DbContext, EF configuration, migrations |
+| `src/DnDEz.Infrastructure` | DbContext, EF configuration, migrations, ข้อมูล SRD ที่ seed |
 | `src/DnDEz.Rules` | rules engine — zero-dependency (BCL ล้วน) ห้าม reference EF/infra/orchestrator |
-| `src/DnDEz.Api` | Minimal API + SignalR hub + auth |
-| `frontend/` | Next.js (App Router) + PWA — root-level ไม่ใช่ `src/` เพราะไม่ใช่ .NET project |
+| `src/DnDEz.Api` | Minimal API + SignalR hub + auth · `Assistant/` = ผู้ช่วย DM · `Orchestration/` = client ของ Claude |
+| `frontend/` | Next.js 16 (App Router) + PWA — ⚠️ เวอร์ชันนี้ API ต่างจากที่คุ้นเคย อ่าน `frontend/AGENTS.md` ก่อน |
 | `tests/DnDEz.Rules.Tests` | xUnit ของ rules engine |
-| `tests/DnDEz.Api.Tests` | integration test ของ API ผ่าน `WebApplicationFactory` + Postgres/Redis จริง |
+| `tests/DnDEz.Api.Tests` | integration test ของ API ผ่าน `WebApplicationFactory` |
+| `tools/` | สคริปต์แปลง/นำเข้า SRD |
 
-รันเทสต์ของ rules engine:
+## กฎที่ห้ามพลาด
 
-```bash
-DOTNET_ROOT="$HOME/.dotnet" dotnet test tests/DnDEz.Rules.Tests/DnDEz.Rules.Tests.csproj
-```
+รายละเอียดเต็มอยู่ใน `PROJECT-CONTEXT.md` §2–§3 และ `CLAUDE.md` — ข้อที่เคยพลาดจริงมาแล้ว:
 
-**สำคัญ**: แอปต้องต่อ DB ด้วย role `dndez_app` (ไม่ใช่ owner) และตั้ง `app.user_id` / `app.campaign_id`
-ทุก request ไม่งั้น RLS จะมองไม่เห็นข้อมูลใด ๆ เลย (fail closed) — ดู `docs/db-schema.md`
+- **ตารางใหม่ทุกตัวต้องเปิด RLS เองใน migration นั้น** (`ENABLE` + `FORCE` + `CREATE POLICY`) — ไม่มีการสืบทอดจาก
+  migration เดิม ลืมแล้ว **fail open** (ทุกคนอ่าน/เขียนได้) ไม่ใช่ fail closed
+- แอปต่อ DB ด้วย role `dndez_app` และตั้ง `app.user_id`/`app.campaign_id` ทุก request (ทำให้แล้วใน `RlsRequestTransaction`)
+- **ความลับของ DM** (`DmNotes`, `Secrets`, บทสนทนากับผู้ช่วย DM) ห้ามเข้า prompt ของเทิร์นผู้เล่น (`OrchestratorTurnRunner`)
+  เพราะคำตอบถูก broadcast ถึงผู้เล่น — รั่วแบบนี้มาแล้ว 4 ครั้ง
+- ข้อมูลที่ AI แยกจากเอกสาร (`ReviewStatus.Pending`) ห้ามเข้า prompt ของ AI จนกว่า DM จะยืนยัน
+- เทสต์ต่อฐานข้อมูลจริง ห้าม mock · แก้เรื่อง security ต้องมีเทสต์ที่ **ล้มก่อนแก้** เพื่อพิสูจน์ว่าช่องโหว่มีจริง
 
 ## Stack
 
-.NET (ASP.NET Core) + SignalR · PostgreSQL (JSONB + pgvector) + Redis · Hangfire ·
-Next.js + react-konva (PWA) · Claude API · Docker + Jenkins
+.NET 8 (ASP.NET Core Minimal API) + SignalR · PostgreSQL 16 (JSONB + pgvector + RLS) · Redis · MinIO ·
+Next.js 16 + TanStack Query + Zustand (PWA) · Claude API (BYOK)
 
-รายละเอียดเต็ม (แบ่งโมเดลตามงาน, ข้อบังคับทางสถาปัตยกรรม) อยู่ใน
-[`docs/PROJECT-CONTEXT.md`](./docs/PROJECT-CONTEXT.md) §3
+## Claude Code (ไม่บังคับ)
 
-## Dev workflow — Tier Agent System
-
-Repo นี้ติดตั้ง [Tier Agent System](./CLAUDE.md) ไว้แล้ว — แบ่งงานเป็น tier ตามความยาก
-(haiku < sonnet < opus < fable) พร้อม code review / security review / TDD flow ที่กำหนดไว้
-
-- **ปิดโดยดีฟอลต์** — พิมพ์คำสั่งปกติ = ทำงานตรงไปตรงมา ไม่มี routing
-- **เปิด**: ขึ้นต้น prompt ด้วย `<tier>`
-- ดูวิธีใช้เต็มด้วย `/tier-help` หรืออ่าน [`CLAUDE.md`](./CLAUDE.md)
+`CLAUDE.md` และ `.claude/` เป็นการตั้งค่าสำหรับคนที่ใช้ [Claude Code](https://claude.com/claude-code) — มี
+Tier Agent System (เปิดด้วยการขึ้นต้น prompt ด้วย `<tier>`, ดู `/tier-help`) · ใครไม่ได้ใช้ Claude Code ข้ามส่วนนี้ได้
+แต่บทเรียนท้าย `CLAUDE.md` ("บทเรียนทางเทคนิคเฉพาะโปรเจกต์นี้") ควรอ่านทุกคน

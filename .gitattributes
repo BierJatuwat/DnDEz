@@ -1,0 +1,12 @@
+# ทีมใช้ทั้ง macOS และ Windows — เก็บ LF ใน repo เสมอ ไม่งั้น diff เละเพราะ line ending
+* text=auto eol=lf
+
+# Visual Studio คาดหวัง CRLF ในไฟล์ solution
+*.sln text eol=crlf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.pdf binary
