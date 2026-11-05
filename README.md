@@ -9,6 +9,7 @@
 |---|---|
 | [`docs/PROJECT-CONTEXT.md`](./docs/PROJECT-CONTEXT.md) | **เริ่มที่นี่** — การตัดสินใจที่ล็อกแล้ว (§2), stack (§3), ประวัติ sprint และบทเรียน |
 | [`docs/BACKLOG.md`](./docs/BACKLOG.md) | **งานค้าง** — สิ่งที่ยังไม่ได้ทำ/รอตัดสินใจ/ยังไม่เคยทดสอบกับของจริง |
+| [`CONTRIBUTING.md`](./CONTRIBUTING.md) | **วิธีทำงานร่วมกัน** — branch/PR, แบบแผนโค้ด, กฎ migration/RLS, เทสต์, checklist ความปลอดภัย |
 | [`docs/dm-side-design.md`](./docs/dm-side-design.md) | ออกแบบฝั่ง DM — data model, DM console, source import, BYOK |
 | [`docs/player-side-design.md`](./docs/player-side-design.md) | ออกแบบฝั่งผู้เล่น — action input, fog of war, turn UI, คลัง preset, join flow |
 | [`docs/spatial-play-design.md`](./docs/spatial-play-design.md) | แผนที่/การต่อสู้/การสร้างตัวละคร — **แก้/ขยายสองเล่มบนหลายจุด** อ่านด้วยถ้าแตะส่วนนี้ |
@@ -64,8 +65,9 @@ dotnet test tests/DnDEz.Api.Tests
 cd frontend && npx vitest run && npx tsc --noEmit && npm run lint
 ```
 
-เทสต์ทุกตัวใช้ `FakeAnthropicClient` แทน Claude จริง (ไม่มีค่าใช้จ่าย ไม่ต้องมี key) · ยังไม่มี CI —
-**รันเทสต์ให้ผ่านก่อน push ทุกครั้ง**
+เทสต์ทุกตัวใช้ `FakeAnthropicClient` แทน Claude จริง (ไม่มีค่าใช้จ่าย ไม่ต้องมี key) · CI
+(`.github/workflows/ci.yml`) รันชุดเดียวกันนี้ทุก PR และทุก push เข้า `main` · วิธีทำงานร่วมกันดู
+[`CONTRIBUTING.md`](./CONTRIBUTING.md)
 
 ถ้ารัน API ค้างไว้ระหว่างรันเทสต์บน Windows อาจเจอ `file is locked by DnDEz.Api` — ปิด API ก่อน หรือรันเทสต์ด้วย `-c Release`
 
