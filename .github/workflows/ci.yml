@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
 
 concurrency:
@@ -10,6 +10,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ลำดับ branch ของโปรเจกต์: feature/* → dev → main (ดู CONTRIBUTING.md)
+  # ชื่อ branch มาจากคนเปิด PR — ส่งผ่าน env เท่านั้น ห้ามแทรก ${{ }} ลงในสคริปต์ตรง ๆ (script injection)
+  branch-flow:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check merge direction
+        env:
+          BASE: ${{ github.base_ref }}
+          HEAD: ${{ github.head_ref }}
+        run: |
+          case "$BASE" in
+            dev)
+              [[ "$HEAD" == feature/* ]] || { echo "::error::PR เข้า dev ต้องมาจาก branch feature/* (PR นี้มาจาก $HEAD)"; exit 1; } ;;
+            main)
+              [[ "$HEAD" == dev ]] || { echo "::error::PR เข้า main ต้องมาจาก dev เท่านั้น (PR นี้มาจาก $HEAD)"; exit 1; } ;;
+            *)
+              echo "::error::PR ต้องเข้า dev (จาก feature/*) หรือ main (จาก dev) เท่านั้น — PR นี้เข้า $BASE"; exit 1 ;;
+          esac
+          echo "ok: $HEAD → $BASE"
+
   backend:
     runs-on: ubuntu-latest
     timeout-minutes: 30

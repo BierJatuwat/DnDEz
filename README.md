@@ -66,8 +66,10 @@ cd frontend && npx vitest run && npx tsc --noEmit && npm run lint
 ```
 
 เทสต์ทุกตัวใช้ `FakeAnthropicClient` แทน Claude จริง (ไม่มีค่าใช้จ่าย ไม่ต้องมี key) · CI
-(`.github/workflows/ci.yml`) รันชุดเดียวกันนี้ทุก PR และทุก push เข้า `main` · วิธีทำงานร่วมกันดู
-[`CONTRIBUTING.md`](./CONTRIBUTING.md)
+(`.github/workflows/ci.yml`) รันชุดเดียวกันนี้ทุก PR และทุก push เข้า `main`/`dev`
+
+**ทำงานบน branch `feature/*` ที่แตกจาก `dev` แล้วเปิด PR เข้า `dev`** — ห้าม push ตรงเข้า `main`/`dev`
+รายละเอียดใน [`CONTRIBUTING.md`](./CONTRIBUTING.md)
 
 ถ้ารัน API ค้างไว้ระหว่างรันเทสต์บน Windows อาจเจอ `file is locked by DnDEz.Api` — ปิด API ก่อน หรือรันเทสต์ด้วย `-c Release`
 

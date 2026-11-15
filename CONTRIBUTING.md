@@ -3,13 +3,30 @@
 อ่าน [`README.md`](./README.md) ก่อนเพื่อติดตั้งเครื่อง แล้วอ่าน [`docs/PROJECT-CONTEXT.md`](./docs/PROJECT-CONTEXT.md) §2
 (การตัดสินใจที่ล็อกแล้ว — **ห้ามเปลี่ยนโดยไม่คุยกันก่อน**) และ [`docs/BACKLOG.md`](./docs/BACKLOG.md) (งานค้าง)
 
+## Branch
+
+```
+main        ← ของที่นิ่งแล้ว — เจ้าของโปรเจกต์ merge จาก dev เท่านั้น
+ └─ dev     ← รวมงานของทุกคน — รับ PR จาก feature/* เท่านั้น
+     └─ feature/<ชื่องาน>   ← ทุกคนทำงานที่นี่
+```
+
+- **สร้าง branch ได้แค่ `feature/*`** และแตกจาก `dev` เสมอ — ใช้ชื่อนี้กับทุกงาน รวมแก้บั๊ก
+  (เช่น `feature/monster-import`, `feature/fix-grid-offset`)
+- **PR เข้า `dev` ได้เฉพาะจาก `feature/*`** · **PR เข้า `main` ได้เฉพาะจาก `dev`** (เจ้าของโปรเจกต์ทำ เมื่อ `dev` นิ่ง)
+- ห้าม push ตรงเข้า `main` หรือ `dev`
+- CI มี check `branch-flow` ที่ล้มทันทีถ้า PR ผิดทิศ — **ห้าม merge PR ที่ CI แดง** · repo นี้ยังอยู่บนแผนฟรีของ GitHub
+  ระบบจึงไม่ได้ล็อกปุ่ม merge ให้ กฎข้างบนเป็นข้อตกลงที่ทุกคนต้องรักษาเอง
+
 ## ขั้นตอนทำงาน
 
-1. แตก branch จาก `main` — ตั้งชื่อตามงาน เช่น `feat/monster-import`, `fix/grid-offset`
+1. ดึง `dev` ล่าสุดแล้วแตก branch: `git switch dev && git pull && git switch -c feature/<ชื่องาน>`
 2. เขียนโค้ด + เทสต์ (ดูหัวข้อเทสต์ด้านล่าง) แล้วรันเทสต์ทุกชุดในเครื่องให้ผ่าน
-3. เปิด Pull Request เข้า `main` — CI (`.github/workflows/ci.yml`) ต้องเขียวทั้ง `backend` และ `frontend`
-4. ถ้า PR แตะ security surface (ดู checklist ท้ายไฟล์) ให้ระบุใน PR ว่าแตะตรงไหน ผู้รีวิวจะดูละเอียดขึ้น
-5. งานใน `docs/BACKLOG.md` ที่ทำเสร็จ ให้ลบออกใน PR เดียวกัน · งานค้างใหม่ที่เจอระหว่างทาง ให้เพิ่มเข้าไป
+3. ก่อนเปิด PR ดึง `dev` ล่าสุดมารวม (`git merge dev`) แล้วรันเทสต์อีกรอบ
+4. เปิด Pull Request **เข้า `dev`** — CI (`.github/workflows/ci.yml`) ต้องเขียวทั้ง `branch-flow`, `backend`, `frontend`
+5. ถ้า PR แตะ security surface (ดู checklist ท้ายไฟล์) ให้ระบุใน PR ว่าแตะตรงไหน ผู้รีวิวจะดูละเอียดขึ้น
+6. งานใน `docs/BACKLOG.md` ที่ทำเสร็จ ให้ลบออกใน PR เดียวกัน · งานค้างใหม่ที่เจอระหว่างทาง ให้เพิ่มเข้าไป
+7. merge แล้วลบ branch `feature/*` นั้นทิ้ง
 
 ### ข้อความ commit
 
@@ -102,6 +119,6 @@ dotnet ef migrations add <ชื่อ> --project src/DnDEz.Infrastructure
 ## ห้ามทำ
 
 - commit `.env.local`, API key จริง หรือไฟล์ที่มี secret
-- push ตรงเข้า `main` — ผ่าน PR เสมอ
+- push ตรงเข้า `main` หรือ `dev` — ผ่าน PR เสมอ · merge PR ที่ CI ยังแดง
 - เปลี่ยนการตัดสินใจใน `PROJECT-CONTEXT.md` §2 โดยไม่คุยกันก่อน
 - แยกผู้ช่วย DM กลับเป็นหลายช่องแชท (ตัดสินใจแล้วว่าต้องมีช่องเดียว)
